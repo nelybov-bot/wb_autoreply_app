@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#2563eb">
+  <title>WB Автоответчик</title>
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="apple-touch-icon" href="/static/icon.svg">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function() {});
+    }
+  </script>
+  <div class="bg-noise" aria-hidden="true"></div>
+  <header class="header">
+    <div class="header-left">
+      <h1>WB <span class="title-gradient">Автоответчик</span></h1>
+      <span class="header-pill"><span class="dot wb"></span> WB · <span class="dot ozon"></span> Ozon · <span class="dot ym"></span> Яндекс</span>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button type="button" class="tab active" data-tab="summary">Сводка</button>
+    <button type="button" class="tab" data-tab="stores">Магазины</button>
+    <button type="button" class="tab" data-tab="reviews">Отзывы</button>
+    <button type="button" class="tab" data-tab="questions">Вопросы</button>
+    <button type="button" class="tab" data-tab="settings">Настройки</button>
+    <button type="button" class="tab" data-tab="log">Лог</button>
+  </nav>
+
+  <main class="main">
+    <!-- Сводка -->
+    <section id="panel-summary" class="panel active">
+      <div class="stats-grid" id="stats-cards">
+        <div class="stat-card highlight">
+          <div class="value" id="stat-total">—</div>
+          <div class="label">Всего отвечено</div>
+        </div>
+        <div class="stat-card">
+          <div class="value" id="stat-today">—</div>
+          <div class="label">Сегодня</div>
+        </div>
+        <div class="stat-card">
+          <div class="value" id="stat-reviews">—</div>
+          <div class="label">Отзывов отправлено</div>
+        </div>
+        <div class="stat-card">
+          <div class="value" id="stat-questions">—</div>
+          <div class="label">Вопросов отправлено</div>
+        </div>
+      </div>
+      <div class="chart-section">
+        <h3>По магазинам</h3>
+        <div class="chart-bars" id="stats-by-store"></div>
+      </div>
+    </section>
+
+    <!-- Магазины -->
+    <section id="panel-stores" class="panel">
+      <div class="form-card">
+        <h2>Добавить магазин</h2>
+        <form id="form-store">
+          <div class="form-group">
+            <label>Маркетплейс</label>
+            <select name="marketplace" required>
+              <option value="wb">Wildberries</option>
+              <option value="yam">Яндекс.Маркет</option>
+              <option value="ozon">Ozon</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Название</label>
+            <input type="text" name="name" required placeholder="Мой магазин">
+          </div>
+          <div class="form-group">
+            <label>API-ключ</label>
+            <input type="password" name="api_key" required placeholder="••••••••">
+          </div>
+          <div class="form-group" id="wrap-business-id" style="display: none;">
+            <label>Business ID (Яндекс)</label>
+            <input type="number" name="business_id" placeholder="12345">
+          </div>
+          <div class="form-group" id="wrap-client-id" style="display: none;">
+            <label>Client ID (Ozon)</label>
+            <input type="text" name="client_id" placeholder="client-id">
+          </div>
+          <div class="form-group">
+            <label><input type="checkbox" name="active" checked> Активен</label>
+          </div>
+          <button type="submit" class="btn btn-primary">Добавить</button>
+        </form>
+      </div>
+      <div id="stores-list" class="stores-grid"></div>
+    </section>
+
+    <!-- Отзывы -->
+    <section id="panel-reviews" class="panel">
+      <div class="toolbar">
+        <select id="reviews-store">
+          <option value="">Все магазины</option>
+        </select>
+        <button type="button" class="btn btn-primary" id="btn-load-reviews">Загрузить новые</button>
+        <button type="button" class="btn btn-secondary" id="btn-generate-reviews">Сгенерировать выбранные</button>
+        <button type="button" class="btn btn-secondary" id="btn-send-reviews">Отправить выбранные</button>
+      </div>
+      <div class="progress-wrap" id="progress-reviews">
+        <div class="progress-bar"><div class="fill" id="progress-reviews-fill" style="width: 0%"></div></div>
+        <div class="progress-text" id="progress-reviews-text">Выполняется…</div>
+      </div>
+      <div class="items-table-wrap">
+        <table class="items-table">
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" id="check-all-reviews" title="Выбрать все"></th>
+              <th class="col-date">Дата</th>
+              <th class="col-rating">Рейтинг</th>
+              <th>Товар / Текст</th>
+              <th class="col-status">Статус</th>
+            </tr>
+          </thead>
+          <tbody id="reviews-tbody"></tbody>
+        </table>
+      </div>
+      <div id="reviews-empty" class="empty-state" style="display: none;">
+        <p>Нет отзывов со статусом «Новый» или «Сгенерирован».</p>
+        <button type="button" class="btn btn-primary" id="btn-load-reviews-2">Загрузить новые</button>
+      </div>
+    </section>
+
+    <!-- Вопросы -->
+    <section id="panel-questions" class="panel">
+      <div class="toolbar">
+        <select id="questions-store">
+          <option value="">Все магазины</option>
+        </select>
+        <button type="button" class="btn btn-primary" id="btn-load-questions">Загрузить новые</button>
+        <button type="button" class="btn btn-secondary" id="btn-generate-questions">Сгенерировать выбранные</button>
+        <button type="button" class="btn btn-secondary" id="btn-send-questions">Отправить выбранные</button>
+      </div>
+      <div class="progress-wrap" id="progress-questions">
+        <div class="progress-bar"><div class="fill" id="progress-questions-fill" style="width: 0%"></div></div>
+        <div class="progress-text" id="progress-questions-text">Выполняется…</div>
+      </div>
+      <div class="items-table-wrap">
+        <table class="items-table">
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" id="check-all-questions" title="Выбрать все"></th>
+              <th class="col-date">Дата</th>
+              <th>Товар / Вопрос</th>
+              <th class="col-status">Статус</th>
+            </tr>
+          </thead>
+          <tbody id="questions-tbody"></tbody>
+        </table>
+      </div>
+      <div id="questions-empty" class="empty-state" style="display: none;">
+        <p>Нет вопросов со статусом «Новый» или «Сгенерирован».</p>
+        <button type="button" class="btn btn-primary" id="btn-load-questions-2">Загрузить новые</button>
+      </div>
+    </section>
+
+    <!-- Настройки -->
+    <section id="panel-settings" class="panel">
+      <div class="form-card settings-grid">
+        <h2>Подключение к серверу</h2>
+        <div class="form-group">
+          <label>Адрес API (ПК)</label>
+          <input type="url" id="setting-api_base" placeholder="http://192.168.1.5:8000" autocomplete="off">
+          <small class="form-hint">С телефона или другого устройства укажи IP своего ПК. Пусто — запросы на этот же адрес.</small>
+        </div>
+        <h2 style="margin-top: 24px;">OpenAI</h2>
+        <div class="form-group">
+          <label>API-ключ</label>
+          <input type="password" id="setting-openai_key" placeholder="sk-...">
+        </div>
+        <h2 style="margin-top: 24px;">Telegram (уведомления)</h2>
+        <div class="form-group">
+          <label>Токен бота</label>
+          <input type="password" id="setting-telegram_bot_token" placeholder="токен бота">
+        </div>
+        <div class="form-group">
+          <label>ID чата</label>
+          <input type="text" id="setting-telegram_chat_id" placeholder="chat_id">
+        </div>
+        <button type="button" class="btn btn-primary" id="btn-save-settings">Сохранить настройки</button>
+      </div>
+      <div class="form-card" style="margin-top: 24px;">
+        <h2>Промпты</h2>
+        <div id="prompts-list"></div>
+      </div>
+    </section>
+
+    <!-- Лог -->
+    <section id="panel-log" class="panel">
+      <div class="toolbar">
+        <button type="button" class="btn btn-secondary" id="btn-refresh-log">Обновить</button>
+      </div>
+      <pre class="log-wrap" id="log-content"></pre>
+    </section>
+  </main>
+
+  <!-- Модальное окно редактирования магазина -->
+  <div id="modal-store" class="modal-backdrop">
+    <div class="modal">
+      <h2>Редактировать магазин</h2>
+      <form id="form-store-edit">
+        <input type="hidden" name="store_id">
+        <div class="form-group">
+          <label>Название</label>
+          <input type="text" name="name" required>
+        </div>
+        <div class="form-group">
+          <label>API-ключ</label>
+          <input type="password" name="api_key" placeholder="оставьте пустым, чтобы не менять">
+        </div>
+        <div class="form-group" id="wrap-edit-business-id" style="display: none;">
+          <label>Business ID</label>
+          <input type="number" name="business_id">
+        </div>
+        <div class="form-group" id="wrap-edit-client-id" style="display: none;">
+          <label>Client ID</label>
+          <input type="text" name="client_id">
+        </div>
+        <div class="form-group">
+          <label><input type="checkbox" name="active" checked> Активен</label>
+        </div>
+        <div class="modal-actions">
+          <button type="submit" class="btn btn-primary">Сохранить</button>
+          <button type="button" class="btn btn-secondary" id="btn-modal-cancel">Отмена</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
