@@ -33,10 +33,13 @@ async def run_load_new(db: Database, store_ids: Optional[list[int]]) -> str:
     async with _tasks_lock:
         _tasks[task_id] = {"status": "running", "progress": [0, max(len(stores), 1)], "result": None, "error": None}
 
+    def _progress(cur: int, tot: int) -> None:
+        _tasks[task_id]["progress"] = [cur, tot]
+
     async def _run() -> None:
         try:
             total = len(stores)
-            n = await load_new_all(db, stores, progress_queue=None)
+            n = await load_new_all(db, stores, progress_queue=None, progress_cb=_progress)
             async with _tasks_lock:
                 _tasks[task_id]["status"] = "done"
                 _tasks[task_id]["result"] = n
@@ -63,9 +66,12 @@ async def run_generate(db: Database, item_ids: list[int], openai_key: str) -> st
     async with _tasks_lock:
         _tasks[task_id] = {"status": "running", "progress": [0, len(item_ids)], "result": None, "error": None}
 
+    def _progress(cur: int, tot: int) -> None:
+        _tasks[task_id]["progress"] = [cur, tot]
+
     async def _run() -> None:
         try:
-            ok, failed = await generate_mass(db, item_ids, openai_key, model="gpt-5.2", progress_queue=None)
+            ok, failed = await generate_mass(db, item_ids, openai_key, model="gpt-5.2", progress_queue=None, progress_cb=_progress)
             async with _tasks_lock:
                 _tasks[task_id]["status"] = "done"
                 _tasks[task_id]["result"] = {"ok": ok, "failed": failed}
@@ -86,9 +92,12 @@ async def run_send(db: Database, item_ids: list[int]) -> str:
     async with _tasks_lock:
         _tasks[task_id] = {"status": "running", "progress": [0, 1], "result": None, "error": None}
 
+    def _progress(cur: int, tot: int) -> None:
+        _tasks[task_id]["progress"] = [cur, tot]
+
     async def _run() -> None:
         try:
-            sent_ok, skipped, failed = await send_mass_all(db, item_ids, progress_queue=None)
+            sent_ok, skipped, failed = await send_mass_all(db, item_ids, progress_queue=None, progress_cb=_progress)
             async with _tasks_lock:
                 _tasks[task_id]["status"] = "done"
                 _tasks[task_id]["result"] = {"sent_ok": sent_ok, "skipped": skipped, "failed": failed}

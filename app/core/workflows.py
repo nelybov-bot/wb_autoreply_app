@@ -10,7 +10,7 @@ import datetime as dt
 import json
 import logging
 from queue import Queue
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from ..db import Database, Store
 from .net import HttpStatusError, UnauthorizedStoreError
@@ -463,15 +463,25 @@ async def load_new_all(
     db: Database,
     store_list: List[Store],
     progress_queue: Optional[Queue] = None,
+    progress_cb: Optional[Callable[[int, int], None]] = None,
 ) -> int:
     """
     Загружает новые отзывы/вопросы по всем магазинам из store_list.
     progress_queue: при наличии в неё кладутся ("progress", current, total).
+    progress_cb: при наличии вызывается с (current, total) для обновления прогресса (например в веб-задаче).
     Возвращает суммарное количество добавленных записей.
     """
+    def _progress(cur: int, tot: int) -> None:
+        _put_progress(progress_queue, cur, tot)
+        if progress_cb:
+            try:
+                progress_cb(cur, tot)
+            except Exception:
+                pass
+
     total = 0
     n_stores = len(store_list)
-    _put_progress(progress_queue, 0, n_stores)
+    _progress(0, n_stores)
     for i, store in enumerate(store_list):
         try:
             n = await load_new_items(db, store)
@@ -482,7 +492,7 @@ async def load_new_all(
             raise
         except Exception as e:
             log.exception("load_new_all магазин %s (%s) store_id=%s: %s", store.name, store.marketplace, store.id, e)
-        _put_progress(progress_queue, i + 1, n_stores)
+        _progress(i + 1, n_stores)
     return total
 
 
@@ -563,16 +573,26 @@ async def generate_mass(
     openai_key: str,
     model: str = "gpt-5.2",
     progress_queue: Optional[Queue] = None,
+    progress_cb: Optional[Callable[[int, int], None]] = None,
 ) -> Tuple[int, int]:
     """
     Генерирует ответы для items (new/generated можно перегенерить) и сохраняет в DB.
     progress_queue: при наличии в неё кладутся ("progress", current, total).
+    progress_cb: при наличии вызывается с (current, total).
     Возвращает (ok, failed).
     """
+    def _progress(cur: int, tot: int) -> None:
+        _put_progress(progress_queue, cur, tot)
+        if progress_cb:
+            try:
+                progress_cb(cur, tot)
+            except Exception:
+                pass
+
     if not item_ids:
         return 0, 0
     total = len(item_ids)
-    _put_progress(progress_queue, 0, total)
+    _progress(0, total)
     client = OpenAIClient(openai_key, model=model)
     system = "Ты — официальный представитель магазина на Wildberries. Отвечай строго вежливо, кратко и по делу. Без эмодзи. Без фамильярности. Без предложений решений, компенсаций или обращений в поддержку. Не задавай вопросов покупателю. Не выдумывай факты. 2–3 коротких предложения максимум. Не повторяй полное название товара в ответе. Не уточняй ничего"
     sem = asyncio.Semaphore(GENERATE_CONCURRENCY)
@@ -584,7 +604,7 @@ async def generate_mass(
         r = await _generate_one(db, client, system, iid, sem)
         async with done_lock:
             done += 1
-            _put_progress(progress_queue, done, total)
+            _progress(done, total)
         return r
 
     tasks = [run_one(iid) for iid in item_ids]
@@ -684,12 +704,22 @@ async def send_mass_all(
     db: Database,
     item_ids: List[int],
     progress_queue: Optional[Queue] = None,
+    progress_cb: Optional[Callable[[int, int], None]] = None,
 ) -> Tuple[int, int, int]:
     """
     Отправляет ответы по items из разных магазинов.
     progress_queue: при наличии передаётся в send_mass для каждого магазина.
+    progress_cb: при наличии вызывается с (current, total).
     Возвращает (total_sent_ok, total_skipped, total_failed).
     """
+    def _progress(cur: int, tot: int) -> None:
+        _put_progress(progress_queue, cur, tot)
+        if progress_cb:
+            try:
+                progress_cb(cur, tot)
+            except Exception:
+                pass
+
     stores_by_id = {s.id: s for s in db.list_stores()}
     by_store: Dict[int, List[int]] = {}
     for item_id in item_ids:
@@ -703,23 +733,23 @@ async def send_mass_all(
     store_list = [(sid, ids) for sid, ids in by_store.items()]
     total_items = sum(len(ids) for _, ids in store_list)
     done_items = 0
-    _put_progress(progress_queue, 0, total_items if total_items else 1)
+    _progress(0, total_items if total_items else 1)
     for store_id, ids in store_list:
         store = stores_by_id.get(store_id)
         if not store or not store.api_key:
             failed += len(ids)
             done_items += len(ids)
-            _put_progress(progress_queue, done_items, total_items or 1)
+            _progress(done_items, total_items or 1)
             continue
         if store.marketplace == "yam" and store.business_id is None:
             failed += len(ids)
             done_items += len(ids)
-            _put_progress(progress_queue, done_items, total_items or 1)
+            _progress(done_items, total_items or 1)
             continue
         if store.marketplace == "ozon" and not (store.client_id or "").strip():
             failed += len(ids)
             done_items += len(ids)
-            _put_progress(progress_queue, done_items, total_items or 1)
+            _progress(done_items, total_items or 1)
             continue
         try:
             so, sk, fl = await send_mass(db, store, ids)
@@ -727,19 +757,19 @@ async def send_mass_all(
             skipped += sk
             failed += fl
             done_items += len(ids)
-            _put_progress(progress_queue, done_items, total_items or 1)
+            _progress(done_items, total_items or 1)
         except HttpStatusError as e:
             if e.status == 401:
                 raise UnauthorizedStoreError(store_id, store.name, str(e)) from e
             log.exception("send_mass_all store_id=%s: %s", store_id, e)
             failed += len(ids)
             done_items += len(ids)
-            _put_progress(progress_queue, done_items, total_items or 1)
+            _progress(done_items, total_items or 1)
         except (asyncio.CancelledError, GeneratorExit):
             raise
         except Exception as e:
             log.exception("send_mass_all store_id=%s: %s", store_id, e)
             failed += len(ids)
             done_items += len(ids)
-            _put_progress(progress_queue, done_items, total_items or 1)
+            _progress(done_items, total_items or 1)
     return sent_ok, skipped, failed

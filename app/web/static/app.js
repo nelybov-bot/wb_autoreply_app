@@ -305,6 +305,8 @@
     tbody.innerHTML = items.map(item => {
       const title = (item.product_title || '').slice(0, 50);
       const text = (item.text || '').slice(0, 80);
+      const answer = (item.generated_text || '').trim();
+      const answerPreview = answer.slice(0, 120) + (answer.length > 120 ? '…' : '');
       const statusClass = item.status === 'new' ? 'new' : item.status === 'generated' ? 'generated' : 'sent';
       const ratingCell = showRating ? `<td>${item.rating != null ? item.rating + ' ★' : '—'}</td>` : '';
       return `
@@ -313,6 +315,7 @@
           <td class="col-date">${formatDate(item.date)}</td>
           ${ratingCell}
           <td><div class="text-preview" title="${escapeHtml(title + ' ' + text)}">${escapeHtml(title || text)}</div></td>
+          <td><div class="text-preview text-answer" title="${escapeHtml(answer)}">${escapeHtml(answerPreview || '—')}</div></td>
           <td class="col-status"><span class="status-badge ${statusClass}">${statusRu[item.status] || item.status}</span></td>
         </tr>`;
     }).join('');
@@ -339,8 +342,8 @@
       const res = await api('/load-new', { method: 'POST', body: JSON.stringify({ store_ids: null }) });
       pollTask(res.task_id, 'progress-' + panelPrefix, 'progress-' + panelPrefix + '-fill', 'progress-' + panelPrefix + '-text', (result) => {
         toast('Загружено записей: ' + (result ?? 0));
-        if (panelPrefix === 'reviews') loadReviews();
-        else loadQuestions();
+        loadReviews();
+        loadQuestions();
       });
     } catch (err) {
       toast(err.message, 'error');
