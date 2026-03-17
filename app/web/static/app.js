@@ -427,6 +427,51 @@
   document.getElementById('btn-generate-reviews').addEventListener('click', () => runGenerate('reviews'));
   document.getElementById('btn-generate-questions').addEventListener('click', () => runGenerate('questions'));
 
+  function ratingGroupFromValue(v, rating) {
+    if (v === 'all') return true;
+    if (v === 'none') return rating == null;
+    if (v === '1') return rating === 1;
+    if (v === '2') return rating === 2;
+    if (v === '3') return rating === 3;
+    if (v === '4-5') return rating != null && rating >= 4;
+    return true;
+  }
+
+  async function applyTemplateToReviews() {
+    const template = (document.getElementById('reviews-template-text').value || '').trim();
+    if (!template) {
+      toast('Введите текст шаблона', 'error');
+      return;
+    }
+    const ratingFilter = document.getElementById('reviews-template-rating').value || 'all';
+    const ids = getSelectedIds('reviews').length ? getSelectedIds('reviews') : getVisibleIds('reviews');
+    if (!ids.length) {
+      toast('Выберите строки или загрузите список', 'error');
+      return;
+    }
+    const idSet = new Set(ids);
+    const filtered = reviews
+      .filter(r => idSet.has(r.id))
+      .filter(r => r.status === 'new')
+      .filter(r => !(r.generated_text || '').trim())
+      .filter(r => ratingGroupFromValue(ratingFilter, r.rating))
+      .map(r => r.id);
+    if (!filtered.length) {
+      toast('Нет подходящих отзывов (статус Новый и без ответа)', 'error');
+      return;
+    }
+    try {
+      const res = await api('/apply-template', { method: 'POST', body: JSON.stringify({ item_ids: filtered, template_text: template }) });
+      toast('Шаблон применён: ' + (res.applied ?? 0) + ', пропущено: ' + (res.skipped ?? 0));
+      loadReviews();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  const btnApplyTemplate = document.getElementById('btn-apply-template');
+  if (btnApplyTemplate) btnApplyTemplate.addEventListener('click', applyTemplateToReviews);
+
   async function runSend(panelPrefix) {
     const ids = getSelectedIds(panelPrefix).length ? getSelectedIds(panelPrefix) : getVisibleIds(panelPrefix);
     if (!ids.length) {

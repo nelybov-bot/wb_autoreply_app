@@ -290,6 +290,10 @@ class GenerateBody(BaseModel):
 class SendBody(BaseModel):
     item_ids: list[int]
 
+class ApplyTemplateBody(BaseModel):
+    item_ids: list[int]
+    template_text: str
+
 
 def _store_to_out(s: Store) -> StoreOut:
     return StoreOut(
@@ -560,6 +564,32 @@ async def api_generate(body: GenerateBody, db: Database = Depends(get_db), _: Us
 async def api_send(body: SendBody, db: Database = Depends(get_db), _: UserRow = Depends(require_user)):
     task_id = await web_tasks.run_send(db, body.item_ids)
     return {"task_id": task_id}
+
+
+@app.post("/api/apply-template")
+def api_apply_template(body: ApplyTemplateBody, db: Database = Depends(get_db), _: UserRow = Depends(require_user)):
+    text = (body.template_text or "").strip()
+    if not text:
+        raise HTTPException(400, "Шаблон пустой")
+    applied = 0
+    skipped = 0
+    for item_id in body.item_ids or []:
+        row = db.get_item_by_id(int(item_id))
+        if not row:
+            skipped += 1
+            continue
+        if row.item_type != "review":
+            skipped += 1
+            continue
+        if (row.generated_text or "").strip():
+            skipped += 1
+            continue
+        if row.status != "new":
+            skipped += 1
+            continue
+        db.set_generated(int(item_id), text)
+        applied += 1
+    return {"applied": applied, "skipped": skipped}
 
 
 @app.get("/api/tasks/{task_id}")
