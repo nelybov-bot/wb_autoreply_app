@@ -4,81 +4,155 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#2563eb">
-  <title>WB Автоответчик — Сброс admin</title>
+  <title>WB Автоответчик — Сброс</title>
   <link rel="stylesheet" href="/static/styles.css">
   <style>
-    .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
-    .login-card{width:min(560px,100%);background:var(--card);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow);padding:18px}
-    .login-title{display:flex;align-items:baseline;gap:10px;margin-bottom:6px}
-    .login-title h1{margin:0;font-size:1.35rem}
-    .login-sub{color:var(--muted);font-size:.95rem;margin:0 0 14px}
-    .login-actions{display:flex;gap:10px;justify-content:flex-end;align-items:center;margin-top:12px}
-    .login-err{color:#b91c1c;font-size:.95rem;margin-top:10px;display:none}
-    .login-ok{color:#065f46;font-size:.95rem;margin-top:10px;display:none}
+    body.reset-page { display: block; overflow: auto; }
+    .reset-page .reset-wrap {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      position: relative;
+      z-index: 1;
+    }
+    .reset-card {
+      width: min(440px, 100%);
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      padding: 28px;
+    }
+    .reset-title { margin-bottom: 8px; }
+    .reset-title h1 { margin: 0; font-size: 1.4rem; color: #0f172a; }
+    .reset-sub {
+      color: #64748b;
+      font-size: 0.9rem;
+      margin: 0 0 20px;
+      line-height: 1.4;
+    }
+    .reset-card .form-group { margin-bottom: 16px; }
+    .reset-card .form-group label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: #475569;
+      margin-bottom: 6px;
+    }
+    .reset-card .form-group input {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 1rem;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: #fff;
+      color: #0f172a;
+      box-sizing: border-box;
+    }
+    .reset-card .form-group input:focus {
+      outline: none;
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+    }
+    .reset-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: flex-end;
+      align-items: center;
+      margin-top: 20px;
+      flex-wrap: wrap;
+    }
+    .reset-actions .btn { min-width: 100px; }
+    .reset-err { color: #b91c1c; font-size: 0.9rem; margin-top: 12px; display: none; }
+    .reset-ok { color: #065f46; font-size: 0.9rem; margin-top: 12px; display: none; }
+    .reset-links { margin-top: 16px; font-size: 0.85rem; }
+    .reset-links a { color: #2563eb; text-decoration: none; }
+    .reset-links a:hover { text-decoration: underline; }
   </style>
 </head>
-<body>
+<body class="reset-page">
   <div class="bg-noise" aria-hidden="true"></div>
-  <div class="login-wrap">
-    <div class="login-card">
-      <div class="login-title">
+  <div class="reset-wrap">
+    <div class="reset-card">
+      <div class="reset-title">
         <h1>Сброс пароля <span class="title-gradient">admin</span></h1>
       </div>
-      <p class="login-sub">Нужен токен из переменной окружения Render: <b>ADMIN_RESET_TOKEN</b>.</p>
+      <p class="reset-sub">Задай токен в Render: <b>ADMIN_RESET_TOKEN</b>. Введи его и новый пароль.</p>
 
       <div class="form-group">
-        <label>Reset token</label>
-        <input type="password" id="t" placeholder="ADMIN_RESET_TOKEN">
+        <label for="reset-token">Reset token</label>
+        <input type="password" id="reset-token" autocomplete="off" placeholder="значение ADMIN_RESET_TOKEN">
       </div>
       <div class="form-group">
-        <label>Новый пароль admin</label>
-        <input type="password" id="p" placeholder="новый пароль">
+        <label for="reset-password">Новый пароль admin</label>
+        <input type="password" id="reset-password" autocomplete="new-password" placeholder="новый пароль">
       </div>
-      <div class="login-actions">
+      <div class="reset-actions">
         <a class="btn btn-secondary" href="/login">Назад</a>
-        <button type="button" class="btn btn-primary" id="go">Сбросить</button>
+        <button type="button" class="btn btn-primary" id="btn-reset">Сброс</button>
       </div>
-      <div class="login-err" id="err"></div>
-      <div class="login-ok" id="ok">Готово. Теперь можно войти на странице /login.</div>
+      <div class="reset-err" id="reset-err"></div>
+      <div class="reset-ok" id="reset-ok">Готово. Теперь войди на странице входа.</div>
+      <div class="reset-links">
+        <a href="/login">Вход</a>
+      </div>
     </div>
   </div>
 
   <script>
-    (function(){
-      const err = document.getElementById('err');
-      const ok = document.getElementById('ok');
-      const t = document.getElementById('t');
-      const p = document.getElementById('p');
-      function showError(msg){
-        ok.style.display = 'none';
-        err.textContent = msg || 'Ошибка';
-        err.style.display = 'block';
+    (function () {
+      var errEl = document.getElementById('reset-err');
+      var okEl = document.getElementById('reset-ok');
+      var tokenEl = document.getElementById('reset-token');
+      var passEl = document.getElementById('reset-password');
+      var btnEl = document.getElementById('btn-reset');
+
+      function showError(msg) {
+        okEl.style.display = 'none';
+        errEl.textContent = msg || 'Ошибка';
+        errEl.style.display = 'block';
       }
-      async function reset(){
-        err.style.display = 'none';
-        ok.style.display = 'none';
-        const body = { reset_token: (t.value||'').trim(), new_password: p.value||'' };
-        if(!body.reset_token || !body.new_password){ showError('Введите токен и новый пароль'); return; }
-        const res = await fetch('/api/auth/admin-reset', {
-          method:'POST',
-          credentials:'include',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify(body)
-        });
-        if(!res.ok){
-          let msg = res.statusText;
-          try { const j = await res.json(); msg = j.detail || msg; } catch(e) {}
-          showError(msg);
+
+      function doReset() {
+        errEl.style.display = 'none';
+        okEl.style.display = 'none';
+        var token = (tokenEl.value || '').trim();
+        var password = passEl.value || '';
+        if (!token || !password) {
+          showError('Введите токен и новый пароль');
           return;
         }
-        err.style.display = 'none';
-        ok.style.display = 'block';
+        if (password.length < 6) {
+          showError('Пароль минимум 6 символов');
+          return;
+        }
+        btnEl.disabled = true;
+        fetch('/api/auth/admin-reset', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reset_token: token, new_password: password })
+        })
+          .then(function (res) {
+            if (res.ok) {
+              okEl.style.display = 'block';
+              btnEl.disabled = false;
+              return;
+            }
+            return res.json().then(function (j) { return Promise.reject(j.detail || res.statusText); });
+          })
+          .catch(function (msg) {
+            showError(typeof msg === 'string' ? msg : 'Ошибка сброса');
+            btnEl.disabled = false;
+          });
       }
-      document.getElementById('go').addEventListener('click', reset);
-      p.addEventListener('keydown', (e)=>{ if(e.key==='Enter') reset(); });
-      setTimeout(()=>t.focus(), 50);
+
+      if (btnEl) btnEl.addEventListener('click', doReset);
+      if (passEl) passEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') doReset(); });
+      if (tokenEl) setTimeout(function () { tokenEl.focus(); }, 100);
     })();
   </script>
 </body>
 </html>
-
