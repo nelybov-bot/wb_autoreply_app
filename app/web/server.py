@@ -64,11 +64,18 @@ def get_db() -> Database:
 SESSION_COOKIE = "wb_session"
 SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 PBKDF2_ITERATIONS = 210_000
+_SESSION_SECRET_FALLBACK: Optional[str] = None
 
 def _session_secret() -> str:
     s = (os.getenv("SESSION_SECRET") or "").strip()
     if not s:
-        raise HTTPException(503, "SESSION_SECRET не задан на сервере (переменная окружения).")
+        # Fallback for environments where it's hard to set env vars (e.g., quick Render setup).
+        # Sessions will be invalidated after a restart (secret changes).
+        global _SESSION_SECRET_FALLBACK
+        if _SESSION_SECRET_FALLBACK is None:
+            _SESSION_SECRET_FALLBACK = secrets.token_urlsafe(48)
+            log.warning("SESSION_SECRET не задан. Использую временный секрет (сессии слетят при рестарте).")
+        return _SESSION_SECRET_FALLBACK
     return s
 
 
@@ -133,9 +140,10 @@ def _bootstrap_admin_if_needed(db: Database) -> None:
         return
     init_pass = (os.getenv("ADMIN_INIT_PASSWORD") or "").strip()
     if not init_pass:
-        raise HTTPException(503, "Нет пользователей и не задан ADMIN_INIT_PASSWORD (переменная окружения).")
+        init_pass = secrets.token_urlsafe(18)
+        log.warning("ADMIN_INIT_PASSWORD не задан. Сгенерирован пароль для admin: %s", init_pass)
     db.create_user("admin", _hash_password(init_pass), role="admin")
-    log.warning("Создан пользователь admin (bootstrap). СМЕНИТЕ пароль после входа.")
+    log.warning("Создан пользователь admin (bootstrap). Рекомендуется сменить пароль.")
 
 
 def _get_current_user(request: Request, db: Database) -> Optional[UserRow]:
