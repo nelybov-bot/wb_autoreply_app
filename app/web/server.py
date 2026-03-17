@@ -4,13 +4,15 @@ FastAPI-сервер веб-интерфейса WB Автоответчик.
 """
 from __future__ import annotations
 
+import hmac
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -30,13 +32,37 @@ log = logging.getLogger("web")
 
 app = FastAPI(title="WB Автоответчик", version="1.0")
 
+def _parse_origins(value: str) -> list[str]:
+    items = [x.strip() for x in (value or "").split(",")]
+    return [x for x in items if x]
+
+
+_cors_origins = _parse_origins(os.getenv("CORS_ORIGINS", "").strip())
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def _api_auth_middleware(request: Request, call_next):
+    path = request.url.path or ""
+    if path.startswith("/api/") and request.method.upper() != "OPTIONS":
+        expected = (os.getenv("API_TOKEN") or "").strip()
+        if not expected:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "API_TOKEN не задан на сервере (переменная окружения)."},
+            )
+
+        auth = (request.headers.get("authorization") or "").strip()
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        if not token or not hmac.compare_digest(token, expected):
+            return JSONResponse(status_code=401, content={"detail": "Неавторизовано"})
+
+    return await call_next(request)
 
 _db: Optional[Database] = None
 

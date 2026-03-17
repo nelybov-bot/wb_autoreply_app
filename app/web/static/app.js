@@ -3,18 +3,25 @@
 
   const API = '/api';
   const STORAGE_API_BASE = 'wb_autoreply_api_base';
+  const STORAGE_API_TOKEN = 'wb_autoreply_api_token';
 
   function getApiBase() {
     return (localStorage.getItem(STORAGE_API_BASE) || '').trim().replace(/\/$/, '');
   }
 
+  function getApiToken() {
+    return (localStorage.getItem(STORAGE_API_TOKEN) || '').trim();
+  }
+
   async function api(path, options = {}) {
     const base = getApiBase();
     const url = path.startsWith('http') ? path : (base ? base + '/api' + path : API + path);
+    const token = getApiToken();
     const res = await fetch(url, {
       ...options,
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': 'Bearer ' + token } : {}),
         ...options.headers,
       },
     });
@@ -407,6 +414,8 @@
   async function loadSettings() {
     const apiBaseEl = document.getElementById('setting-api_base');
     if (apiBaseEl) apiBaseEl.value = localStorage.getItem(STORAGE_API_BASE) || '';
+    const apiTokenEl = document.getElementById('setting-api_token');
+    if (apiTokenEl) apiTokenEl.value = localStorage.getItem(STORAGE_API_TOKEN) || '';
     try {
       const data = await api('/settings');
       ['openai_key', 'telegram_bot_token', 'telegram_chat_id'].forEach(k => {
@@ -465,6 +474,15 @@
       const v = this.value.trim().replace(/\/$/, '');
       if (v) localStorage.setItem(STORAGE_API_BASE, v); else localStorage.removeItem(STORAGE_API_BASE);
       toast('Адрес API сохранён');
+    });
+  }
+
+  const apiTokenInput = document.getElementById('setting-api_token');
+  if (apiTokenInput) {
+    apiTokenInput.addEventListener('change', function () {
+      const v = this.value.trim();
+      if (v) localStorage.setItem(STORAGE_API_TOKEN, v); else localStorage.removeItem(STORAGE_API_TOKEN);
+      toast('API токен сохранён');
     });
   }
 

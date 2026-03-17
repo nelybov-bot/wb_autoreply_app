@@ -175,6 +175,11 @@
           <input type="url" id="setting-api_base" placeholder="http://192.168.1.5:8000" autocomplete="off">
           <small class="form-hint">С телефона или другого устройства укажи IP своего ПК. Пусто — запросы на этот же адрес.</small>
         </div>
+        <div class="form-group">
+          <label>API токен (Bearer)</label>
+          <input type="password" id="setting-api_token" placeholder="токен доступа" autocomplete="off">
+          <small class="form-hint">Нужен для доступа к /api на сервере. Хранится только в браузере (localStorage).</small>
+        </div>
         <h2 style="margin-top: 24px;">OpenAI</h2>
         <div class="form-group">
           <label>API-ключ</label>
