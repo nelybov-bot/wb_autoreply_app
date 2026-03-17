@@ -604,19 +604,60 @@
             </div>
             <div class="meta">${escapeHtml(ev.ts)} · ${escapeHtml(ev.actor)} ${store ? '· ' + escapeHtml(store) : ''}</div>
             <div class="text-preview" style="max-width:unset;">${escapeHtml(summary || (meta.error || '') || '')}</div>
-            ${itemIds.length ? `<div class="actions" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;"><button type="button" class="btn btn-secondary btn-sm" data-ops-open="${itemIds[0]}">Открыть пример</button><span class="form-hint">items: ${itemIds.length}</span></div>` : ''}
+            ${itemIds.length ? `<div class="actions" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;"><button type="button" class="btn btn-secondary btn-sm" data-ops-show="${ev.id}">Показать ответы (20)</button><span class="form-hint">items: ${itemIds.length}</span></div><div class="ops-items\" id=\"ops-items-${ev.id}\" style=\"display:none; margin-top:10px;\"></div>` : ''}
           </div>
         `;
       }).join('');
-      opsWrap.querySelectorAll('[data-ops-open]').forEach(btn => {
+      opsWrap.querySelectorAll('[data-ops-show]').forEach(btn => {
         btn.addEventListener('click', async () => {
-          const id = Number(btn.getAttribute('data-ops-open'));
+          const evId = Number(btn.getAttribute('data-ops-show'));
+          const wrap = document.getElementById('ops-items-' + evId);
+          if (!wrap) return;
+          if (wrap.style.display === 'block') {
+            wrap.style.display = 'none';
+            btn.textContent = 'Показать ответы (20)';
+            return;
+          }
+          btn.disabled = true;
+          btn.textContent = 'Загружаю…';
           try {
-            const item = await api('/items/' + id);
-            const store = stores.find(s => s.id === item.store_id);
-            showItemModal(item, store ? store.name : '—', item.item_type === 'review');
+            const ev = items.find(x => x.id === evId);
+            const meta = safeJsonParse(ev?.meta_json || '') || {};
+            const ids = (Array.isArray(meta.item_ids) ? meta.item_ids : []).slice(0, 20);
+            const rows = await api('/items/bulk', { method: 'POST', body: JSON.stringify({ item_ids: ids }) });
+            wrap.innerHTML = (rows || []).map(it => {
+              const store = stores.find(s => s.id === it.store_id);
+              const text = (it.text || '').slice(0, 180) + ((it.text || '').length > 180 ? '…' : '');
+              const ans = (it.generated_text || '').slice(0, 180) + ((it.generated_text || '').length > 180 ? '…' : '');
+              return `
+                <div class="store-card" style="padding:14px; margin-bottom:10px;">
+                  <div class="meta">${escapeHtml(store ? store.name : '—')} · ${escapeHtml(formatDate(it.date))}</div>
+                  <div class="store-name" style="margin:6px 0;">${escapeHtml((it.product_title || '').trim() || '—')}</div>
+                  <div class="text-preview" style="max-width:unset;"><b>${it.item_type === 'review' ? 'Текст:' : 'Вопрос:'}</b> ${escapeHtml(text || '—')}</div>
+                  <div class="text-preview" style="max-width:unset; margin-top:6px;"><b>Ответ:</b> ${escapeHtml(ans || '—')}</div>
+                  <div class="actions" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+                    <button type="button" class="btn btn-secondary btn-sm" data-ops-open="${it.id}">Открыть полностью</button>
+                  </div>
+                </div>
+              `;
+            }).join('') || '<div class="empty-state" style="padding:16px;">Нет данных</div>';
+            wrap.querySelectorAll('[data-ops-open]').forEach(b => {
+              b.addEventListener('click', async () => {
+                const id = Number(b.getAttribute('data-ops-open'));
+                try {
+                  const item = await api('/items/' + id);
+                  const store = stores.find(s => s.id === item.store_id);
+                  showItemModal(item, store ? store.name : '—', item.item_type === 'review');
+                } catch (err) { toast(err.message, 'error'); }
+              });
+            });
+            wrap.style.display = 'block';
+            btn.textContent = 'Скрыть';
           } catch (err) {
             toast(err.message, 'error');
+            btn.textContent = 'Показать ответы (20)';
+          } finally {
+            btn.disabled = false;
           }
         });
       });

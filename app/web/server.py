@@ -294,6 +294,9 @@ class ApplyTemplateBody(BaseModel):
     item_ids: list[int]
     template_text: str
 
+class BulkItemsBody(BaseModel):
+    item_ids: list[int]
+
 
 def _store_to_out(s: Store) -> StoreOut:
     return StoreOut(
@@ -516,6 +519,17 @@ def api_get_item(item_id: int, db: Database = Depends(get_db), _: UserRow = Depe
     if not row:
         raise HTTPException(404, "Элемент не найден")
     return _item_to_out(row)
+
+
+@app.post("/api/items/bulk", response_model=list[ItemOut])
+def api_items_bulk(body: BulkItemsBody, db: Database = Depends(get_db), _: UserRow = Depends(require_user)):
+    ids = [int(x) for x in (body.item_ids or [])][:50]
+    out = []
+    for iid in ids:
+        row = db.get_item_by_id(iid)
+        if row:
+            out.append(_item_to_out(row))
+    return out
 
 
 # ---------- API: settings ----------
