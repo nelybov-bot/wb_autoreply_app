@@ -104,7 +104,13 @@ async def run_generate(db: Database, item_ids: list[int], openai_key: str) -> st
                 _tasks[task_id]["progress"] = [len(item_ids), len(item_ids)]
             try:
                 # item_type can be mixed; mark as 'mixed' for ops log
-                db.add_audit_event(actor="system", action="generate", item_type="mixed", result="ok", meta={"ok": ok, "failed": failed, "count": len(item_ids)})
+                db.add_audit_event(
+                    actor="system",
+                    action="generate",
+                    item_type="mixed",
+                    result="ok",
+                    meta={"ok": ok, "failed": failed, "count": len(item_ids), "item_ids": item_ids[:50]},
+                )
             except Exception:
                 pass
         except Exception as e:
@@ -145,7 +151,13 @@ async def run_send(db: Database, item_ids: list[int]) -> str:
                 _tasks[task_id]["result"] = {"sent_ok": sent_ok, "skipped": skipped, "failed": failed}
                 _tasks[task_id]["progress"] = [1, 1]
             try:
-                db.add_audit_event(actor="system", action="send", item_type="mixed", result="ok", meta={"sent_ok": sent_ok, "skipped": skipped, "failed": failed, "count": len(item_ids)})
+                db.add_audit_event(
+                    actor="system",
+                    action="send",
+                    item_type="mixed",
+                    result="ok",
+                    meta={"sent_ok": sent_ok, "skipped": skipped, "failed": failed, "count": len(item_ids), "item_ids": item_ids[:50]},
+                )
             except Exception:
                 pass
         except UnauthorizedStoreError as e:

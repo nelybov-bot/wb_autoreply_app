@@ -595,7 +595,7 @@ def api_apply_template(body: ApplyTemplateBody, db: Database = Depends(get_db), 
             action="template_apply",
             item_type="review",
             result="ok",
-            meta={"applied": applied, "skipped": skipped},
+            meta={"applied": applied, "skipped": skipped, "item_ids": (body.item_ids or [])[:50]},
         )
     except Exception:
         pass

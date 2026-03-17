@@ -11,14 +11,20 @@
   async function api(path, options = {}) {
     const base = getApiBase();
     const url = path.startsWith('http') ? path : (base ? base + '/api' + path : API + path);
-    const res = await fetch(url, {
-      ...options,
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
-    });
+    let res;
+    try {
+      res = await fetch(url, {
+        ...options,
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...options.headers,
+        },
+      });
+    } catch (e) {
+      const baseHint = base ? `\nПроверь «Адрес API (ПК)»: сейчас = ${base}` : '';
+      throw new Error('Не удалось подключиться к серверу (Failed to fetch).' + baseHint + '\nЧастые причины: неверный адрес API, CORS, смешанный контент (http/https), сервер спит на Render.');
+    }
     if (!res.ok) {
       const text = await res.text();
       let err;
@@ -584,12 +590,12 @@
       opsWrap.innerHTML = items.map(ev => {
         const meta = safeJsonParse(ev.meta_json || '') || {};
         const store = ev.store_id ? ('store_id=' + ev.store_id) : '';
+        const itemIds = Array.isArray(meta.item_ids) ? meta.item_ids : [];
         const summary = meta.applied != null ? (`применено ${meta.applied}, пропущено ${meta.skipped ?? 0}`) :
           meta.sent_ok != null ? (`ok ${meta.sent_ok}, пропущено ${meta.skipped ?? 0}, ошибок ${meta.failed ?? 0}`) :
           meta.ok != null ? (`ok ${meta.ok}, ошибок ${meta.failed ?? 0}`) :
           (meta.added != null ? (`добавлено ${meta.added}`) : '');
         const result = ev.result || '';
-        const badge = result === 'error' ? 'danger' : 'ok';
         return `
           <div class="store-card">
             <div class="store-head">
@@ -598,9 +604,22 @@
             </div>
             <div class="meta">${escapeHtml(ev.ts)} · ${escapeHtml(ev.actor)} ${store ? '· ' + escapeHtml(store) : ''}</div>
             <div class="text-preview" style="max-width:unset;">${escapeHtml(summary || (meta.error || '') || '')}</div>
+            ${itemIds.length ? `<div class="actions" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;"><button type="button" class="btn btn-secondary btn-sm" data-ops-open="${itemIds[0]}">Открыть пример</button><span class="form-hint">items: ${itemIds.length}</span></div>` : ''}
           </div>
         `;
       }).join('');
+      opsWrap.querySelectorAll('[data-ops-open]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = Number(btn.getAttribute('data-ops-open'));
+          try {
+            const item = await api('/items/' + id);
+            const store = stores.find(s => s.id === item.store_id);
+            showItemModal(item, store ? store.name : '—', item.item_type === 'review');
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        });
+      });
     } catch (err) {
       if (mode === 'dev') devPre.textContent = 'Ошибка: ' + err.message;
       else opsWrap.innerHTML = '<div class="empty-state" style="grid-column:1/-1; padding:24px;">Ошибка: ' + escapeHtml(err.message) + '</div>';
