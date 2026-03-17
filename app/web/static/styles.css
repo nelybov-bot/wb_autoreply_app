@@ -659,6 +659,24 @@ body::after {
   margin-top: 20px;
 }
 
+.modal .text-block {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 8px 0;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.items-table tbody tr {
+  cursor: pointer;
+}
+
+.items-table tbody tr:hover {
+  background: var(--accent-dim);
+}
+
 /* Пустые состояния */
 .empty-state {
   text-align: center;

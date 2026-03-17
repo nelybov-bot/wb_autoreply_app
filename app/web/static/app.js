@@ -49,6 +49,20 @@
     setTimeout(() => el.remove(), 4000);
   }
 
+  function applyTabVisibility() {
+    const canSettings = currentUser && (currentUser.role === 'admin' || (currentUser.permissions && currentUser.permissions.includes('view_settings')));
+    const canLog = currentUser && (currentUser.role === 'admin' || (currentUser.permissions && currentUser.permissions.includes('view_log')));
+    document.querySelectorAll('.tab').forEach(tab => {
+      const id = tab.getAttribute('data-tab');
+      if (id === 'settings') tab.style.display = canSettings ? '' : 'none';
+      else if (id === 'log') tab.style.display = canLog ? '' : 'none';
+    });
+    const panelSettings = document.getElementById('panel-settings');
+    const panelLog = document.getElementById('panel-log');
+    if (panelSettings) panelSettings.style.display = canSettings ? '' : 'none';
+    if (panelLog) panelLog.style.display = canLog ? '' : 'none';
+  }
+
   // ---- Tabs ----
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -204,6 +218,12 @@
     document.getElementById('modal-store').classList.remove('visible');
   });
 
+  const modalItemDetail = document.getElementById('modal-item-detail');
+  if (modalItemDetail) {
+    document.getElementById('btn-modal-item-close').addEventListener('click', () => modalItemDetail.classList.remove('visible'));
+    modalItemDetail.addEventListener('click', (e) => { if (e.target === modalItemDetail) modalItemDetail.classList.remove('visible'); });
+  }
+
   async function deleteStore(storeId) {
     if (!confirm('Удалить магазин и все его отзывы/вопросы?')) return;
     try {
@@ -309,20 +329,46 @@
     tbody.innerHTML = items.map(item => {
       const title = (item.product_title || '').slice(0, 50);
       const text = (item.text || '').slice(0, 80);
-      const answer = (item.generated_text || '').trim();
-      const answerPreview = answer.slice(0, 120) + (answer.length > 120 ? '…' : '');
       const statusClass = item.status === 'new' ? 'new' : item.status === 'generated' ? 'generated' : 'sent';
       const ratingCell = showRating ? `<td>${item.rating != null ? item.rating + ' ★' : '—'}</td>` : '';
       return `
-        <tr data-id="${item.id}">
+        <tr data-id="${item.id}" data-prefix="${prefix}">
           <td class="col-check"><input type="checkbox" class="item-check" data-id="${item.id}"></td>
           <td class="col-date">${formatDate(item.date)}</td>
           ${ratingCell}
           <td><div class="text-preview" title="${escapeHtml(title + ' ' + text)}">${escapeHtml(title || text)}</div></td>
-          <td><div class="text-preview text-answer" title="${escapeHtml(answer)}">${escapeHtml(answerPreview || '—')}</div></td>
           <td class="col-status"><span class="status-badge ${statusClass}">${statusRu[item.status] || item.status}</span></td>
         </tr>`;
     }).join('');
+    tbody.querySelectorAll('tr').forEach(tr => {
+      tr.addEventListener('click', (e) => {
+        if (e.target.closest('.item-check')) return;
+        const id = Number(tr.getAttribute('data-id'));
+        const prefix = tr.getAttribute('data-prefix');
+        const item = (prefix === 'reviews' ? reviews : questions).find(i => i.id === id);
+        if (!item) return;
+        const store = stores.find(s => s.id === item.store_id);
+        showItemModal(item, store ? store.name : '—', prefix === 'reviews');
+      });
+    });
+  }
+
+  function showItemModal(item, storeName, isReview) {
+    const modal = document.getElementById('modal-item-detail');
+    const titleEl = document.getElementById('modal-item-detail-title');
+    const storeEl = document.getElementById('modal-item-store');
+    const productEl = document.getElementById('modal-item-product');
+    const textLabel = document.getElementById('modal-item-text-label');
+    const textEl = document.getElementById('modal-item-text');
+    const answerEl = document.getElementById('modal-item-answer');
+    if (!modal) return;
+    titleEl.textContent = isReview ? 'Отзыв' : 'Вопрос';
+    textLabel.textContent = isReview ? 'Текст отзыва' : 'Текст вопроса';
+    storeEl.textContent = storeName;
+    productEl.textContent = (item.product_title || '').trim() || '—';
+    textEl.textContent = (item.text || '').trim() || '—';
+    answerEl.textContent = (item.generated_text || '').trim() || '—';
+    modal.classList.add('visible');
   }
 
   function getSelectedIds(prefix) {
@@ -498,6 +544,7 @@
       currentUser = me;
       const label = document.getElementById('auth-user-label');
       if (label) label.textContent = `${me.username} (${me.role})`;
+      applyTabVisibility();
       await refreshUsersSection();
       return me;
     } catch (err) {
@@ -558,17 +605,27 @@
       const users = await api('/users');
       const list = document.getElementById('users-list');
       if (list) {
-        list.innerHTML = users.map(u => `
+        list.innerHTML = users.map(u => {
+          const perms = u.permissions || [];
+          const isAdminUser = u.role === 'admin';
+          const settingsChecked = isAdminUser || perms.includes('view_settings');
+          const logChecked = isAdminUser || perms.includes('view_log');
+          const disablePerms = isAdminUser ? ' disabled title="У админа все права"' : '';
+          return `
           <div class="store-card">
             <div class="store-head">
               <div class="store-name">${escapeHtml(u.username)}</div>
               <span class="badge">${escapeHtml(u.role)}</span>
             </div>
+            <div class="store-meta" style="margin-top:8px;font-size:0.85rem;color:var(--text-muted);">
+              <label style="display:inline-flex;align-items:center;gap:6px;margin-right:12px;"><input type="checkbox" data-user-id="${u.id}" data-perm="view_settings" ${settingsChecked ? 'checked' : ''}${disablePerms}> Настройки</label>
+              <label style="display:inline-flex;align-items:center;gap:6px;"><input type="checkbox" data-user-id="${u.id}" data-perm="view_log" ${logChecked ? 'checked' : ''}${disablePerms}> Лог</label>
+            </div>
             <div class="store-actions">
               <button type="button" class="btn btn-danger" data-user-del="${u.id}">Удалить</button>
             </div>
-          </div>
-        `).join('');
+          </div>`;
+        }).join('');
         list.querySelectorAll('[data-user-del]').forEach(btn => {
           btn.addEventListener('click', async () => {
             const id = Number(btn.getAttribute('data-user-del'));
@@ -576,6 +633,22 @@
             await api('/users/' + id, { method: 'DELETE' });
             toast('Пользователь удалён');
             await refreshUsersSection();
+          });
+        });
+        list.querySelectorAll('input[data-perm]').forEach(cb => {
+          if (cb.disabled) return;
+          cb.addEventListener('change', async () => {
+            const userId = Number(cb.getAttribute('data-user-id'));
+            const perm = cb.getAttribute('data-perm');
+            const allCheckboxes = list.querySelectorAll(`input[data-user-id="${userId}"][data-perm]`);
+            const permissions = Array.from(allCheckboxes).filter(c => c.checked).map(c => c.getAttribute('data-perm'));
+            try {
+              await api('/users/' + userId + '/permissions', { method: 'PATCH', body: JSON.stringify({ permissions }) });
+              toast('Доступы обновлены');
+            } catch (err) {
+              toast(err.message, 'error');
+              await refreshUsersSection();
+            }
           });
         });
       }

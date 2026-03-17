@@ -246,6 +246,32 @@
     </section>
   </main>
 
+  <!-- Модальное окно: отзыв/вопрос и сгенерированный ответ -->
+  <div id="modal-item-detail" class="modal-backdrop">
+    <div class="modal">
+      <h2 id="modal-item-detail-title">Отзыв</h2>
+      <div class="form-group">
+        <label>Магазин</label>
+        <div id="modal-item-store" class="form-hint">—</div>
+      </div>
+      <div class="form-group">
+        <label>Товар</label>
+        <div id="modal-item-product" class="form-hint">—</div>
+      </div>
+      <div class="form-group">
+        <label id="modal-item-text-label">Текст отзыва</label>
+        <div id="modal-item-text" class="text-block">—</div>
+      </div>
+      <div class="form-group">
+        <label>Сгенерированный ответ</label>
+        <div id="modal-item-answer" class="text-block">—</div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="btn-modal-item-close">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Модальное окно редактирования магазина -->
   <div id="modal-store" class="modal-backdrop">
     <div class="modal">

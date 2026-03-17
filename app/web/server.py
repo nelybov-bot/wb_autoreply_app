@@ -165,6 +165,17 @@ def require_admin(user: UserRow = Depends(require_user)) -> UserRow:
     return user
 
 
+def require_permission(permission: str):
+    def _dep(user: UserRow = Depends(require_user), db: Database = Depends(get_db)) -> UserRow:
+        if user.role == "admin":
+            return user
+        perms = db.get_user_permissions(user.id)
+        if permission not in perms:
+            raise HTTPException(403, "Нет доступа")
+        return user
+    return _dep
+
+
 @app.middleware("http")
 async def _api_auth_middleware(request: Request, call_next):
     path = request.url.path or ""
@@ -193,12 +204,14 @@ class LoginBody(BaseModel):
 class MeOut(BaseModel):
     username: str
     role: str
+    permissions: list[str] = []
 
 
 class UserOut(BaseModel):
     id: int
     username: str
     role: str
+    permissions: list[str] = []
 
 
 class UserCreateBody(BaseModel):
@@ -309,8 +322,12 @@ def _item_to_out(r: ItemRow) -> ItemOut:
 
 # ---------- API: auth ----------
 @app.get("/api/auth/me", response_model=MeOut)
-def api_me(user: UserRow = Depends(require_user)):
-    return MeOut(username=user.username, role=user.role)
+def api_me(user: UserRow = Depends(require_user), db: Database = Depends(get_db)):
+    if user.role == "admin":
+        perms = ["view_settings", "view_log"]
+    else:
+        perms = db.get_user_permissions(user.id)
+    return MeOut(username=user.username, role=user.role, permissions=perms)
 
 
 @app.post("/api/auth/login")
@@ -362,7 +379,10 @@ def api_admin_reset(body: AdminResetBody, db: Database = Depends(get_db)):
 # ---------- API: users (admin) ----------
 @app.get("/api/users", response_model=list[UserOut])
 def api_list_users(_: UserRow = Depends(require_admin), db: Database = Depends(get_db)):
-    return [UserOut(id=u.id, username=u.username, role=u.role) for u in db.list_users()]
+    return [
+        UserOut(id=u.id, username=u.username, role=u.role, permissions=db.get_user_permissions(u.id))
+        for u in db.list_users()
+    ]
 
 
 @app.post("/api/users", response_model=UserOut)
@@ -391,6 +411,24 @@ def api_delete_user(user_id: int, me: UserRow = Depends(require_admin), db: Data
         raise HTTPException(400, "Нельзя удалить текущего пользователя")
     db.delete_user(int(user_id))
     return {"ok": True}
+
+
+class UserPermissionsBody(BaseModel):
+    permissions: list[str]  # e.g. ["view_settings", "view_log"]
+
+
+@app.get("/api/users/{user_id}/permissions")
+def api_get_user_permissions(user_id: int, _: UserRow = Depends(require_admin), db: Database = Depends(get_db)):
+    perms = db.get_user_permissions(int(user_id))
+    return {"permissions": perms}
+
+
+@app.patch("/api/users/{user_id}/permissions")
+def api_set_user_permissions(user_id: int, body: UserPermissionsBody, _: UserRow = Depends(require_admin), db: Database = Depends(get_db)):
+    allowed = {"view_settings", "view_log"}
+    perms = [p for p in (body.permissions or []) if (p or "").strip() in allowed]
+    db.set_user_permissions(int(user_id), perms)
+    return {"permissions": perms}
 
 
 # ---------- API: stores ----------
@@ -478,13 +516,13 @@ def api_get_item(item_id: int, db: Database = Depends(get_db), _: UserRow = Depe
 
 # ---------- API: settings ----------
 @app.get("/api/settings")
-def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(require_admin)):
+def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
     keys = ["openai_key", "telegram_bot_token", "telegram_chat_id", "theme"]
     return {k: db.get_setting(k) or "" for k in keys}
 
 
 @app.post("/api/settings")
-def api_set_settings(body: dict[str, str], db: Database = Depends(get_db), _: UserRow = Depends(require_admin)):
+def api_set_settings(body: dict[str, str], db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
     for k, v in body.items():
         db.set_setting(k, v or "")
     return {"ok": True}
@@ -492,12 +530,12 @@ def api_set_settings(body: dict[str, str], db: Database = Depends(get_db), _: Us
 
 # ---------- API: prompts ----------
 @app.get("/api/prompts", response_model=list[PromptOut])
-def api_list_prompts(db: Database = Depends(get_db), _: UserRow = Depends(require_admin)):
+def api_list_prompts(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
     return [PromptOut(id=p.id, item_type=p.item_type, rating_group=p.rating_group, prompt_text=p.prompt_text) for p in db.list_prompts()]
 
 
 @app.patch("/api/prompts/{prompt_id}")
-def api_update_prompt(prompt_id: int, body: PromptUpdate, db: Database = Depends(get_db), _: UserRow = Depends(require_admin)):
+def api_update_prompt(prompt_id: int, body: PromptUpdate, db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
     db.update_prompt(prompt_id, body.prompt_text)
     return {"ok": True}
 
@@ -540,7 +578,7 @@ def api_stats(db: Database = Depends(get_db), _: UserRow = Depends(require_user)
 
 # ---------- API: log ----------
 @app.get("/api/log")
-def api_log_tail(db: Database = Depends(get_db), _: UserRow = Depends(require_admin)):
+def api_log_tail(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_log"))):
     try:
         with open(LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
             f.seek(max(0, f.seek(0, 2) - 100 * 1024))

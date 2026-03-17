@@ -121,6 +121,14 @@ class Database:
                 role TEXT NOT NULL DEFAULT 'guest'
             )
             """)
+            c.execute("""
+            CREATE TABLE IF NOT EXISTS user_permissions (
+                user_id INTEGER NOT NULL,
+                permission TEXT NOT NULL,
+                PRIMARY KEY (user_id, permission),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """)
             # Индексы
             c.execute("CREATE INDEX IF NOT EXISTS idx_items_status ON items(status)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_items_type ON items(item_type)")
@@ -209,6 +217,26 @@ class Database:
                 "UPDATE users SET password_hash=? WHERE username=?",
                 (password_hash, u),
             )
+            self._conn.commit()
+
+    def get_user_permissions(self, user_id: int) -> list[str]:
+        with _DB_LOCK:
+            rows = self._conn.execute(
+                "SELECT permission FROM user_permissions WHERE user_id=?",
+                (int(user_id),),
+            ).fetchall()
+            return [str(r["permission"]) for r in rows]
+
+    def set_user_permissions(self, user_id: int, permissions: list[str]) -> None:
+        with _DB_LOCK:
+            self._conn.execute("DELETE FROM user_permissions WHERE user_id=?", (int(user_id),))
+            for p in permissions:
+                p = (p or "").strip()
+                if p:
+                    self._conn.execute(
+                        "INSERT INTO user_permissions(user_id, permission) VALUES(?,?)",
+                        (int(user_id), p),
+                    )
             self._conn.commit()
 
     def _seed_prompts_if_empty(self) -> None:
