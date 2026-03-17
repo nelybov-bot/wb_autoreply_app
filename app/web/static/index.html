@@ -18,6 +18,25 @@
     }
   </script>
   <div class="bg-noise" aria-hidden="true"></div>
+
+  <!-- Login modal -->
+  <div id="modal-login" class="modal-backdrop" style="display:none;">
+    <div class="modal">
+      <h2>Вход</h2>
+      <div class="form-group">
+        <label>Логин</label>
+        <input type="text" id="login-username" autocomplete="username" placeholder="admin">
+      </div>
+      <div class="form-group">
+        <label>Пароль</label>
+        <input type="password" id="login-password" autocomplete="current-password" placeholder="пароль">
+      </div>
+      <div style="display:flex; gap:10px; align-items:center; justify-content:flex-end; margin-top: 12px;">
+        <button type="button" class="btn btn-primary" id="btn-login">Войти</button>
+      </div>
+      <small class="form-hint" style="margin-top:10px; display:block;">Если это первый запуск, админ создаётся через переменную окружения ADMIN_INIT_PASSWORD на сервере.</small>
+    </div>
+  </div>
   <header class="header">
     <div class="header-left">
       <h1>WB <span class="title-gradient">Автоответчик</span></h1>
@@ -176,9 +195,9 @@
           <small class="form-hint">С телефона или другого устройства укажи IP своего ПК. Пусто — запросы на этот же адрес.</small>
         </div>
         <div class="form-group">
-          <label>API токен (Bearer)</label>
-          <input type="password" id="setting-api_token" placeholder="токен доступа" autocomplete="off">
-          <small class="form-hint">Нужен для доступа к /api на сервере. Хранится только в браузере (localStorage).</small>
+          <label>Пользователь</label>
+          <div class="form-hint" id="auth-user-label">—</div>
+          <button type="button" class="btn btn-secondary" id="btn-logout" style="margin-top:10px;">Выйти</button>
         </div>
         <h2 style="margin-top: 24px;">OpenAI</h2>
         <div class="form-group">
@@ -195,6 +214,22 @@
           <input type="text" id="setting-telegram_chat_id" placeholder="chat_id">
         </div>
         <button type="button" class="btn btn-primary" id="btn-save-settings">Сохранить настройки</button>
+      </div>
+      <div class="form-card" style="margin-top: 24px;">
+        <h2>Пользователи</h2>
+        <div id="users-admin-only" style="display:none;">
+          <div class="form-group" style="margin-top: 12px;">
+            <label>Создать гостя</label>
+            <div style="display:grid; grid-template-columns: 1fr 1fr auto; gap: 10px;">
+              <input type="text" id="new-user-username" placeholder="логин">
+              <input type="password" id="new-user-password" placeholder="пароль">
+              <button type="button" class="btn btn-primary" id="btn-create-user">Создать</button>
+            </div>
+            <small class="form-hint">Пользователь будет с ролью guest.</small>
+          </div>
+          <div id="users-list" class="stores-grid" style="margin-top: 10px;"></div>
+        </div>
+        <div id="users-no-access" class="form-hint">Доступно только администратору.</div>
       </div>
       <div class="form-card" style="margin-top: 24px;">
         <h2>Промпты</h2>

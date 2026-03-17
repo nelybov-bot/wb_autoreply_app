@@ -48,6 +48,13 @@ class ItemRow:
     was_viewed: bool
     extra_json: str = ""  # JSON для marketplace-specific данных (напр. Ozon sku)
 
+@dataclass(frozen=True)
+class UserRow:
+    id: int
+    username: str
+    password_hash: str
+    role: str  # 'admin' | 'guest'
+
 class Database:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
@@ -106,6 +113,14 @@ class Database:
                 value TEXT NOT NULL DEFAULT ''
             )
             """)
+            c.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'guest'
+            )
+            """)
             # Индексы
             c.execute("CREATE INDEX IF NOT EXISTS idx_items_status ON items(status)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_items_type ON items(item_type)")
@@ -127,6 +142,63 @@ class Database:
             """)
             self._conn.commit()
             self._seed_prompts_if_empty()
+
+    # ---------- Users ----------
+    def count_users(self) -> int:
+        with _DB_LOCK:
+            row = self._conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()
+            return int(row["n"]) if row else 0
+
+    def get_user_by_username(self, username: str) -> Optional[UserRow]:
+        u = (username or "").strip()
+        if not u:
+            return None
+        with _DB_LOCK:
+            row = self._conn.execute(
+                "SELECT id, username, password_hash, role FROM users WHERE username=?",
+                (u,),
+            ).fetchone()
+            if not row:
+                return None
+            return UserRow(
+                id=int(row["id"]),
+                username=str(row["username"]),
+                password_hash=str(row["password_hash"]),
+                role=str(row["role"] or "guest"),
+            )
+
+    def list_users(self) -> list[UserRow]:
+        with _DB_LOCK:
+            rows = self._conn.execute(
+                "SELECT id, username, password_hash, role FROM users ORDER BY id DESC"
+            ).fetchall()
+            return [
+                UserRow(
+                    id=int(r["id"]),
+                    username=str(r["username"]),
+                    password_hash=str(r["password_hash"]),
+                    role=str(r["role"] or "guest"),
+                )
+                for r in rows
+            ]
+
+    def create_user(self, username: str, password_hash: str, role: str = "guest") -> int:
+        u = (username or "").strip()
+        if not u:
+            raise ValueError("username пустой")
+        r = (role or "guest").strip() or "guest"
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                "INSERT INTO users(username, password_hash, role) VALUES(?,?,?)",
+                (u, password_hash, r),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def delete_user(self, user_id: int) -> None:
+        with _DB_LOCK:
+            self._conn.execute("DELETE FROM users WHERE id=?", (int(user_id),))
+            self._conn.commit()
 
     def _seed_prompts_if_empty(self) -> None:
         with _DB_LOCK:

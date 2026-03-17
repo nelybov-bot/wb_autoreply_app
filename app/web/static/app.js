@@ -3,25 +3,19 @@
 
   const API = '/api';
   const STORAGE_API_BASE = 'wb_autoreply_api_base';
-  const STORAGE_API_TOKEN = 'wb_autoreply_api_token';
 
   function getApiBase() {
     return (localStorage.getItem(STORAGE_API_BASE) || '').trim().replace(/\/$/, '');
   }
 
-  function getApiToken() {
-    return (localStorage.getItem(STORAGE_API_TOKEN) || '').trim();
-  }
-
   async function api(path, options = {}) {
     const base = getApiBase();
     const url = path.startsWith('http') ? path : (base ? base + '/api' + path : API + path);
-    const token = getApiToken();
     const res = await fetch(url, {
       ...options,
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': 'Bearer ' + token } : {}),
         ...options.headers,
       },
     });
@@ -34,6 +28,9 @@
         err = { detail: text };
       }
       const msg = Array.isArray(err.detail) ? err.detail.map(d => d.msg || d).join(' ') : (err.detail || res.statusText);
+      if (res.status === 401) {
+        showLogin();
+      }
       throw new Error(msg);
     }
     if (res.status === 204 || res.headers.get('content-length') === '0') return null;
@@ -414,9 +411,8 @@
   async function loadSettings() {
     const apiBaseEl = document.getElementById('setting-api_base');
     if (apiBaseEl) apiBaseEl.value = localStorage.getItem(STORAGE_API_BASE) || '';
-    const apiTokenEl = document.getElementById('setting-api_token');
-    if (apiTokenEl) apiTokenEl.value = localStorage.getItem(STORAGE_API_TOKEN) || '';
     try {
+      await loadMe(true);
       const data = await api('/settings');
       ['openai_key', 'telegram_bot_token', 'telegram_chat_id'].forEach(k => {
         const el = document.getElementById('setting-' + k);
@@ -477,20 +473,149 @@
     });
   }
 
-  const apiTokenInput = document.getElementById('setting-api_token');
-  if (apiTokenInput) {
-    apiTokenInput.addEventListener('change', function () {
-      const v = this.value.trim();
-      if (v) localStorage.setItem(STORAGE_API_TOKEN, v); else localStorage.removeItem(STORAGE_API_TOKEN);
-      toast('API токен сохранён');
+  // ---- Auth UI ----
+  let currentUser = null;
+
+  function showLogin() {
+    const m = document.getElementById('modal-login');
+    if (!m) return;
+    m.style.display = 'flex';
+    setTimeout(() => {
+      const u = document.getElementById('login-username');
+      if (u) u.focus();
+    }, 50);
+  }
+
+  function hideLogin() {
+    const m = document.getElementById('modal-login');
+    if (!m) return;
+    m.style.display = 'none';
+  }
+
+  async function loadMe(silent = false) {
+    try {
+      const me = await api('/auth/me');
+      currentUser = me;
+      const label = document.getElementById('auth-user-label');
+      if (label) label.textContent = `${me.username} (${me.role})`;
+      await refreshUsersSection();
+      return me;
+    } catch (err) {
+      currentUser = null;
+      const label = document.getElementById('auth-user-label');
+      if (label) label.textContent = '—';
+      if (!silent) toast(err.message, 'error');
+      return null;
+    }
+  }
+
+  async function doLogin() {
+    const u = (document.getElementById('login-username').value || '').trim();
+    const p = document.getElementById('login-password').value || '';
+    if (!u || !p) {
+      toast('Введите логин и пароль', 'error');
+      return;
+    }
+    try {
+      await api('/auth/login', { method: 'POST', body: JSON.stringify({ username: u, password: p }) });
+      hideLogin();
+      toast('Вход выполнен');
+      await loadMe(true);
+      await loadStores();
+      fillStoreSelects();
+      await loadReviews();
+      await loadQuestions();
+      await loadStats();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  async function doLogout() {
+    try {
+      await api('/auth/logout', { method: 'POST', body: JSON.stringify({}) });
+    } catch (_) {}
+    currentUser = null;
+    showLogin();
+  }
+
+  const btnLogin = document.getElementById('btn-login');
+  if (btnLogin) btnLogin.addEventListener('click', doLogin);
+  const btnLogout = document.getElementById('btn-logout');
+  if (btnLogout) btnLogout.addEventListener('click', doLogout);
+  const passEl = document.getElementById('login-password');
+  if (passEl) passEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+
+  async function refreshUsersSection() {
+    const adminWrap = document.getElementById('users-admin-only');
+    const noAccess = document.getElementById('users-no-access');
+    if (!adminWrap || !noAccess) return;
+    const isAdmin = currentUser && currentUser.role === 'admin';
+    adminWrap.style.display = isAdmin ? 'block' : 'none';
+    noAccess.style.display = isAdmin ? 'none' : 'block';
+    if (!isAdmin) return;
+    try {
+      const users = await api('/users');
+      const list = document.getElementById('users-list');
+      if (list) {
+        list.innerHTML = users.map(u => `
+          <div class="store-card">
+            <div class="store-head">
+              <div class="store-name">${escapeHtml(u.username)}</div>
+              <span class="badge">${escapeHtml(u.role)}</span>
+            </div>
+            <div class="store-actions">
+              <button type="button" class="btn btn-danger" data-user-del="${u.id}">Удалить</button>
+            </div>
+          </div>
+        `).join('');
+        list.querySelectorAll('[data-user-del]').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const id = Number(btn.getAttribute('data-user-del'));
+            if (!confirm('Удалить пользователя?')) return;
+            await api('/users/' + id, { method: 'DELETE' });
+            toast('Пользователь удалён');
+            await refreshUsersSection();
+          });
+        });
+      }
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  const btnCreateUser = document.getElementById('btn-create-user');
+  if (btnCreateUser) {
+    btnCreateUser.addEventListener('click', async () => {
+      const u = (document.getElementById('new-user-username').value || '').trim();
+      const p = document.getElementById('new-user-password').value || '';
+      if (!u || !p) {
+        toast('Введите логин и пароль', 'error');
+        return;
+      }
+      try {
+        await api('/users', { method: 'POST', body: JSON.stringify({ username: u, password: p, role: 'guest' }) });
+        document.getElementById('new-user-username').value = '';
+        document.getElementById('new-user-password').value = '';
+        toast('Пользователь создан');
+        await refreshUsersSection();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
     });
   }
 
   // ---- Init ----
-  loadStats();
-  loadStores().then(() => {
-    fillStoreSelects();
-    loadReviews();
-    loadQuestions();
+  loadMe(true).then(me => {
+    if (!me) {
+      showLogin();
+      return;
+    }
+    loadStats();
+    loadStores().then(() => {
+      fillStoreSelects();
+      loadReviews();
+      loadQuestions();
+    });
   });
 })();
