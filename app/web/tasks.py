@@ -33,8 +33,15 @@ async def run_load_new(db: Database, store_ids: Optional[list[int]]) -> str:
     async with _tasks_lock:
         _tasks[task_id] = {"status": "running", "progress": [0, max(len(stores), 1)], "result": None, "error": None}
 
+    async def _set_progress(cur: int, tot: int) -> None:
+        safe_tot = max(int(tot or 0), 1)
+        safe_cur = max(0, min(int(cur or 0), safe_tot))
+        async with _tasks_lock:
+            if task_id in _tasks:
+                _tasks[task_id]["progress"] = [safe_cur, safe_tot]
+
     def _progress(cur: int, tot: int) -> None:
-        _tasks[task_id]["progress"] = [cur, tot]
+        asyncio.create_task(_set_progress(cur, tot))
 
     async def _run() -> None:
         try:
@@ -66,8 +73,15 @@ async def run_generate(db: Database, item_ids: list[int], openai_key: str) -> st
     async with _tasks_lock:
         _tasks[task_id] = {"status": "running", "progress": [0, len(item_ids)], "result": None, "error": None}
 
+    async def _set_progress(cur: int, tot: int) -> None:
+        safe_tot = max(int(tot or 0), 1)
+        safe_cur = max(0, min(int(cur or 0), safe_tot))
+        async with _tasks_lock:
+            if task_id in _tasks:
+                _tasks[task_id]["progress"] = [safe_cur, safe_tot]
+
     def _progress(cur: int, tot: int) -> None:
-        _tasks[task_id]["progress"] = [cur, tot]
+        asyncio.create_task(_set_progress(cur, tot))
 
     async def _run() -> None:
         try:
@@ -92,8 +106,15 @@ async def run_send(db: Database, item_ids: list[int]) -> str:
     async with _tasks_lock:
         _tasks[task_id] = {"status": "running", "progress": [0, 1], "result": None, "error": None}
 
+    async def _set_progress(cur: int, tot: int) -> None:
+        safe_tot = max(int(tot or 0), 1)
+        safe_cur = max(0, min(int(cur or 0), safe_tot))
+        async with _tasks_lock:
+            if task_id in _tasks:
+                _tasks[task_id]["progress"] = [safe_cur, safe_tot]
+
     def _progress(cur: int, tot: int) -> None:
-        _tasks[task_id]["progress"] = [cur, tot]
+        asyncio.create_task(_set_progress(cur, tot))
 
     async def _run() -> None:
         try:

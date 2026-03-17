@@ -281,7 +281,8 @@
       try {
         const state = await api('/tasks/' + taskId);
         const [cur, total] = state.progress || [0, 1];
-        const pct = total ? Math.round((cur / total) * 100) : 0;
+        const pctRaw = total ? Math.round((cur / total) * 100) : 0;
+        const pct = Math.max(0, Math.min(100, pctRaw));
         fill.style.width = pct + '%';
         textEl.textContent = state.status === 'running' ? `Выполняется… ${cur}/${total}` : state.status === 'done' ? 'Готово' : state.status;
         if (state.status === 'done') {
