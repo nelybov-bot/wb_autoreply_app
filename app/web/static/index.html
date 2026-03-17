@@ -251,10 +251,29 @@
 
     <!-- Лог -->
     <section id="panel-log" class="panel">
-      <div class="toolbar">
+      <div class="toolbar" style="gap: 10px;">
+        <select id="log-mode">
+          <option value="ops">Операционный</option>
+          <option value="dev">Dev (админ)</option>
+        </select>
+        <select id="log-action">
+          <option value="">Все действия</option>
+          <option value="load_new">Загрузка новых</option>
+          <option value="generate">Генерация</option>
+          <option value="send">Отправка</option>
+          <option value="template_apply">Шаблон</option>
+        </select>
+        <select id="log-level">
+          <option value="">Все уровни</option>
+          <option value="INFO">INFO</option>
+          <option value="WARNING">WARNING</option>
+          <option value="ERROR">ERROR</option>
+        </select>
+        <input type="text" id="log-q" placeholder="Поиск" style="flex:1; min-width: 200px;">
         <button type="button" class="btn btn-secondary" id="btn-refresh-log">Обновить</button>
       </div>
-      <pre class="log-wrap" id="log-content"></pre>
+      <div id="ops-log-wrap" class="stores-grid" style="margin-top: 14px;"></div>
+      <pre class="log-wrap" id="log-content" style="margin-top: 14px;"></pre>
     </section>
   </main>
 

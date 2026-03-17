@@ -12,6 +12,8 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
+import datetime as dt
+import json
 
 _DB_LOCK = threading.RLock()
 
@@ -54,6 +56,17 @@ class UserRow:
     username: str
     password_hash: str
     role: str  # 'admin' | 'guest'
+
+@dataclass(frozen=True)
+class AuditEventRow:
+    id: int
+    ts: str
+    actor: str
+    action: str
+    item_type: str
+    store_id: Optional[int]
+    result: str
+    meta_json: str
 
 class Database:
     def __init__(self, db_path: str) -> None:
@@ -129,6 +142,21 @@ class Database:
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """)
+            c.execute("""
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                action TEXT NOT NULL,
+                item_type TEXT NOT NULL DEFAULT '',
+                store_id INTEGER,
+                result TEXT NOT NULL DEFAULT '',
+                meta_json TEXT NOT NULL DEFAULT ''
+            )
+            """)
+            c.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_events(ts)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_events(action)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_events(actor)")
             # Индексы
             c.execute("CREATE INDEX IF NOT EXISTS idx_items_status ON items(status)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_items_type ON items(item_type)")
@@ -238,6 +266,85 @@ class Database:
                         (int(user_id), p),
                     )
             self._conn.commit()
+
+    # ---------- Audit events (ops log) ----------
+    def add_audit_event(
+        self,
+        *,
+        actor: str,
+        action: str,
+        item_type: str = "",
+        store_id: Optional[int] = None,
+        result: str = "",
+        meta: Optional[dict] = None,
+    ) -> int:
+        ts = dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
+        meta_json = ""
+        if meta is not None:
+            try:
+                meta_json = json.dumps(meta, ensure_ascii=False, separators=(",", ":"))
+            except Exception:
+                meta_json = ""
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                "INSERT INTO audit_events(ts, actor, action, item_type, store_id, result, meta_json) VALUES(?,?,?,?,?,?,?)",
+                (ts, actor or "", action or "", item_type or "", store_id, result or "", meta_json),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def list_audit_events(
+        self,
+        *,
+        action: Optional[str] = None,
+        item_type: Optional[str] = None,
+        store_id: Optional[int] = None,
+        result: Optional[str] = None,
+        q: Optional[str] = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[AuditEventRow]:
+        where = []
+        params = []
+        if action:
+            where.append("action=?")
+            params.append(action)
+        if item_type:
+            where.append("item_type=?")
+            params.append(item_type)
+        if store_id is not None:
+            where.append("store_id=?")
+            params.append(int(store_id))
+        if result:
+            where.append("result=?")
+            params.append(result)
+        if q:
+            where.append("(actor LIKE ? OR meta_json LIKE ?)")
+            like = f"%{q}%"
+            params.extend([like, like])
+        w = ("WHERE " + " AND ".join(where)) if where else ""
+        safe_limit = max(1, min(int(limit), 500))
+        safe_offset = max(0, int(offset))
+        with _DB_LOCK:
+            rows = self._conn.execute(
+                f\"SELECT id, ts, actor, action, item_type, store_id, result, meta_json FROM audit_events {w} ORDER BY id DESC LIMIT ? OFFSET ?\",
+                params + [safe_limit, safe_offset],
+            ).fetchall()
+            out = []
+            for r in rows:
+                out.append(
+                    AuditEventRow(
+                        id=int(r["id"]),
+                        ts=str(r["ts"]),
+                        actor=str(r["actor"] or ""),
+                        action=str(r["action"] or ""),
+                        item_type=str(r["item_type"] or ""),
+                        store_id=(int(r["store_id"]) if r["store_id"] is not None else None),
+                        result=str(r["result"] or ""),
+                        meta_json=str(r["meta_json"] or ""),
+                    )
+                )
+            return out
 
     def _seed_prompts_if_empty(self) -> None:
         with _DB_LOCK:

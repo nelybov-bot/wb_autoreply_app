@@ -30,7 +30,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 from app.logging_config import setup_logging
 setup_logging(LOG_PATH)
 
-from app.db import Database, Store, ItemRow, PromptRow, UserRow
+from app.db import Database, Store, ItemRow, PromptRow, UserRow, AuditEventRow
 from app.web import tasks as web_tasks
 
 log = logging.getLogger("web")
@@ -328,7 +328,7 @@ def _item_to_out(r: ItemRow) -> ItemOut:
 @app.get("/api/auth/me", response_model=MeOut)
 def api_me(user: UserRow = Depends(require_user), db: Database = Depends(get_db)):
     if user.role == "admin":
-        perms = ["view_settings", "view_log"]
+        perms = ["view_settings", "view_log", "view_ops_log"]
     else:
         perms = db.get_user_permissions(user.id)
     return MeOut(username=user.username, role=user.role, permissions=perms)
@@ -418,7 +418,7 @@ def api_delete_user(user_id: int, me: UserRow = Depends(require_admin), db: Data
 
 
 class UserPermissionsBody(BaseModel):
-    permissions: list[str]  # e.g. ["view_settings", "view_log"]
+    permissions: list[str]  # e.g. ["view_settings", "view_log", "view_ops_log"]
 
 
 @app.get("/api/users/{user_id}/permissions")
@@ -429,7 +429,7 @@ def api_get_user_permissions(user_id: int, _: UserRow = Depends(require_admin), 
 
 @app.patch("/api/users/{user_id}/permissions")
 def api_set_user_permissions(user_id: int, body: UserPermissionsBody, _: UserRow = Depends(require_admin), db: Database = Depends(get_db)):
-    allowed = {"view_settings", "view_log"}
+    allowed = {"view_settings", "view_log", "view_ops_log"}
     perms = [p for p in (body.permissions or []) if (p or "").strip() in allowed]
     db.set_user_permissions(int(user_id), perms)
     return {"permissions": perms}
@@ -567,7 +567,7 @@ async def api_send(body: SendBody, db: Database = Depends(get_db), _: UserRow = 
 
 
 @app.post("/api/apply-template")
-def api_apply_template(body: ApplyTemplateBody, db: Database = Depends(get_db), _: UserRow = Depends(require_user)):
+def api_apply_template(body: ApplyTemplateBody, db: Database = Depends(get_db), user: UserRow = Depends(require_user)):
     text = (body.template_text or "").strip()
     if not text:
         raise HTTPException(400, "Шаблон пустой")
@@ -589,7 +589,107 @@ def api_apply_template(body: ApplyTemplateBody, db: Database = Depends(get_db), 
             continue
         db.set_generated(int(item_id), text)
         applied += 1
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="template_apply",
+            item_type="review",
+            result="ok",
+            meta={"applied": applied, "skipped": skipped},
+        )
+    except Exception:
+        pass
     return {"applied": applied, "skipped": skipped}
+
+
+@app.get("/api/log/dev")
+def api_log_dev(
+    level: Optional[str] = None,
+    action: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = 400,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_admin),
+):
+    """
+    Dev-лог: только админ. Фильтры грубые (по подстроке).
+    level: INFO|WARNING|ERROR
+    action: load_new|generate|send|template|auth|users|stores
+    """
+    try:
+        with open(LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+            f.seek(max(0, f.seek(0, 2) - 200 * 1024))
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        lines = []
+    except Exception as e:
+        return {"lines": [str(e)]}
+
+    lvl = (level or "").strip().upper()
+    act = (action or "").strip().lower()
+    qq = (q or "").strip().lower()
+    action_map = {
+        "load_new": ["load_new", "load-new"],
+        "generate": ["generate"],
+        "send": ["send"],
+        "template": ["template"],
+        "auth": ["login", "logout", "auth"],
+        "users": ["users", "permissions"],
+        "stores": ["stores"],
+    }
+    keys = action_map.get(act, [])
+
+    out = []
+    for ln in reversed(lines):
+        s = ln
+        if lvl and f"| {lvl} |" not in s:
+            continue
+        if keys and not any(k in s.lower() for k in keys):
+            continue
+        if qq and qq not in s.lower():
+            continue
+        out.append(s)
+        if len(out) >= max(10, min(int(limit), 2000)):
+            break
+    return {"lines": list(reversed(out))}
+
+
+@app.get("/api/log/ops")
+def api_log_ops(
+    action: Optional[str] = None,
+    item_type: Optional[str] = None,
+    store_id: Optional[int] = None,
+    result: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_permission("view_ops_log")),
+):
+    rows = db.list_audit_events(
+        action=action,
+        item_type=item_type,
+        store_id=store_id,
+        result=result,
+        q=q,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "items": [
+            {
+                "id": r.id,
+                "ts": r.ts,
+                "actor": r.actor,
+                "action": r.action,
+                "item_type": r.item_type,
+                "store_id": r.store_id,
+                "result": r.result,
+                "meta_json": r.meta_json,
+            }
+            for r in rows
+        ]
+    }
 
 
 @app.get("/api/tasks/{task_id}")

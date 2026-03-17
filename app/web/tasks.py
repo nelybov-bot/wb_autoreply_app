@@ -51,15 +51,27 @@ async def run_load_new(db: Database, store_ids: Optional[list[int]]) -> str:
                 _tasks[task_id]["status"] = "done"
                 _tasks[task_id]["result"] = n
                 _tasks[task_id]["progress"] = [total, total]
+            try:
+                db.add_audit_event(actor="system", action="load_new", item_type="", result="ok", meta={"added": n, "stores": total})
+            except Exception:
+                pass
         except UnauthorizedStoreError as e:
             async with _tasks_lock:
                 _tasks[task_id]["status"] = "error"
                 _tasks[task_id]["error"] = f"Магазин «{e.store_name}»: неверный ключ или доступ запрещён."
+            try:
+                db.add_audit_event(actor="system", action="load_new", item_type="", result="error", meta={"error": str(e), "store": e.store_name})
+            except Exception:
+                pass
         except Exception as e:
             log.exception("load_new task %s failed: %s", task_id, e)
             async with _tasks_lock:
                 _tasks[task_id]["status"] = "error"
                 _tasks[task_id]["error"] = str(e)
+            try:
+                db.add_audit_event(actor="system", action="load_new", item_type="", result="error", meta={"error": str(e)})
+            except Exception:
+                pass
 
     asyncio.create_task(_run())
     return task_id
@@ -90,11 +102,20 @@ async def run_generate(db: Database, item_ids: list[int], openai_key: str) -> st
                 _tasks[task_id]["status"] = "done"
                 _tasks[task_id]["result"] = {"ok": ok, "failed": failed}
                 _tasks[task_id]["progress"] = [len(item_ids), len(item_ids)]
+            try:
+                # item_type can be mixed; mark as 'mixed' for ops log
+                db.add_audit_event(actor="system", action="generate", item_type="mixed", result="ok", meta={"ok": ok, "failed": failed, "count": len(item_ids)})
+            except Exception:
+                pass
         except Exception as e:
             log.exception("generate task %s failed: %s", task_id, e)
             async with _tasks_lock:
                 _tasks[task_id]["status"] = "error"
                 _tasks[task_id]["error"] = str(e)
+            try:
+                db.add_audit_event(actor="system", action="generate", item_type="mixed", result="error", meta={"error": str(e), "count": len(item_ids)})
+            except Exception:
+                pass
 
     asyncio.create_task(_run())
     return task_id
@@ -123,15 +144,27 @@ async def run_send(db: Database, item_ids: list[int]) -> str:
                 _tasks[task_id]["status"] = "done"
                 _tasks[task_id]["result"] = {"sent_ok": sent_ok, "skipped": skipped, "failed": failed}
                 _tasks[task_id]["progress"] = [1, 1]
+            try:
+                db.add_audit_event(actor="system", action="send", item_type="mixed", result="ok", meta={"sent_ok": sent_ok, "skipped": skipped, "failed": failed, "count": len(item_ids)})
+            except Exception:
+                pass
         except UnauthorizedStoreError as e:
             async with _tasks_lock:
                 _tasks[task_id]["status"] = "error"
                 _tasks[task_id]["error"] = f"Магазин «{e.store_name}»: неверный ключ или доступ запрещён."
+            try:
+                db.add_audit_event(actor="system", action="send", item_type="mixed", result="error", meta={"error": str(e), "store": e.store_name})
+            except Exception:
+                pass
         except Exception as e:
             log.exception("send task %s failed: %s", task_id, e)
             async with _tasks_lock:
                 _tasks[task_id]["status"] = "error"
                 _tasks[task_id]["error"] = str(e)
+            try:
+                db.add_audit_event(actor="system", action="send", item_type="mixed", result="error", meta={"error": str(e), "count": len(item_ids)})
+            except Exception:
+                pass
 
     asyncio.create_task(_run())
     return task_id

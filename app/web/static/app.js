@@ -52,15 +52,16 @@
   function applyTabVisibility() {
     const canSettings = currentUser && (currentUser.role === 'admin' || (currentUser.permissions && currentUser.permissions.includes('view_settings')));
     const canLog = currentUser && (currentUser.role === 'admin' || (currentUser.permissions && currentUser.permissions.includes('view_log')));
+    const canOpsLog = currentUser && (currentUser.role === 'admin' || (currentUser.permissions && currentUser.permissions.includes('view_ops_log')));
     document.querySelectorAll('.tab').forEach(tab => {
       const id = tab.getAttribute('data-tab');
       if (id === 'settings') tab.style.display = canSettings ? '' : 'none';
-      else if (id === 'log') tab.style.display = canLog ? '' : 'none';
+      else if (id === 'log') tab.style.display = (canLog || canOpsLog) ? '' : 'none';
     });
     const panelSettings = document.getElementById('panel-settings');
     const panelLog = document.getElementById('panel-log');
     if (panelSettings) panelSettings.style.display = canSettings ? '' : 'none';
-    if (panelLog) panelLog.style.display = canLog ? '' : 'none';
+    if (panelLog) panelLog.style.display = (canLog || canOpsLog) ? '' : 'none';
   }
 
   // ---- Tabs ----
@@ -544,12 +545,65 @@
   });
 
   // ---- Log ----
+  function safeJsonParse(s) {
+    try { return JSON.parse(s); } catch (_) { return null; }
+  }
+
+  function actionRu(a) {
+    const m = {
+      load_new: 'Загрузка новых',
+      generate: 'Генерация',
+      send: 'Отправка',
+      template_apply: 'Шаблон',
+    };
+    return m[a] || a || '—';
+  }
+
   async function loadLog() {
+    const mode = (document.getElementById('log-mode')?.value || 'ops');
+    const action = (document.getElementById('log-action')?.value || '').trim();
+    const level = (document.getElementById('log-level')?.value || '').trim();
+    const q = (document.getElementById('log-q')?.value || '').trim();
+    const devPre = document.getElementById('log-content');
+    const opsWrap = document.getElementById('ops-log-wrap');
+    if (devPre) devPre.style.display = (mode === 'dev') ? 'block' : 'none';
+    if (opsWrap) opsWrap.style.display = (mode === 'ops') ? 'grid' : 'none';
     try {
-      const data = await api('/log');
-      document.getElementById('log-content').textContent = data.text || '';
+      if (mode === 'dev') {
+        const data = await api('/log/dev?limit=600' + (level ? '&level=' + encodeURIComponent(level) : '') + (action ? '&action=' + encodeURIComponent(action) : '') + (q ? '&q=' + encodeURIComponent(q) : ''));
+        devPre.textContent = (data.lines || []).join('\\n');
+        return;
+      }
+
+      const data = await api('/log/ops?limit=200' + (action ? '&action=' + encodeURIComponent(action) : '') + (q ? '&q=' + encodeURIComponent(q) : ''));
+      const items = data.items || [];
+      if (!items.length) {
+        opsWrap.innerHTML = '<div class="empty-state" style="grid-column:1/-1; padding:24px;">Нет событий</div>';
+        return;
+      }
+      opsWrap.innerHTML = items.map(ev => {
+        const meta = safeJsonParse(ev.meta_json || '') || {};
+        const store = ev.store_id ? ('store_id=' + ev.store_id) : '';
+        const summary = meta.applied != null ? (`применено ${meta.applied}, пропущено ${meta.skipped ?? 0}`) :
+          meta.sent_ok != null ? (`ok ${meta.sent_ok}, пропущено ${meta.skipped ?? 0}, ошибок ${meta.failed ?? 0}`) :
+          meta.ok != null ? (`ok ${meta.ok}, ошибок ${meta.failed ?? 0}`) :
+          (meta.added != null ? (`добавлено ${meta.added}`) : '');
+        const result = ev.result || '';
+        const badge = result === 'error' ? 'danger' : 'ok';
+        return `
+          <div class="store-card">
+            <div class="store-head">
+              <div class="store-name">${escapeHtml(actionRu(ev.action))}</div>
+              <span class="badge">${escapeHtml(result || 'ok')}</span>
+            </div>
+            <div class="meta">${escapeHtml(ev.ts)} · ${escapeHtml(ev.actor)} ${store ? '· ' + escapeHtml(store) : ''}</div>
+            <div class="text-preview" style="max-width:unset;">${escapeHtml(summary || (meta.error || '') || '')}</div>
+          </div>
+        `;
+      }).join('');
     } catch (err) {
-      document.getElementById('log-content').textContent = 'Ошибка: ' + err.message;
+      if (mode === 'dev') devPre.textContent = 'Ошибка: ' + err.message;
+      else opsWrap.innerHTML = '<div class="empty-state" style="grid-column:1/-1; padding:24px;">Ошибка: ' + escapeHtml(err.message) + '</div>';
     }
   }
 
@@ -656,6 +710,7 @@
           const isAdminUser = u.role === 'admin';
           const settingsChecked = isAdminUser || perms.includes('view_settings');
           const logChecked = isAdminUser || perms.includes('view_log');
+          const opsLogChecked = isAdminUser || perms.includes('view_ops_log');
           const disablePerms = isAdminUser ? ' disabled title="У админа все права"' : '';
           return `
           <div class="store-card">
@@ -666,6 +721,7 @@
             <div class="store-meta" style="margin-top:8px;font-size:0.85rem;color:var(--text-muted);">
               <label style="display:inline-flex;align-items:center;gap:6px;margin-right:12px;"><input type="checkbox" data-user-id="${u.id}" data-perm="view_settings" ${settingsChecked ? 'checked' : ''}${disablePerms}> Настройки</label>
               <label style="display:inline-flex;align-items:center;gap:6px;"><input type="checkbox" data-user-id="${u.id}" data-perm="view_log" ${logChecked ? 'checked' : ''}${disablePerms}> Лог</label>
+              <label style="display:inline-flex;align-items:center;gap:6px;margin-left:12px;"><input type="checkbox" data-user-id="${u.id}" data-perm="view_ops_log" ${opsLogChecked ? 'checked' : ''}${disablePerms}> Операции</label>
             </div>
             <div class="store-actions">
               <button type="button" class="btn btn-danger" data-user-del="${u.id}">Удалить</button>
