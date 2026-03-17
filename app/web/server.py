@@ -207,6 +207,11 @@ class UserCreateBody(BaseModel):
     role: str = "guest"
 
 
+class AdminResetBody(BaseModel):
+    reset_token: str
+    new_password: str
+
+
 # ---------- Pydantic models ----------
 class StoreOut(BaseModel):
     id: int
@@ -334,6 +339,23 @@ def api_login(body: LoginBody, response: Response, db: Database = Depends(get_db
 @app.post("/api/auth/logout")
 def api_logout(response: Response):
     response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"ok": True}
+
+
+@app.post("/api/auth/admin-reset")
+def api_admin_reset(body: AdminResetBody, db: Database = Depends(get_db)):
+    expected = (os.getenv("ADMIN_RESET_TOKEN") or "").strip()
+    if not expected:
+        raise HTTPException(503, "ADMIN_RESET_TOKEN не задан на сервере")
+    token = (body.reset_token or "").strip()
+    if not token or not hmac.compare_digest(token, expected):
+        raise HTTPException(401, "Неверный reset token")
+    if len(body.new_password or "") < 6:
+        raise HTTPException(400, "Пароль минимум 6 символов")
+    u = db.get_user_by_username("admin")
+    if not u:
+        raise HTTPException(404, "Пользователь admin не найден")
+    db.update_user_password("admin", _hash_password(body.new_password))
     return {"ok": True}
 
 
@@ -541,6 +563,10 @@ if STATIC_DIR.exists():
         if _get_current_user(request, db):
             return RedirectResponse(url="/")
         return FileResponse(STATIC_DIR / "login.html")
+
+    @app.get("/reset")
+    def reset_page():
+        return FileResponse(STATIC_DIR / "reset.html")
 
     @app.get("/")
     def index(request: Request):

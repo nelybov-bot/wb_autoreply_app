@@ -200,6 +200,17 @@ class Database:
             self._conn.execute("DELETE FROM users WHERE id=?", (int(user_id),))
             self._conn.commit()
 
+    def update_user_password(self, username: str, password_hash: str) -> None:
+        u = (username or "").strip()
+        if not u:
+            raise ValueError("username пустой")
+        with _DB_LOCK:
+            self._conn.execute(
+                "UPDATE users SET password_hash=? WHERE username=?",
+                (password_hash, u),
+            )
+            self._conn.commit()
+
     def _seed_prompts_if_empty(self) -> None:
         with _DB_LOCK:
             cur = self._conn.execute("SELECT COUNT(*) AS n FROM prompts")
