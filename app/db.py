@@ -327,7 +327,7 @@ class Database:
         safe_offset = max(0, int(offset))
         with _DB_LOCK:
             rows = self._conn.execute(
-                f\"SELECT id, ts, actor, action, item_type, store_id, result, meta_json FROM audit_events {w} ORDER BY id DESC LIMIT ? OFFSET ?\",
+                f"SELECT id, ts, actor, action, item_type, store_id, result, meta_json FROM audit_events {w} ORDER BY id DESC LIMIT ? OFFSET ?",
                 params + [safe_limit, safe_offset],
             ).fetchall()
             out = []
