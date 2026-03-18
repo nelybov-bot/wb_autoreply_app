@@ -662,6 +662,11 @@ async def send_mass(
             failed += 1
             _put_progress(progress_queue, idx + 1, total)
             continue
+        # Защита от повторной отправки (на всякий случай, особенно для Ozon).
+        if getattr(row, "status", "") == "sent":
+            skipped += 1
+            _put_progress(progress_queue, idx + 1, total)
+            continue
         text = (row.generated_text or "").strip()
         if not text:
             skipped += 1

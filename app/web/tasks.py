@@ -18,6 +18,7 @@ log = logging.getLogger("web.tasks")
 # task_id -> { "status": "running"|"done"|"error", "progress": [current, total], "result": Any, "error": str }
 _tasks: dict[str, dict[str, Any]] = {}
 _tasks_lock = asyncio.Lock()
+_handles: dict[str, asyncio.Task] = {}
 
 
 def _make_id() -> str:
@@ -73,7 +74,7 @@ async def run_load_new(db: Database, store_ids: Optional[list[int]]) -> str:
             except Exception:
                 pass
 
-    asyncio.create_task(_run())
+    _handles[task_id] = asyncio.create_task(_run())
     return task_id
 
 
@@ -123,7 +124,7 @@ async def run_generate(db: Database, item_ids: list[int], openai_key: str) -> st
             except Exception:
                 pass
 
-    asyncio.create_task(_run())
+    _handles[task_id] = asyncio.create_task(_run())
     return task_id
 
 
@@ -178,7 +179,7 @@ async def run_send(db: Database, item_ids: list[int]) -> str:
             except Exception:
                 pass
 
-    asyncio.create_task(_run())
+    _handles[task_id] = asyncio.create_task(_run())
     return task_id
 
 
@@ -186,3 +187,18 @@ async def get_task(task_id: str) -> Optional[dict[str, Any]]:
     """Возвращает состояние задачи или None."""
     async with _tasks_lock:
         return _tasks.get(task_id)
+
+
+async def cancel_task(task_id: str) -> bool:
+    """Отменяет задачу, если она существует."""
+    async with _tasks_lock:
+        state = _tasks.get(task_id)
+        if state is None:
+            return False
+        if state.get("status") == "running":
+            state["status"] = "cancelled"
+            state["error"] = "Остановлено пользователем"
+    t = _handles.get(task_id)
+    if t and not t.done():
+        t.cancel()
+    return True

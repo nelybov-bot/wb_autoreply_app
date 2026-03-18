@@ -283,7 +283,18 @@
     const wrap = document.getElementById(progressWrapId);
     const fill = document.getElementById(fillId);
     const textEl = document.getElementById(textId);
+    const stopBtn = wrap.querySelector('.btn-stop');
     wrap.classList.add('visible');
+    if (stopBtn) {
+      stopBtn.onclick = async () => {
+        try {
+          await api('/tasks/' + taskId + '/cancel', { method: 'POST', body: JSON.stringify({}) });
+          toast('Остановлено');
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      };
+    }
     let interval = setInterval(async () => {
       try {
         const state = await api('/tasks/' + taskId);
@@ -296,10 +307,10 @@
           clearInterval(interval);
           wrap.classList.remove('visible');
           if (onDone) onDone(state.result);
-        } else if (state.status === 'error') {
+        } else if (state.status === 'error' || state.status === 'cancelled') {
           clearInterval(interval);
           wrap.classList.remove('visible');
-          toast(state.error || 'Ошибка', 'error');
+          toast(state.error || (state.status === 'cancelled' ? 'Остановлено' : 'Ошибка'), state.status === 'cancelled' ? 'success' : 'error');
         }
       } catch (_) {}
     }, 500);

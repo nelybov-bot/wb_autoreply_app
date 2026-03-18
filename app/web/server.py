@@ -714,6 +714,14 @@ async def api_get_task(task_id: str, _: UserRow = Depends(require_user)):
     return state
 
 
+@app.post("/api/tasks/{task_id}/cancel")
+async def api_cancel_task(task_id: str, _: UserRow = Depends(require_user)):
+    ok = await web_tasks.cancel_task(task_id)
+    if not ok:
+        raise HTTPException(404, "Задача не найдена")
+    return {"ok": True}
+
+
 # ---------- API: stats ----------
 @app.get("/api/stats")
 def api_stats(db: Database = Depends(get_db), _: UserRow = Depends(require_user)):
