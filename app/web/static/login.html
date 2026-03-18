@@ -9,6 +9,8 @@
   <style>
     /* Страница входа — не зависит от --card, своя вёрстка */
     body.login-page { display: block; overflow: auto; }
+    body.login-page::after { opacity: 0.42; animation: none; }
+    body.login-page .bg-noise { opacity: 0.02; }
     .login-page .login-wrap {
       min-height: 100vh;
       display: flex;
@@ -20,19 +22,45 @@
     }
     .login-card {
       width: min(420px, 100%);
-      background: #fff;
-      border: 1px solid #e2e8f0;
+      background: rgba(255,255,255,0.78);
+      border: 1px solid rgba(226,232,240,0.9);
       border-radius: 16px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.10);
       padding: 28px;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
     }
     .login-title { margin-bottom: 8px; }
-    .login-title h1 { margin: 0; font-size: 1.4rem; color: #0f172a; }
+    .login-title h1 { margin: 0; font-size: 1.55rem; color: #0f172a; font-family: var(--font-heading, system-ui); letter-spacing: -0.02em; }
     .login-sub {
       color: #64748b;
       font-size: 0.9rem;
       margin: 0 0 20px;
       line-height: 1.4;
+    }
+    .login-meta {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 0 0 18px;
+      color: #64748b;
+      font-size: 0.82rem;
+    }
+    .login-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(37, 99, 235, 0.08);
+      border: 1px solid rgba(37, 99, 235, 0.18);
+    }
+    .login-chip .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: #2563eb;
+      display: inline-block;
     }
     .login-card .form-group {
       margin-bottom: 16px;
@@ -62,12 +90,20 @@
     .login-actions {
       display: flex;
       gap: 12px;
-      justify-content: flex-end;
+      justify-content: space-between;
       align-items: center;
       margin-top: 20px;
       flex-wrap: wrap;
     }
     .login-actions .btn { min-width: 100px; }
+    .login-actions .btn-secondary {
+      background: rgba(15, 23, 42, 0.06);
+      color: #0f172a;
+      border: 1px solid rgba(15, 23, 42, 0.10);
+      box-shadow: none;
+      text-decoration: none;
+    }
+    .login-actions .btn-secondary:hover { filter: brightness(0.98); }
     .login-links {
       margin-top: 16px;
       font-size: 0.85rem;
@@ -91,6 +127,10 @@
         <h1>WB <span class="title-gradient">Автоответчик</span></h1>
       </div>
       <p class="login-sub">Вход обязателен. Без логина и пароля интерфейс недоступен.</p>
+      <div class="login-meta">
+        <div class="login-chip"><span class="dot"></span><span>Сессия защищена</span></div>
+        <div class="login-chip" style="background: rgba(15, 23, 42, 0.04); border-color: rgba(15, 23, 42, 0.10);"><span class="dot" style="background:#0f172a;"></span><span>Только для вашей команды</span></div>
+      </div>
 
       <div class="form-group">
         <label for="login-username">Логин</label>
@@ -101,12 +141,11 @@
         <input type="password" id="login-password" autocomplete="current-password" placeholder="пароль">
       </div>
       <div class="login-actions">
+        <a class="btn btn-secondary" href="/reset">Сброс admin</a>
         <button type="button" class="btn btn-primary" id="btn-login">Войти</button>
       </div>
       <div class="login-err" id="login-err"></div>
-      <div class="login-links">
-        <a href="/reset">Сбросить пароль admin</a>
-      </div>
+      <div class="login-links">Если забыли пароль — используйте «Сброс admin» (требуется токен).</div>
     </div>
   </div>
 

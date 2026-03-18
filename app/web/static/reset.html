@@ -8,6 +8,8 @@
   <link rel="stylesheet" href="/static/styles.css">
   <style>
     body.reset-page { display: block; overflow: auto; }
+    body.reset-page::after { opacity: 0.42; animation: none; }
+    body.reset-page .bg-noise { opacity: 0.02; }
     .reset-page .reset-wrap {
       min-height: 100vh;
       display: flex;
@@ -19,14 +21,16 @@
     }
     .reset-card {
       width: min(440px, 100%);
-      background: #fff;
-      border: 1px solid #e2e8f0;
+      background: rgba(255,255,255,0.78);
+      border: 1px solid rgba(226,232,240,0.9);
       border-radius: 16px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.10);
       padding: 28px;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
     }
     .reset-title { margin-bottom: 8px; }
-    .reset-title h1 { margin: 0; font-size: 1.4rem; color: #0f172a; }
+    .reset-title h1 { margin: 0; font-size: 1.55rem; color: #0f172a; font-family: var(--font-heading, system-ui); letter-spacing: -0.02em; }
     .reset-sub {
       color: #64748b;
       font-size: 0.9rem;
@@ -59,12 +63,19 @@
     .reset-actions {
       display: flex;
       gap: 12px;
-      justify-content: flex-end;
+      justify-content: space-between;
       align-items: center;
       margin-top: 20px;
       flex-wrap: wrap;
     }
     .reset-actions .btn { min-width: 100px; }
+    .reset-actions .btn-secondary {
+      background: rgba(15, 23, 42, 0.06);
+      color: #0f172a;
+      border: 1px solid rgba(15, 23, 42, 0.10);
+      box-shadow: none;
+      text-decoration: none;
+    }
     .reset-err { color: #b91c1c; font-size: 0.9rem; margin-top: 12px; display: none; }
     .reset-ok { color: #065f46; font-size: 0.9rem; margin-top: 12px; display: none; }
     .reset-links { margin-top: 16px; font-size: 0.85rem; }
@@ -79,10 +90,10 @@
       <div class="reset-title">
         <h1>Сброс пароля <span class="title-gradient">admin</span></h1>
       </div>
-      <p class="reset-sub">Задай токен в Render: <b>ADMIN_RESET_TOKEN</b>. Введи его и новый пароль.</p>
+      <p class="reset-sub">Нужен токен из Render: <b>ADMIN_RESET_TOKEN</b>. Введите его и новый пароль для admin.</p>
 
       <div class="form-group">
-        <label for="reset-token">Reset token</label>
+        <label for="reset-token">Токен сброса</label>
         <input type="password" id="reset-token" autocomplete="off" placeholder="значение ADMIN_RESET_TOKEN">
       </div>
       <div class="form-group">
