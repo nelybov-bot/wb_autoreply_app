@@ -154,12 +154,13 @@ async def run_generate(db: Database, item_ids: list[int], openai_key: str) -> st
 async def run_send(db: Database, item_ids: list[int]) -> str:
     """Запускает send_mass_all в фоне, возвращает task_id."""
     task_id = _make_id()
+    safe_total = max(len(item_ids), 1)
     async with _tasks_lock:
         _tasks[task_id] = {
             "status": "running",
             "action": "send",
             "detail": "Отправка…",
-            "progress": [0, 1],
+            "progress": [0, safe_total],
             "result": None,
             "error": None,
         }
@@ -180,7 +181,7 @@ async def run_send(db: Database, item_ids: list[int]) -> str:
             async with _tasks_lock:
                 _tasks[task_id]["status"] = "done"
                 _tasks[task_id]["result"] = {"sent_ok": sent_ok, "skipped": skipped, "failed": failed}
-                _tasks[task_id]["progress"] = [1, 1]
+                _tasks[task_id]["progress"] = [safe_total, safe_total]
                 _tasks[task_id]["detail"] = "Готово"
             try:
                 db.add_audit_event(

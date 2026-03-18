@@ -70,6 +70,45 @@
     if (panelLog) panelLog.style.display = (canLog || canOpsLog) ? '' : 'none';
   }
 
+  function _activeTaskKey(panelPrefix) {
+    return 'activeTask_' + panelPrefix;
+  }
+
+  function setActiveTask(panelPrefix, taskId) {
+    try {
+      if (taskId) localStorage.setItem(_activeTaskKey(panelPrefix), String(taskId));
+      else localStorage.removeItem(_activeTaskKey(panelPrefix));
+    } catch (_) {}
+  }
+
+  function getActiveTask(panelPrefix) {
+    try { return localStorage.getItem(_activeTaskKey(panelPrefix)) || ''; } catch (_) { return ''; }
+  }
+
+  async function resumePanelTask(panelPrefix) {
+    const taskId = getActiveTask(panelPrefix);
+    if (!taskId) return;
+    try {
+      const state = await api('/tasks/' + taskId);
+      if (!state || !state.status) {
+        setActiveTask(panelPrefix, '');
+        return;
+      }
+      if (state.status === 'running') {
+        pollTask(taskId, 'progress-' + panelPrefix, 'progress-' + panelPrefix + '-fill', 'progress-' + panelPrefix + '-text', () => {
+          // onDone already clears via pollTask completion path, but keep safe
+          setActiveTask(panelPrefix, '');
+          if (panelPrefix === 'reviews') loadReviews();
+          else if (panelPrefix === 'questions') loadQuestions();
+        }, panelPrefix);
+      } else {
+        setActiveTask(panelPrefix, '');
+      }
+    } catch (_) {
+      // если сеть/сервер недоступны — не трогаем ключ, попробуем при следующем заходе
+    }
+  }
+
   // ---- Tabs ----
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -81,8 +120,8 @@
       if (panel) panel.classList.add('active');
       if (id === 'summary') loadStats();
       if (id === 'stores') loadStores();
-      if (id === 'reviews') loadReviews();
-      if (id === 'questions') loadQuestions();
+      if (id === 'reviews') { loadReviews(); resumePanelTask('reviews'); }
+      if (id === 'questions') { loadQuestions(); resumePanelTask('questions'); }
       if (id === 'settings') loadSettings();
       if (id === 'log') loadLog();
     });
@@ -282,7 +321,7 @@
     }
   }
 
-  function pollTask(taskId, progressWrapId, fillId, textId, onDone) {
+  function pollTask(taskId, progressWrapId, fillId, textId, onDone, panelPrefix = '') {
     const wrap = document.getElementById(progressWrapId);
     const fill = document.getElementById(fillId);
     const textEl = document.getElementById(textId);
@@ -304,6 +343,7 @@
         }
       };
     }
+    if (panelPrefix) setActiveTask(panelPrefix, taskId);
     wrap._interval = setInterval(async () => {
       try {
         const state = await api('/tasks/' + taskId);
@@ -319,12 +359,14 @@
           wrap._interval = null;
           wrap.classList.remove('visible');
           if (stopBtn) stopBtn.disabled = true;
+          if (panelPrefix) setActiveTask(panelPrefix, '');
           if (onDone) onDone(state.result);
         } else if (state.status === 'error' || state.status === 'cancelled') {
           clearInterval(wrap._interval);
           wrap._interval = null;
           wrap.classList.remove('visible');
           if (stopBtn) stopBtn.disabled = true;
+          if (panelPrefix) setActiveTask(panelPrefix, '');
           toast(state.error || (state.status === 'cancelled' ? 'Остановлено' : 'Ошибка'), state.status === 'cancelled' ? 'success' : 'error');
         }
       } catch (_) {}
@@ -448,7 +490,7 @@
         toast('Загружено записей: ' + (result ?? 0));
         loadReviews();
         loadQuestions();
-      });
+      }, panelPrefix);
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -472,7 +514,7 @@
         toast('Сгенерировано: ' + (r.ok ?? 0) + ', ошибок: ' + (r.failed ?? 0));
         if (panelPrefix === 'reviews') loadReviews();
         else loadQuestions();
-      });
+      }, panelPrefix);
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -540,7 +582,7 @@
         if (panelPrefix === 'reviews') loadReviews();
         else loadQuestions();
         loadStats();
-      });
+      }, panelPrefix);
     } catch (err) {
       toast(err.message, 'error');
     }
