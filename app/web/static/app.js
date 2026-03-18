@@ -500,6 +500,24 @@
     return list.map(i => i.id);
   }
 
+  function getItemsList(prefix) {
+    return prefix === 'reviews' ? reviews : questions;
+  }
+
+  function filterIdsForGenerate(prefix, ids, mode) {
+    const list = getItemsList(prefix);
+    const idSet = new Set(ids);
+    const selected = list.filter(it => idSet.has(it.id));
+    if (mode === 'all') {
+      return { ids: selected.map(it => it.id), willOverwrite: selected.filter(it => (it.generated_text || '').trim()).length };
+    }
+    // default: only new without answer
+    const filtered = selected
+      .filter(it => String(it.status || '') === 'new')
+      .filter(it => !String(it.generated_text || '').trim());
+    return { ids: filtered.map(it => it.id), willOverwrite: 0 };
+  }
+
   document.getElementById('check-all-reviews').addEventListener('change', function () {
     document.querySelectorAll('#reviews-tbody .item-check').forEach(cb => { cb.checked = this.checked; });
   });
@@ -531,8 +549,18 @@
       toast('Выберите строки или загрузите список', 'error');
       return;
     }
+    const modeEl = document.getElementById(panelPrefix + '-generate-mode');
+    const mode = (modeEl && modeEl.value) ? String(modeEl.value) : 'new_only';
+    const filtered = filterIdsForGenerate(panelPrefix, ids, mode);
+    if (!filtered.ids.length) {
+      toast('Нет подходящих для генерации (нужны «Новые» и без ответа)', 'error');
+      return;
+    }
+    if (mode === 'all' && filtered.willOverwrite) {
+      if (!confirm(`Перегенерировать и перезаписать ответы для ${filtered.willOverwrite} шт.?`)) return;
+    }
     try {
-      const res = await api('/generate', { method: 'POST', body: JSON.stringify({ item_ids: ids }) });
+      const res = await api('/generate', { method: 'POST', body: JSON.stringify({ item_ids: filtered.ids }) });
       pollTask(res.task_id, 'progress-' + panelPrefix, 'progress-' + panelPrefix + '-fill', 'progress-' + panelPrefix + '-text', (result) => {
         const r = result || {};
         toast('Сгенерировано: ' + (r.ok ?? 0) + ', ошибок: ' + (r.failed ?? 0));
