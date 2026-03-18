@@ -999,6 +999,28 @@ body.ui-compact .chart-section { padding: 22px; padding-left: 26px; }
   text-align: right;
 }
 
+/* На более узких экранах фиксированные ширины ломают карточку */
+@media (max-width: 900px) {
+  .chart-row {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .chart-row .name {
+    flex: 1 1 100%;
+    white-space: normal;
+  }
+  .chart-row .bar-wrap {
+    min-width: 0;
+    flex: 1 1 auto;
+    width: 100%;
+  }
+  .chart-row .count {
+    flex: 0 0 auto;
+    margin-left: auto;
+    padding-top: 6px;
+  }
+}
+
 /* ---------- PWA / iPhone: «Добавить на экран «Домой»» ---------- */
 @supports (padding: env(safe-area-inset-top)) {
   body {
