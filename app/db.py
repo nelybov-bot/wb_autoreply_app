@@ -668,6 +668,75 @@ class Database:
                 for r in rows
             ]
 
+    def find_item_id(self, store_id: int, item_type: str, external_id: str) -> Optional[int]:
+        with _DB_LOCK:
+            row = self._conn.execute(
+                "SELECT id FROM items WHERE store_id=? AND item_type=? AND external_id=?",
+                (int(store_id), str(item_type), str(external_id)),
+            ).fetchone()
+            return int(row["id"]) if row else None
+
+    def set_status(self, item_id: int, status: str) -> None:
+        with _DB_LOCK:
+            self._conn.execute("UPDATE items SET status=? WHERE id=?", (str(status), int(item_id)))
+            self._conn.commit()
+
+    def list_items_filtered(
+        self,
+        *,
+        item_type: str,
+        store_id: Optional[int] = None,
+        statuses: Optional[list[str]] = None,
+        has_answer: Optional[bool] = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[ItemRow]:
+        where = ["item_type=?"]
+        params: list = [str(item_type)]
+        if store_id is not None:
+            where.append("store_id=?")
+            params.append(int(store_id))
+        if statuses:
+            placeholders = ",".join("?" * len(statuses))
+            where.append(f"status IN ({placeholders})")
+            params.extend([str(s) for s in statuses])
+        if has_answer is True:
+            where.append("COALESCE(generated_text,'') <> ''")
+        elif has_answer is False:
+            where.append("COALESCE(generated_text,'') = ''")
+        w = " AND ".join(where)
+        safe_limit = max(1, min(int(limit), 500))
+        safe_offset = max(0, int(offset))
+        with _DB_LOCK:
+            rows = self._conn.execute(
+                f"""SELECT id, store_id, external_id, item_type, date, rating, text, author, product_title,
+                          status, COALESCE(generated_text,'') AS generated_text, was_viewed,
+                          COALESCE(extra_json,'') AS extra_json
+                   FROM items
+                   WHERE {w}
+                   ORDER BY date DESC
+                   LIMIT ? OFFSET ?""",
+                params + [safe_limit, safe_offset],
+            ).fetchall()
+            return [
+                ItemRow(
+                    id=int(r["id"]),
+                    store_id=int(r["store_id"]),
+                    external_id=str(r["external_id"]),
+                    item_type=str(r["item_type"]),
+                    date=str(r["date"]),
+                    rating=(int(r["rating"]) if r["rating"] is not None else None),
+                    text=str(r["text"] or ""),
+                    author=str(r["author"] or ""),
+                    product_title=str(r["product_title"] or ""),
+                    status=str(r["status"]),
+                    generated_text=str(r["generated_text"] or ""),
+                    was_viewed=bool(r["was_viewed"]),
+                    extra_json=str(r["extra_json"] or ""),
+                )
+                for r in rows
+            ]
+
     def get_item_by_id(self, item_id: int) -> Optional[ItemRow]:
         with _DB_LOCK:
             r = self._conn.execute(

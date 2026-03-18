@@ -124,6 +124,19 @@
         <select id="reviews-store">
           <option value="">Все магазины</option>
         </select>
+        <select id="reviews-status">
+          <option value="new,generated">Новые + Сгенерированные</option>
+          <option value="new">Новые</option>
+          <option value="generated">Сгенерированные</option>
+          <option value="sent">Отправленные</option>
+          <option value="ignored">Игнор</option>
+          <option value="all">Все статусы</option>
+        </select>
+        <select id="reviews-has-answer">
+          <option value="">Ответ: все</option>
+          <option value="yes">Ответ: есть</option>
+          <option value="no">Ответ: нет</option>
+        </select>
         <button type="button" class="btn btn-primary" id="btn-load-reviews">Загрузить новые</button>
         <button type="button" class="btn btn-secondary" id="btn-generate-reviews">Сгенерировать выбранные</button>
         <button type="button" class="btn btn-secondary" id="btn-send-reviews">Отправить выбранные</button>
@@ -165,6 +178,9 @@
         <p>Нет отзывов со статусом «Новый» или «Сгенерирован».</p>
         <button type="button" class="btn btn-primary" id="btn-load-reviews-2">Загрузить новые</button>
       </div>
+      <div class="toolbar" style="margin-top: 12px; justify-content:center;">
+        <button type="button" class="btn btn-secondary" id="btn-more-reviews">Показать ещё</button>
+      </div>
     </section>
 
     <!-- Вопросы -->
@@ -172,6 +188,19 @@
       <div class="toolbar">
         <select id="questions-store">
           <option value="">Все магазины</option>
+        </select>
+        <select id="questions-status">
+          <option value="new,generated">Новые + Сгенерированные</option>
+          <option value="new">Новые</option>
+          <option value="generated">Сгенерированные</option>
+          <option value="sent">Отправленные</option>
+          <option value="ignored">Игнор</option>
+          <option value="all">Все статусы</option>
+        </select>
+        <select id="questions-has-answer">
+          <option value="">Ответ: все</option>
+          <option value="yes">Ответ: есть</option>
+          <option value="no">Ответ: нет</option>
         </select>
         <button type="button" class="btn btn-primary" id="btn-load-questions">Загрузить новые</button>
         <button type="button" class="btn btn-secondary" id="btn-generate-questions">Сгенерировать выбранные</button>
@@ -200,6 +229,9 @@
       <div id="questions-empty" class="empty-state" style="display: none;">
         <p>Нет вопросов со статусом «Новый» или «Сгенерирован».</p>
         <button type="button" class="btn btn-primary" id="btn-load-questions-2">Загрузить новые</button>
+      </div>
+      <div class="toolbar" style="margin-top: 12px; justify-content:center;">
+        <button type="button" class="btn btn-secondary" id="btn-more-questions">Показать ещё</button>
       </div>
     </section>
 

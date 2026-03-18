@@ -76,6 +76,12 @@ async def load_new_items(
             log.warning("Ozon store id=%s без client_id, пропуск загрузки", store_id)
             _put_progress(progress_queue, 1, 1)
             return 0
+        # Перепроверка обработанных (чтобы исключить дубли): если на Ozon уже PROCESSED,
+        # то локально помечаем как sent и не показываем как "новое".
+        try:
+            await _ozon_recheck_processed(db, store)
+        except Exception as e:
+            log.warning("Ozon recheck processed failed store_id=%s: %s", store_id, e)
         n = await _load_new_ozon(db, store)
     else:
         log.warning("Неизвестный маркетплейс %s для store_id=%s", store.marketplace, store_id)
@@ -457,6 +463,48 @@ async def _load_new_ozon(db: Database, store: Store) -> int:
             log.warning("Ozon API %s: %s", e.status, e.body)
             return 0
         raise
+
+
+async def _ozon_recheck_processed(db: Database, store: Store) -> int:
+    """
+    Синхронизация обработанных отзывов на Ozon:
+    - тянем review/list со status=PROCESSED (постранично)
+    - если такой review есть у нас со статусом new/generated, переводим в sent (чтобы не отвечать повторно)
+    Возвращает количество обновлённых локальных записей.
+    """
+    store_id = store.id
+    assert (store.client_id or "").strip()
+    ozon = OzonClient(store.client_id, store.api_key)
+    updated = 0
+    max_pages = 20
+    max_items = 2000
+    last_id = ""
+    page = 0
+    seen = 0
+    while page < max_pages and seen < max_items:
+        page += 1
+        f = await ozon.list_feedbacks(limit=100, last_id=last_id, status="PROCESSED")
+        f_result = (f or {}).get("result") or (f or {})
+        reviews = f_result.get("reviews") or f_result.get("items") or f_result.get("list") or []
+        if not reviews:
+            break
+        for it in reviews:
+            ext_id = str(it.get("id") or it.get("review_id") or it.get("review_id_str") or "")
+            if not ext_id:
+                continue
+            item_id = db.find_item_id(store_id, "review", ext_id)
+            if not item_id:
+                continue
+            row = db.get_item_by_id(item_id)
+            if row and row.status in ("new", "generated"):
+                db.set_sent(item_id, _iso_now())
+                updated += 1
+        seen += len(reviews)
+        last_id = (f_result.get("last_id") or (f or {}).get("last_id") or "").strip()
+        has_next = f_result.get("has_next") if f_result.get("has_next") is not None else (f or {}).get("has_next")
+        if not has_next or not last_id:
+            break
+    return updated
 
 
 async def load_new_all(

@@ -503,13 +503,31 @@ def api_delete_store(store_id: int, db: Database = Depends(get_db), _: UserRow =
 def api_list_items(
     item_type: str,  # review | question
     store_id: Optional[int] = None,
+    status: Optional[str] = None,  # comma-separated or 'all'
+    has_answer: Optional[str] = None,  # 'yes'|'no'|None
+    limit: int = 200,
+    offset: int = 0,
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):
-    if store_id is not None:
-        rows = db.list_items_for_ui(store_id, item_type)
-    else:
-        rows = db.list_items_for_ui_all(item_type)
+    statuses: Optional[list[str]] = None
+    st = (status or "").strip().lower()
+    if st and st != "all":
+        statuses = [s.strip() for s in st.split(",") if s.strip()]
+    ha = (has_answer or "").strip().lower()
+    ha_val: Optional[bool] = None
+    if ha == "yes":
+        ha_val = True
+    elif ha == "no":
+        ha_val = False
+    rows = db.list_items_filtered(
+        item_type=item_type,
+        store_id=store_id,
+        statuses=statuses,
+        has_answer=ha_val,
+        limit=limit,
+        offset=offset,
+    )
     return [_item_to_out(r) for r in rows]
 
 

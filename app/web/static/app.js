@@ -261,6 +261,9 @@
   // ---- Items (reviews / questions) ----
   let reviews = [];
   let questions = [];
+  let reviewsOffset = 0;
+  let questionsOffset = 0;
+  const PAGE_SIZE = 200;
 
   function escapeHtml(s) {
     if (s == null) return '';
@@ -316,27 +319,47 @@
     }, 500);
   }
 
-  async function loadReviews() {
+  async function loadReviews(reset = true) {
     const storeId = document.getElementById('reviews-store').value || null;
-    const q = storeId ? '?item_type=review&store_id=' + storeId : '?item_type=review';
+    const status = (document.getElementById('reviews-status')?.value || 'new,generated');
+    const hasAnswer = (document.getElementById('reviews-has-answer')?.value || '');
+    if (reset) { reviewsOffset = 0; reviews = []; }
+    const q = (storeId ? ('?item_type=review&store_id=' + storeId) : '?item_type=review')
+      + (status ? '&status=' + encodeURIComponent(status) : '')
+      + (hasAnswer ? '&has_answer=' + encodeURIComponent(hasAnswer) : '')
+      + ('&limit=' + PAGE_SIZE + '&offset=' + reviewsOffset);
     try {
-      reviews = await api('/items' + q);
+      const page = await api('/items' + q);
+      reviews = reviews.concat(page || []);
       renderItems('reviews', reviews, true);
       document.getElementById('reviews-empty').style.display = reviews.length ? 'none' : 'block';
       document.querySelector('#panel-reviews .items-table-wrap').style.display = reviews.length ? 'block' : 'none';
+      const moreBtn = document.getElementById('btn-more-reviews');
+      if (moreBtn) moreBtn.style.display = (page && page.length === PAGE_SIZE) ? 'inline-flex' : 'none';
+      reviewsOffset += (page ? page.length : 0);
     } catch (err) {
       toast(err.message, 'error');
     }
   }
 
-  async function loadQuestions() {
+  async function loadQuestions(reset = true) {
     const storeId = document.getElementById('questions-store').value || null;
-    const q = storeId ? '?item_type=question&store_id=' + storeId : '?item_type=question';
+    const status = (document.getElementById('questions-status')?.value || 'new,generated');
+    const hasAnswer = (document.getElementById('questions-has-answer')?.value || '');
+    if (reset) { questionsOffset = 0; questions = []; }
+    const q = (storeId ? ('?item_type=question&store_id=' + storeId) : '?item_type=question')
+      + (status ? '&status=' + encodeURIComponent(status) : '')
+      + (hasAnswer ? '&has_answer=' + encodeURIComponent(hasAnswer) : '')
+      + ('&limit=' + PAGE_SIZE + '&offset=' + questionsOffset);
     try {
-      questions = await api('/items' + q);
+      const page = await api('/items' + q);
+      questions = questions.concat(page || []);
       renderItems('questions', questions, false);
       document.getElementById('questions-empty').style.display = questions.length ? 'none' : 'block';
       document.querySelector('#panel-questions .items-table-wrap').style.display = questions.length ? 'block' : 'none';
+      const moreBtn = document.getElementById('btn-more-questions');
+      if (moreBtn) moreBtn.style.display = (page && page.length === PAGE_SIZE) ? 'inline-flex' : 'none';
+      questionsOffset += (page ? page.length : 0);
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -514,8 +537,14 @@
   document.getElementById('btn-send-reviews').addEventListener('click', () => runSend('reviews'));
   document.getElementById('btn-send-questions').addEventListener('click', () => runSend('questions'));
 
-  document.getElementById('reviews-store').addEventListener('change', loadReviews);
-  document.getElementById('questions-store').addEventListener('change', loadQuestions);
+  document.getElementById('reviews-store').addEventListener('change', () => loadReviews(true));
+  document.getElementById('questions-store').addEventListener('change', () => loadQuestions(true));
+  document.getElementById('reviews-status').addEventListener('change', () => loadReviews(true));
+  document.getElementById('reviews-has-answer').addEventListener('change', () => loadReviews(true));
+  document.getElementById('questions-status').addEventListener('change', () => loadQuestions(true));
+  document.getElementById('questions-has-answer').addEventListener('change', () => loadQuestions(true));
+  document.getElementById('btn-more-reviews').addEventListener('click', () => loadReviews(false));
+  document.getElementById('btn-more-questions').addEventListener('click', () => loadQuestions(false));
 
   // ---- Settings ----
   async function loadSettings() {
