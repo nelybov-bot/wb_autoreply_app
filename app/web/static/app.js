@@ -287,8 +287,14 @@
     const fill = document.getElementById(fillId);
     const textEl = document.getElementById(textId);
     const stopBtn = wrap.querySelector('.btn-stop');
+    // Не даём нескольким таймерам "драться" за один прогресс-бар
+    if (wrap._interval) {
+      clearInterval(wrap._interval);
+      wrap._interval = null;
+    }
     wrap.classList.add('visible');
     if (stopBtn) {
+      stopBtn.disabled = false;
       stopBtn.onclick = async () => {
         try {
           await api('/tasks/' + taskId + '/cancel', { method: 'POST', body: JSON.stringify({}) });
@@ -298,21 +304,27 @@
         }
       };
     }
-    let interval = setInterval(async () => {
+    wrap._interval = setInterval(async () => {
       try {
         const state = await api('/tasks/' + taskId);
         const [cur, total] = state.progress || [0, 1];
         const pctRaw = total ? Math.round((cur / total) * 100) : 0;
         const pct = Math.max(0, Math.min(100, pctRaw));
         fill.style.width = pct + '%';
-        textEl.textContent = state.status === 'running' ? `Выполняется… ${cur}/${total}` : state.status === 'done' ? 'Готово' : state.status;
+        const detail = (state.detail || '').trim();
+        const base = state.status === 'running' ? 'Выполняется' : state.status === 'done' ? 'Готово' : state.status;
+        textEl.textContent = `${base} — ${pct}% (${cur}/${total})${detail ? ' · ' + detail : ''}`;
         if (state.status === 'done') {
-          clearInterval(interval);
+          clearInterval(wrap._interval);
+          wrap._interval = null;
           wrap.classList.remove('visible');
+          if (stopBtn) stopBtn.disabled = true;
           if (onDone) onDone(state.result);
         } else if (state.status === 'error' || state.status === 'cancelled') {
-          clearInterval(interval);
+          clearInterval(wrap._interval);
+          wrap._interval = null;
           wrap.classList.remove('visible');
+          if (stopBtn) stopBtn.disabled = true;
           toast(state.error || (state.status === 'cancelled' ? 'Остановлено' : 'Ошибка'), state.status === 'cancelled' ? 'success' : 'error');
         }
       } catch (_) {}

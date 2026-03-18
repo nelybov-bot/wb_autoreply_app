@@ -15,7 +15,7 @@ from app.core.net import UnauthorizedStoreError
 
 log = logging.getLogger("web.tasks")
 
-# task_id -> { "status": "running"|"done"|"error", "progress": [current, total], "result": Any, "error": str }
+# task_id -> { "status": "running"|"done"|"error"|"cancelled", "action": str, "detail": str, "progress": [current, total], "result": Any, "error": str }
 _tasks: dict[str, dict[str, Any]] = {}
 _tasks_lock = asyncio.Lock()
 _handles: dict[str, asyncio.Task] = {}
@@ -26,13 +26,20 @@ def _make_id() -> str:
 
 
 async def run_load_new(db: Database, store_ids: Optional[list[int]]) -> str:
-    """Запускает load_new_all в фоне, возвращает task_id."""
+    """Запускает загрузку новых в фоне, возвращает task_id."""
     stores = db.list_stores()
     if store_ids is not None:
         stores = [s for s in stores if s.id in store_ids]
     task_id = _make_id()
     async with _tasks_lock:
-        _tasks[task_id] = {"status": "running", "progress": [0, max(len(stores), 1)], "result": None, "error": None}
+        _tasks[task_id] = {
+            "status": "running",
+            "action": "load_new",
+            "detail": "Подготовка…",
+            "progress": [0, max(len(stores), 1)],
+            "result": None,
+            "error": None,
+        }
 
     async def _set_progress(cur: int, tot: int) -> None:
         safe_tot = max(int(tot or 0), 1)
@@ -47,13 +54,21 @@ async def run_load_new(db: Database, store_ids: Optional[list[int]]) -> str:
     async def _run() -> None:
         try:
             total = len(stores)
-            n = await load_new_all(db, stores, progress_queue=None, progress_cb=_progress)
+            added_total = 0
+            for i, s in enumerate(stores):
+                async with _tasks_lock:
+                    if task_id in _tasks:
+                        _tasks[task_id]["detail"] = f"Магазин: {s.name} ({s.marketplace})"
+                n = await load_new_all(db, [s], progress_queue=None, progress_cb=None)
+                added_total += int(n or 0)
+                _progress(i + 1, total)
             async with _tasks_lock:
                 _tasks[task_id]["status"] = "done"
-                _tasks[task_id]["result"] = n
+                _tasks[task_id]["result"] = added_total
                 _tasks[task_id]["progress"] = [total, total]
+                _tasks[task_id]["detail"] = "Готово"
             try:
-                db.add_audit_event(actor="system", action="load_new", item_type="", result="ok", meta={"added": n, "stores": total})
+                db.add_audit_event(actor="system", action="load_new", item_type="", result="ok", meta={"added": added_total, "stores": total})
             except Exception:
                 pass
         except UnauthorizedStoreError as e:
@@ -84,7 +99,14 @@ async def run_generate(db: Database, item_ids: list[int], openai_key: str) -> st
         raise ValueError("OpenAI ключ не задан")
     task_id = _make_id()
     async with _tasks_lock:
-        _tasks[task_id] = {"status": "running", "progress": [0, len(item_ids)], "result": None, "error": None}
+        _tasks[task_id] = {
+            "status": "running",
+            "action": "generate",
+            "detail": "Генерация…",
+            "progress": [0, len(item_ids)],
+            "result": None,
+            "error": None,
+        }
 
     async def _set_progress(cur: int, tot: int) -> None:
         safe_tot = max(int(tot or 0), 1)
@@ -103,6 +125,7 @@ async def run_generate(db: Database, item_ids: list[int], openai_key: str) -> st
                 _tasks[task_id]["status"] = "done"
                 _tasks[task_id]["result"] = {"ok": ok, "failed": failed}
                 _tasks[task_id]["progress"] = [len(item_ids), len(item_ids)]
+                _tasks[task_id]["detail"] = "Готово"
             try:
                 # item_type can be mixed; mark as 'mixed' for ops log
                 db.add_audit_event(
@@ -132,7 +155,14 @@ async def run_send(db: Database, item_ids: list[int]) -> str:
     """Запускает send_mass_all в фоне, возвращает task_id."""
     task_id = _make_id()
     async with _tasks_lock:
-        _tasks[task_id] = {"status": "running", "progress": [0, 1], "result": None, "error": None}
+        _tasks[task_id] = {
+            "status": "running",
+            "action": "send",
+            "detail": "Отправка…",
+            "progress": [0, 1],
+            "result": None,
+            "error": None,
+        }
 
     async def _set_progress(cur: int, tot: int) -> None:
         safe_tot = max(int(tot or 0), 1)
@@ -151,6 +181,7 @@ async def run_send(db: Database, item_ids: list[int]) -> str:
                 _tasks[task_id]["status"] = "done"
                 _tasks[task_id]["result"] = {"sent_ok": sent_ok, "skipped": skipped, "failed": failed}
                 _tasks[task_id]["progress"] = [1, 1]
+                _tasks[task_id]["detail"] = "Готово"
             try:
                 db.add_audit_event(
                     actor="system",
@@ -198,6 +229,7 @@ async def cancel_task(task_id: str) -> bool:
         if state.get("status") == "running":
             state["status"] = "cancelled"
             state["error"] = "Остановлено пользователем"
+            state["detail"] = "Остановлено"
     t = _handles.get(task_id)
     if t and not t.done():
         t.cancel()
