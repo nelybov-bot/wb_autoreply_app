@@ -3,6 +3,30 @@
 
   const API = '/api';
   const STORAGE_API_BASE = 'wb_autoreply_api_base';
+  const STORAGE_UI_COMPACT = 'marketai_ui_compact';
+  const STORAGE_UI_DIM_BG = 'marketai_ui_dim_bg';
+  const STORAGE_UI_REDUCE_MOTION = 'marketai_ui_reduce_motion';
+  const STORAGE_UI_TOAST_MS = 'marketai_ui_toast_ms';
+  const STORAGE_UI_CONFIRM_DANGER = 'marketai_ui_confirm_danger';
+
+  function getUiToastMs() {
+    const v = parseInt(localStorage.getItem(STORAGE_UI_TOAST_MS) || '4000', 10);
+    return Number.isFinite(v) ? Math.max(1500, Math.min(15000, v)) : 4000;
+  }
+
+  function applyUiPrefs() {
+    try {
+      document.body.classList.toggle('ui-compact', localStorage.getItem(STORAGE_UI_COMPACT) === '1');
+      document.body.classList.toggle('ui-dim-bg', localStorage.getItem(STORAGE_UI_DIM_BG) === '1');
+      document.body.classList.toggle('ui-reduce-motion', localStorage.getItem(STORAGE_UI_REDUCE_MOTION) === '1');
+    } catch (_) {}
+  }
+
+  function confirmDanger(message) {
+    const need = (localStorage.getItem(STORAGE_UI_CONFIRM_DANGER) || '1') === '1';
+    if (!need) return true;
+    return confirm(message || 'Вы уверены?');
+  }
 
   function getApiBase() {
     return (localStorage.getItem(STORAGE_API_BASE) || '').trim().replace(/\/$/, '');
@@ -52,7 +76,7 @@
     el.appendChild(icon);
     el.appendChild(document.createTextNode(message));
     document.body.appendChild(el);
-    setTimeout(() => el.remove(), 4000);
+    setTimeout(() => el.remove(), getUiToastMs());
   }
 
   function applyTabVisibility() {
@@ -204,7 +228,7 @@
           <div class="meta">ID ${s.id} ${s.active ? '' : '· неактивен'}</div>
           <div class="actions">
             <button type="button" class="btn btn-secondary btn-sm btn-edit-store" data-id="${s.id}">Изменить</button>
-            <button type="button" class="btn btn-danger btn-secondary btn-sm btn-delete-store" data-id="${s.id}">Удалить</button>
+            <button type="button" class="btn btn-danger btn-sm btn-delete-store" data-id="${s.id}">Удалить</button>
           </div>
         </div>`;
     }).join('');
@@ -271,7 +295,7 @@
   }
 
   async function deleteStore(storeId) {
-    if (!confirm('Удалить магазин и все его отзывы/вопросы?')) return;
+    if (!confirmDanger('Удалить магазин и все его отзывы/вопросы?')) return;
     try {
       await api(`/stores/${storeId}`, { method: 'DELETE' });
       toast('Магазин удалён');
@@ -604,6 +628,17 @@
   async function loadSettings() {
     const apiBaseEl = document.getElementById('setting-api_base');
     if (apiBaseEl) apiBaseEl.value = localStorage.getItem(STORAGE_API_BASE) || '';
+    // UI prefs
+    const uiCompact = document.getElementById('ui-compact');
+    const uiDim = document.getElementById('ui-dim-bg');
+    const uiReduce = document.getElementById('ui-reduce-motion');
+    const uiToast = document.getElementById('ui-toast-duration');
+    const uiConfirm = document.getElementById('ui-confirm-danger');
+    if (uiCompact) uiCompact.checked = localStorage.getItem(STORAGE_UI_COMPACT) === '1';
+    if (uiDim) uiDim.checked = localStorage.getItem(STORAGE_UI_DIM_BG) === '1';
+    if (uiReduce) uiReduce.checked = localStorage.getItem(STORAGE_UI_REDUCE_MOTION) === '1';
+    if (uiToast) uiToast.value = String(getUiToastMs());
+    if (uiConfirm) uiConfirm.checked = (localStorage.getItem(STORAGE_UI_CONFIRM_DANGER) || '1') === '1';
     try {
       await loadMe(true);
       const data = await api('/settings');
@@ -628,6 +663,32 @@
     } catch (err) {
       toast(err.message, 'error');
     }
+  }
+
+  function wireUiPrefs() {
+    const uiCompact = document.getElementById('ui-compact');
+    const uiDim = document.getElementById('ui-dim-bg');
+    const uiReduce = document.getElementById('ui-reduce-motion');
+    const uiToast = document.getElementById('ui-toast-duration');
+    const uiConfirm = document.getElementById('ui-confirm-danger');
+    const uiReset = document.getElementById('ui-reset');
+    if (uiCompact) uiCompact.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_COMPACT, uiCompact.checked ? '1' : '0'); applyUiPrefs(); });
+    if (uiDim) uiDim.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_DIM_BG, uiDim.checked ? '1' : '0'); applyUiPrefs(); });
+    if (uiReduce) uiReduce.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_REDUCE_MOTION, uiReduce.checked ? '1' : '0'); applyUiPrefs(); });
+    if (uiToast) uiToast.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_TOAST_MS, String(parseInt(uiToast.value || '4000', 10) || 4000)); });
+    if (uiConfirm) uiConfirm.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_CONFIRM_DANGER, uiConfirm.checked ? '1' : '0'); });
+    if (uiReset) uiReset.addEventListener('click', () => {
+      try {
+        localStorage.removeItem(STORAGE_UI_COMPACT);
+        localStorage.removeItem(STORAGE_UI_DIM_BG);
+        localStorage.removeItem(STORAGE_UI_REDUCE_MOTION);
+        localStorage.removeItem(STORAGE_UI_TOAST_MS);
+        localStorage.removeItem(STORAGE_UI_CONFIRM_DANGER);
+      } catch (_) {}
+      applyUiPrefs();
+      toast('UI сброшен');
+      loadSettings();
+    });
   }
 
   document.getElementById('btn-save-settings').addEventListener('click', async () => {
@@ -798,6 +859,10 @@
       currentUser = me;
       const label = document.getElementById('auth-user-label');
       if (label) label.textContent = `${me.username} (${me.role})`;
+      const labelHeader = document.getElementById('auth-user-label-header');
+      if (labelHeader) labelHeader.textContent = `${me.username} (${me.role})`;
+      const headerRight = document.querySelector('.header-right');
+      if (headerRight) headerRight.hidden = false;
       applyTabVisibility();
       await refreshUsersSection();
       return me;
@@ -805,6 +870,10 @@
       currentUser = null;
       const label = document.getElementById('auth-user-label');
       if (label) label.textContent = '—';
+      const labelHeader = document.getElementById('auth-user-label-header');
+      if (labelHeader) labelHeader.textContent = '—';
+      const headerRight = document.querySelector('.header-right');
+      if (headerRight) headerRight.hidden = true;
       if (!silent) toast(err.message, 'error');
       return null;
     }
@@ -844,6 +913,8 @@
   if (btnLogin) btnLogin.addEventListener('click', doLogin);
   const btnLogout = document.getElementById('btn-logout');
   if (btnLogout) btnLogout.addEventListener('click', doLogout);
+  const btnLogoutHeader = document.getElementById('btn-logout-header');
+  if (btnLogoutHeader) btnLogoutHeader.addEventListener('click', doLogout);
   const passEl = document.getElementById('login-password');
   if (passEl) passEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
 
@@ -885,7 +956,7 @@
         list.querySelectorAll('[data-user-del]').forEach(btn => {
           btn.addEventListener('click', async () => {
             const id = Number(btn.getAttribute('data-user-del'));
-            if (!confirm('Удалить пользователя?')) return;
+            if (!confirmDanger('Удалить пользователя?')) return;
             await api('/users/' + id, { method: 'DELETE' });
             toast('Пользователь удалён');
             await refreshUsersSection();
@@ -936,6 +1007,8 @@
 
   // ---- Init ----
   loadMe(true).then(me => {
+    applyUiPrefs();
+    wireUiPrefs();
     if (!me) {
       showLogin();
       return;

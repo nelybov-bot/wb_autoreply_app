@@ -6,7 +6,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="theme-color" content="#2563eb">
-  <title>WB Автоответчик</title>
+  <title>MarketAI</title>
   <link rel="manifest" href="/static/manifest.json">
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="shortcut icon" href="/static/icon.svg">
@@ -43,9 +43,16 @@
     <div class="header-left">
       <div class="header-logo" aria-hidden="true"></div>
       <div class="header-brand">
-        <h1>WB <span class="title-gradient">Автоответчик</span></h1>
-        <div class="header-sub">WB · Ozon · Яндекс</div>
+        <h1>Market<span class="title-gradient">AI</span></h1>
+        <div class="header-sub">Marketplace replies assistant</div>
       </div>
+    </div>
+    <div class="header-right">
+      <div class="header-user" title="Текущий пользователь">
+        <div class="header-user-name" id="auth-user-label-header">—</div>
+        <div class="header-user-sub">Session</div>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm" id="btn-logout-header">Выйти</button>
     </div>
   </header>
 
@@ -87,40 +94,48 @@
 
     <!-- Магазины -->
     <section id="panel-stores" class="panel">
-      <div class="form-card">
-        <h2>Добавить магазин</h2>
-        <form id="form-store">
-          <div class="form-group">
-            <label>Маркетплейс</label>
-            <select name="marketplace" required>
-              <option value="wb">Wildberries</option>
-              <option value="yam">Яндекс.Маркет</option>
-              <option value="ozon">Ozon</option>
-            </select>
+      <div class="stores-layout">
+        <div class="form-card stores-form">
+          <h2>Добавить магазин</h2>
+          <form id="form-store">
+            <div class="form-group">
+              <label>Маркетплейс</label>
+              <select name="marketplace" required>
+                <option value="wb">Wildberries</option>
+                <option value="yam">Яндекс.Маркет</option>
+                <option value="ozon">Ozon</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Название</label>
+              <input type="text" name="name" required placeholder="Мой магазин">
+            </div>
+            <div class="form-group">
+              <label>API-ключ</label>
+              <input type="password" name="api_key" required placeholder="••••••••">
+            </div>
+            <div class="form-group" id="wrap-business-id" style="display: none;">
+              <label>Business ID (Яндекс)</label>
+              <input type="number" name="business_id" placeholder="12345">
+            </div>
+            <div class="form-group" id="wrap-client-id" style="display: none;">
+              <label>Client ID (Ozon)</label>
+              <input type="text" name="client_id" placeholder="client-id">
+            </div>
+            <div class="form-group">
+              <label><input type="checkbox" name="active" checked> Активен</label>
+            </div>
+            <button type="submit" class="btn btn-primary">Добавить</button>
+          </form>
+        </div>
+        <div class="stores-list-wrap">
+          <div class="stores-head">
+            <h2 class="stores-title">Магазины</h2>
+            <div class="stores-hint">Добавляй ключи и включай/выключай магазины. Данные остаются в базе.</div>
           </div>
-          <div class="form-group">
-            <label>Название</label>
-            <input type="text" name="name" required placeholder="Мой магазин">
-          </div>
-          <div class="form-group">
-            <label>API-ключ</label>
-            <input type="password" name="api_key" required placeholder="••••••••">
-          </div>
-          <div class="form-group" id="wrap-business-id" style="display: none;">
-            <label>Business ID (Яндекс)</label>
-            <input type="number" name="business_id" placeholder="12345">
-          </div>
-          <div class="form-group" id="wrap-client-id" style="display: none;">
-            <label>Client ID (Ozon)</label>
-            <input type="text" name="client_id" placeholder="client-id">
-          </div>
-          <div class="form-group">
-            <label><input type="checkbox" name="active" checked> Активен</label>
-          </div>
-          <button type="submit" class="btn btn-primary">Добавить</button>
-        </form>
+          <div id="stores-list" class="stores-grid"></div>
+        </div>
       </div>
-      <div id="stores-list" class="stores-grid"></div>
     </section>
 
     <!-- Отзывы -->
@@ -242,53 +257,92 @@
 
     <!-- Настройки -->
     <section id="panel-settings" class="panel">
-      <div class="form-card settings-grid">
-        <h2>Подключение к серверу</h2>
-        <div class="form-group">
-          <label>Адрес API (ПК)</label>
-          <input type="url" id="setting-api_base" placeholder="http://192.168.1.5:8000" autocomplete="off">
-          <small class="form-hint">С телефона или другого устройства укажи IP своего ПК. Пусто — запросы на этот же адрес.</small>
-        </div>
-        <div class="form-group">
-          <label>Пользователь</label>
-          <div class="form-hint" id="auth-user-label">—</div>
-          <button type="button" class="btn btn-secondary" id="btn-logout" style="margin-top:10px;">Выйти</button>
-        </div>
-        <h2 style="margin-top: 24px;">OpenAI</h2>
-        <div class="form-group">
-          <label>API-ключ</label>
-          <input type="password" id="setting-openai_key" placeholder="sk-...">
-        </div>
-        <h2 style="margin-top: 24px;">Telegram (уведомления)</h2>
-        <div class="form-group">
-          <label>Токен бота</label>
-          <input type="password" id="setting-telegram_bot_token" placeholder="токен бота">
-        </div>
-        <div class="form-group">
-          <label>ID чата</label>
-          <input type="text" id="setting-telegram_chat_id" placeholder="chat_id">
-        </div>
-        <button type="button" class="btn btn-primary" id="btn-save-settings">Сохранить настройки</button>
-      </div>
-      <div class="form-card" style="margin-top: 24px;">
-        <h2>Пользователи</h2>
-        <div id="users-admin-only" style="display:none;">
-          <div class="form-group" style="margin-top: 12px;">
-            <label>Создать гостя</label>
-            <div style="display:grid; grid-template-columns: 1fr 1fr auto; gap: 10px;">
-              <input type="text" id="new-user-username" placeholder="логин">
-              <input type="password" id="new-user-password" placeholder="пароль">
-              <button type="button" class="btn btn-primary" id="btn-create-user">Создать</button>
+      <div class="settings-layout">
+        <div class="settings-col">
+          <div class="form-card">
+            <h2>Подключение</h2>
+            <div class="form-group">
+              <label>Адрес API (ПК)</label>
+              <input type="url" id="setting-api_base" placeholder="http://192.168.1.5:8000" autocomplete="off">
+              <small class="form-hint">С телефона или другого устройства укажи IP своего ПК. Пусто — запросы на этот же адрес.</small>
             </div>
-            <small class="form-hint">Пользователь будет с ролью guest.</small>
+            <div class="form-group">
+              <label>Пользователь</label>
+              <div class="form-hint" id="auth-user-label">—</div>
+              <small class="form-hint">Кнопка «Выйти» теперь есть в шапке.</small>
+            </div>
+            <h2 style="margin-top: 22px;">OpenAI</h2>
+            <div class="form-group">
+              <label>API-ключ</label>
+              <input type="password" id="setting-openai_key" placeholder="sk-...">
+            </div>
+            <h2 style="margin-top: 22px;">Telegram</h2>
+            <div class="form-group">
+              <label>Токен бота</label>
+              <input type="password" id="setting-telegram_bot_token" placeholder="токен бота">
+            </div>
+            <div class="form-group">
+              <label>ID чата</label>
+              <input type="text" id="setting-telegram_chat_id" placeholder="chat_id">
+            </div>
+            <button type="button" class="btn btn-primary" id="btn-save-settings">Сохранить настройки</button>
           </div>
-          <div id="users-list" class="stores-grid" style="margin-top: 10px;"></div>
+
+          <div class="form-card" style="margin-top: 18px;">
+            <h2>Интерфейс</h2>
+            <div class="form-group">
+              <label><input type="checkbox" id="ui-compact"> Компактный режим</label>
+              <small class="form-hint">Меньше отступов и высоты элементов.</small>
+            </div>
+            <div class="form-group">
+              <label><input type="checkbox" id="ui-dim-bg"> Приглушить фон</label>
+              <small class="form-hint">Менее яркий градиент — легче читать таблицы.</small>
+            </div>
+            <div class="form-group">
+              <label><input type="checkbox" id="ui-reduce-motion"> Уменьшить анимации</label>
+              <small class="form-hint">Меньше “прыжков” и эффектов.</small>
+            </div>
+            <div class="form-group">
+              <label>Длительность тостов</label>
+              <select id="ui-toast-duration">
+                <option value="2500">2.5 сек</option>
+                <option value="4000">4 сек</option>
+                <option value="7000">7 сек</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label><input type="checkbox" id="ui-confirm-danger"> Подтверждать удаления</label>
+              <small class="form-hint">Для магазинов/пользователей и других опасных действий.</small>
+            </div>
+            <div class="toolbar" style="margin: 10px 0 0; padding: 10px;">
+              <button type="button" class="btn btn-secondary btn-sm" id="ui-reset">Сбросить UI</button>
+            </div>
+          </div>
         </div>
-        <div id="users-no-access" class="form-hint">Доступно только администратору.</div>
-      </div>
-      <div class="form-card" style="margin-top: 24px;">
-        <h2>Промпты</h2>
-        <div id="prompts-list"></div>
+
+        <div class="settings-col">
+          <div class="form-card">
+            <h2>Пользователи</h2>
+            <div id="users-admin-only" style="display:none;">
+              <div class="form-group" style="margin-top: 12px;">
+                <label>Создать гостя</label>
+                <div style="display:grid; grid-template-columns: 1fr 1fr auto; gap: 10px;">
+                  <input type="text" id="new-user-username" placeholder="логин">
+                  <input type="password" id="new-user-password" placeholder="пароль">
+                  <button type="button" class="btn btn-primary" id="btn-create-user">Создать</button>
+                </div>
+                <small class="form-hint">Пользователь будет с ролью guest.</small>
+              </div>
+              <div id="users-list" class="stores-grid" style="margin-top: 10px;"></div>
+            </div>
+            <div id="users-no-access" class="form-hint">Доступно только администратору.</div>
+          </div>
+
+          <div class="form-card" style="margin-top: 18px;">
+            <h2>Промпты</h2>
+            <div id="prompts-list"></div>
+          </div>
+        </div>
       </div>
     </section>
 

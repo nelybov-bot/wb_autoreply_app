@@ -1,7 +1,7 @@
 {
-  "name": "WB Автоответчик",
-  "short_name": "Автоответчик",
-  "description": "Отзывы и вопросы WB, Ozon, Яндекс.Маркет",
+  "name": "MarketAI",
+  "short_name": "MarketAI",
+  "description": "AI‑ассистент для ответов на отзывы и вопросы в маркетплейсах",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
