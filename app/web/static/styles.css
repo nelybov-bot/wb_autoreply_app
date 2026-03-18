@@ -95,7 +95,7 @@ body::after {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 28px;
+  padding: 14px 22px;
   background: rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -107,15 +107,41 @@ body::after {
 .header-left {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 12px;
+}
+
+.header-logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.9);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  box-shadow: 0 8px 22px rgba(0,0,0,0.08);
+  background-image: url('/static/icon.svg');
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 22px 22px;
+  flex-shrink: 0;
+}
+
+.header-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .header h1 {
   font-family: var(--font-heading);
-  font-size: 1.5rem;
+  font-size: 1.35rem;
   font-weight: 700;
   letter-spacing: -0.03em;
   color: var(--text);
+}
+
+.header-sub {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.2;
 }
 
 .header h1 .title-gradient {
@@ -132,27 +158,7 @@ body::after {
   50% { background-position: 100% center; }
 }
 
-.header-pill {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  padding: 6px 12px;
-  background: var(--bg);
-  border-radius: 999px;
-  font-weight: 500;
-}
-
-.header-pill .dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  margin-right: 2px;
-  vertical-align: middle;
-}
-
-.header-pill .dot.wb { background: #7c3aed; }
-.header-pill .dot.ozon { background: #f97316; }
-.header-pill .dot.ym { background: #dc2626; }
+/* старый header-pill больше не используется */
 
 /* Табы */
 .tabs {
@@ -160,24 +166,26 @@ body::after {
   gap: 4px;
   position: relative;
   z-index: 1;
-  padding: 0 24px;
-  background: var(--bg-elevated);
+  padding: 8px 18px;
+  background: rgba(255,255,255,0.70);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   overflow-x: auto;
 }
 
 .tab {
-  padding: 14px 20px;
+  padding: 10px 14px;
   font-size: 0.9rem;
   font-weight: 500;
   color: var(--text-muted);
-  background: none;
+  background: transparent;
   border: none;
   cursor: pointer;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  transition: color var(--transition), border-color var(--transition), background var(--transition);
+  border-bottom: 0;
+  margin-bottom: 0;
+  transition: color var(--transition), background var(--transition), box-shadow var(--transition), transform var(--transition);
   white-space: nowrap;
   font-family: inherit;
   border-radius: var(--radius-sm);
@@ -189,8 +197,8 @@ body::after {
 
 .tab.active {
   color: var(--accent);
-  border-bottom-color: var(--accent);
-  background: var(--accent-dim);
+  background: rgba(37, 99, 235, 0.10);
+  box-shadow: 0 1px 0 rgba(37, 99, 235, 0.25) inset;
 }
 
 /* Контент — больше воздуха */

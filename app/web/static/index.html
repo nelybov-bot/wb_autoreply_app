@@ -8,6 +8,8 @@
   <meta name="theme-color" content="#2563eb">
   <title>WB Автоответчик</title>
   <link rel="manifest" href="/static/manifest.json">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
@@ -39,8 +41,11 @@
   </div>
   <header class="header">
     <div class="header-left">
-      <h1>WB <span class="title-gradient">Автоответчик</span></h1>
-      <span class="header-pill"><span class="dot wb"></span> WB · <span class="dot ozon"></span> Ozon · <span class="dot ym"></span> Яндекс</span>
+      <div class="header-logo" aria-hidden="true"></div>
+      <div class="header-brand">
+        <h1>WB <span class="title-gradient">Автоответчик</span></h1>
+        <div class="header-sub">WB · Ozon · Яндекс</div>
+      </div>
     </div>
   </header>
 
