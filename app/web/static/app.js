@@ -186,22 +186,31 @@
       document.getElementById('stat-today').textContent = s.sent_today ?? 0;
       document.getElementById('stat-reviews').textContent = s.by_type?.review ?? 0;
       document.getElementById('stat-questions').textContent = s.by_type?.question ?? 0;
-
-      const byStore = s.by_store || [];
-      const maxCount = Math.max(1, ...byStore.map(x => x.count));
-      const wrap = document.getElementById('stats-by-store');
-      if (!byStore.length) {
-        wrap.innerHTML = '<p class="empty-state" style="padding: 24px;">Нет данных по магазинам</p>';
-      } else {
-        wrap.innerHTML = byStore.map(row => {
-          const pct = maxCount ? Math.round((row.count / maxCount) * 100) : 0;
-          return `
-            <div class="chart-row">
-              <span class="name">${escapeHtml(row.name || 'Без названия')}</span>
-              <div class="bar-wrap"><div class="bar" style="width: ${pct}%"></div></div>
-              <span class="count">${row.count}</span>
-            </div>`;
-        }).join('');
+      const q = s.queue || {};
+      const storesMeta = s.stores || {};
+      let auto = null;
+      try { auto = await api('/auto-schedule/status'); } catch (_) {}
+      const autoPhaseRu = {
+        idle: 'ожидание',
+        load_new: 'загрузка новых',
+        generate: 'генерация',
+        send: 'отправка',
+        done: 'завершено',
+        cancelled: 'остановлено',
+        error: 'ошибка',
+      };
+      const summary = [
+        { k: 'Новых отзывов', v: String(q.new_reviews ?? 0) },
+        { k: 'Новых вопросов', v: String(q.new_questions ?? 0) },
+        { k: 'Сгенерировано (отзывы)', v: String(q.generated_reviews ?? 0) },
+        { k: 'Сгенерировано (вопросы)', v: String(q.generated_questions ?? 0) },
+        { k: 'Магазины активные', v: `${storesMeta.active ?? 0} / ${storesMeta.total ?? 0}` },
+        { k: 'Автозапуск', v: auto ? `${auto.running ? 'идёт' : 'ожидание'} · ${autoPhaseRu[auto.phase] || auto.phase || '—'}` : '—' },
+        { k: 'Следующий слот (MSK)', v: auto?.next_slot || '—' },
+      ];
+      const wrap = document.getElementById('summary-grid');
+      if (wrap) {
+        wrap.innerHTML = summary.map(x => `<div class="summary-item"><div class="k">${escapeHtml(x.k)}</div><div class="v">${escapeHtml(x.v)}</div></div>`).join('');
       }
     } catch (err) {
       toast(err.message, 'error');

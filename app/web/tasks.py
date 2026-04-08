@@ -55,9 +55,16 @@ async def run_load_new(db: Database, store_ids: Optional[list[int]]) -> str:
         try:
             total = len(stores)
             added_total = 0
+            if total == 0:
+                async with _tasks_lock:
+                    _tasks[task_id]["status"] = "done"
+                    _tasks[task_id]["result"] = 0
+                    _tasks[task_id]["progress"] = [0, 1]
+                    _tasks[task_id]["detail"] = "Нет выбранных магазинов"
+                return
             # По требованию: перед загрузкой очищаем старые элементы выбранных магазинов.
             clear_ids = [s.id for s in stores]
-            deleted = db.clear_items(clear_ids if clear_ids else None)
+            deleted = db.clear_items(clear_ids)
             for i, s in enumerate(stores):
                 async with _tasks_lock:
                     if task_id in _tasks:

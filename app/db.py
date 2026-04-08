@@ -809,7 +809,7 @@ class Database:
             self._conn.commit()
 
     def get_stats(self) -> dict:
-        """Статистика по отправленным: всего, за сегодня, по типам, по магазинам."""
+        """Операционная сводка: отправки + текущая очередь + активные магазины."""
         with _DB_LOCK:
             total = self._conn.execute(
                 "SELECT COUNT(*) AS n FROM items WHERE status='sent'"
@@ -838,10 +838,46 @@ class Database:
                 {"store_id": int(r["store_id"]), "name": str(r["name"] or ""), "count": int(r["n"])}
                 for r in by_store_rows
             ]
+            q_rows = self._conn.execute(
+                """SELECT status, item_type, COUNT(*) AS n
+                   FROM items
+                   GROUP BY status, item_type"""
+            ).fetchall()
+            queue = {
+                "new_reviews": 0,
+                "new_questions": 0,
+                "generated_reviews": 0,
+                "generated_questions": 0,
+                "sent_reviews": 0,
+                "sent_questions": 0,
+            }
+            for r in q_rows:
+                st = str(r["status"] or "")
+                tp = str(r["item_type"] or "")
+                n = int(r["n"] or 0)
+                if st == "new" and tp == "review":
+                    queue["new_reviews"] = n
+                elif st == "new" and tp == "question":
+                    queue["new_questions"] = n
+                elif st == "generated" and tp == "review":
+                    queue["generated_reviews"] = n
+                elif st == "generated" and tp == "question":
+                    queue["generated_questions"] = n
+                elif st == "sent" and tp == "review":
+                    queue["sent_reviews"] = n
+                elif st == "sent" and tp == "question":
+                    queue["sent_questions"] = n
+
+            active_stores_row = self._conn.execute("SELECT COUNT(*) AS n FROM stores WHERE active=1").fetchone()
+            total_stores_row = self._conn.execute("SELECT COUNT(*) AS n FROM stores").fetchone()
+            active_stores = int(active_stores_row["n"]) if active_stores_row else 0
+            total_stores = int(total_stores_row["n"]) if total_stores_row else 0
 
         return {
             "total_sent": total_sent,
             "sent_today": sent_today,
             "by_type": by_type,
             "by_store": by_store,
+            "queue": queue,
+            "stores": {"active": active_stores, "total": total_stores},
         }

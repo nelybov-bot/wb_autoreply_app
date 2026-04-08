@@ -39,7 +39,7 @@ from app.core.workflows import load_new_all, generate_mass, send_mass_all
 
 log = logging.getLogger("web")
 
-app = FastAPI(title="WB Автоответчик", version="1.0")
+app = FastAPI(title="MarketAI", version="1.0")
 MSK_TZ = ZoneInfo("Europe/Moscow")
 
 def _parse_origins(value: str) -> list[str]:

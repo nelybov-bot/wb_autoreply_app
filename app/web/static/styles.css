@@ -27,6 +27,41 @@
   --transition: 0.2s ease;
 }
 
+body.theme-dark {
+  --bg: #0b1220;
+  --bg-elevated: rgba(15, 23, 42, 0.92);
+  --bg-card: rgba(15, 23, 42, 0.72);
+  --border: #22304a;
+  --text: #e5e7eb;
+  --text-muted: #94a3b8;
+  --accent: #60a5fa;
+  --accent-hover: #3b82f6;
+  --accent-dim: rgba(96, 165, 250, 0.16);
+  --accent-glow: rgba(96, 165, 250, 0.32);
+  --danger: #ef4444;
+  --danger-dim: rgba(239, 68, 68, 0.14);
+  --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.25), 0 18px 60px rgba(0, 0, 0, 0.35);
+  --shadow-header: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+
+body.theme-dark::after {
+  opacity: 0.38;
+  filter: saturate(1.1) brightness(0.9);
+}
+
+/* Чекбоксы в настройках — выравнивание как у нормальных клиентов */
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  justify-content: flex-start;
+}
+
+.checkbox-row input[type="checkbox"] {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -71,6 +106,16 @@ body::after {
   z-index: 0;
   opacity: 0.92;
   animation: bgPulse 10s ease-in-out infinite;
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+}
+
+body.ui-bg-motion::after {
+  transform: translate3d(0, var(--bg-parallax-y, 0px), 0);
+}
+
+body.ui-reduce-motion::after {
+  animation: none;
 }
 
 @keyframes bgPulse {
@@ -745,6 +790,30 @@ body::after {
   min-width: 0;
 }
 
+.auto-store-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.auto-store-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+body.theme-dark .auto-store-item {
+  background: rgba(15, 23, 42, 0.55);
+}
+
+@media (max-width: 720px) {
+  .auto-store-list { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 980px) {
   .settings-layout {
     grid-template-columns: 1fr;
@@ -956,6 +1025,35 @@ body.ui-compact .chart-section { padding: 22px; padding-left: 26px; }
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.summary-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.55);
+  padding: 12px 14px;
+}
+
+.summary-item .k {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.summary-item .v {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+body.theme-dark .summary-item {
+  background: rgba(15, 23, 42, 0.55);
 }
 
 .chart-row {
