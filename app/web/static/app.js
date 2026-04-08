@@ -6,6 +6,8 @@
   const STORAGE_UI_COMPACT = 'marketai_ui_compact';
   const STORAGE_UI_DIM_BG = 'marketai_ui_dim_bg';
   const STORAGE_UI_REDUCE_MOTION = 'marketai_ui_reduce_motion';
+  const STORAGE_UI_BG_MOTION = 'marketai_ui_bg_motion';
+  const STORAGE_UI_THEME = 'marketai_ui_theme';
   const STORAGE_UI_TOAST_MS = 'marketai_ui_toast_ms';
   const STORAGE_UI_CONFIRM_DANGER = 'marketai_ui_confirm_danger';
 
@@ -19,6 +21,8 @@
       document.body.classList.toggle('ui-compact', localStorage.getItem(STORAGE_UI_COMPACT) === '1');
       document.body.classList.toggle('ui-dim-bg', localStorage.getItem(STORAGE_UI_DIM_BG) === '1');
       document.body.classList.toggle('ui-reduce-motion', localStorage.getItem(STORAGE_UI_REDUCE_MOTION) === '1');
+      document.body.classList.toggle('ui-bg-motion', localStorage.getItem(STORAGE_UI_BG_MOTION) === '1');
+      document.body.classList.toggle('theme-dark', localStorage.getItem(STORAGE_UI_THEME) === 'dark');
     } catch (_) {}
   }
 
@@ -26,6 +30,29 @@
     const need = (localStorage.getItem(STORAGE_UI_CONFIRM_DANGER) || '1') === '1';
     if (!need) return true;
     return confirm(message || 'Вы уверены?');
+  }
+
+  let bgParallaxMainEl = null;
+  let bgParallaxHandler = null;
+  function syncBgParallaxListener() {
+    try {
+      if (!bgParallaxMainEl) bgParallaxMainEl = document.querySelector('.main');
+      if (!bgParallaxMainEl) return;
+      if (!bgParallaxHandler) {
+        bgParallaxHandler = () => {
+          const v = bgParallaxMainEl.scrollTop || 0;
+          document.body.style.setProperty('--bg-parallax-y', (-v * 0.03) + 'px');
+        };
+      }
+      const enabled = document.body.classList.contains('ui-bg-motion');
+      if (enabled) {
+        bgParallaxMainEl.addEventListener('scroll', bgParallaxHandler, { passive: true });
+        bgParallaxHandler();
+      } else {
+        bgParallaxMainEl.removeEventListener('scroll', bgParallaxHandler);
+        document.body.style.setProperty('--bg-parallax-y', '0px');
+      }
+    } catch (_) {}
   }
 
   function getApiBase() {
@@ -319,6 +346,28 @@
     const opts = '<option value="">Все магазины</option>' + stores.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
     document.getElementById('reviews-store').innerHTML = opts;
     document.getElementById('questions-store').innerHTML = opts;
+  }
+
+  function renderAutoStoreList(selectedIds) {
+    const wrap = document.getElementById('auto-store-list');
+    if (!wrap) return;
+    const sel = new Set((selectedIds || []).map(x => Number(x)));
+    if (!stores.length) {
+      wrap.innerHTML = '<div class="form-hint">Нет магазинов</div>';
+      return;
+    }
+    wrap.innerHTML = stores.map(s => `
+      <label class="auto-store-item">
+        <input type="checkbox" value="${s.id}" ${sel.has(Number(s.id)) ? 'checked' : ''}>
+        <span>${escapeHtml(s.name)} <span class="badge">${escapeHtml(s.marketplace)}</span></span>
+      </label>
+    `).join('');
+  }
+
+  function getAutoSelectedStoreIds() {
+    const wrap = document.getElementById('auto-store-list');
+    if (!wrap) return [];
+    return Array.from(wrap.querySelectorAll('input[type="checkbox"]:checked')).map(x => Number(x.value));
   }
 
   // ---- Items (reviews / questions) ----
@@ -660,11 +709,15 @@
     const uiCompact = document.getElementById('ui-compact');
     const uiDim = document.getElementById('ui-dim-bg');
     const uiReduce = document.getElementById('ui-reduce-motion');
+    const uiBgMotion = document.getElementById('ui-bg-motion');
+    const uiThemeDark = document.getElementById('theme-dark');
     const uiToast = document.getElementById('ui-toast-duration');
     const uiConfirm = document.getElementById('ui-confirm-danger');
     if (uiCompact) uiCompact.checked = localStorage.getItem(STORAGE_UI_COMPACT) === '1';
     if (uiDim) uiDim.checked = localStorage.getItem(STORAGE_UI_DIM_BG) === '1';
     if (uiReduce) uiReduce.checked = localStorage.getItem(STORAGE_UI_REDUCE_MOTION) === '1';
+    if (uiBgMotion) uiBgMotion.checked = localStorage.getItem(STORAGE_UI_BG_MOTION) === '1';
+    if (uiThemeDark) uiThemeDark.checked = localStorage.getItem(STORAGE_UI_THEME) === 'dark';
     if (uiToast) uiToast.value = String(getUiToastMs());
     if (uiConfirm) uiConfirm.checked = (localStorage.getItem(STORAGE_UI_CONFIRM_DANGER) || '1') === '1';
     try {
@@ -688,6 +741,15 @@
           toast('Промпт сохранён');
         });
       });
+      const autoCfg = await api('/auto-schedule');
+      const autoEnabled = document.getElementById('auto-enabled');
+      const autoSlots = document.getElementById('auto-slots');
+      if (autoEnabled) autoEnabled.checked = !!autoCfg.enabled;
+      if (autoSlots) autoSlots.value = (autoCfg.slots || []).join(', ');
+      if (!stores.length) {
+        stores = await api('/stores');
+      }
+      renderAutoStoreList(autoCfg.store_ids || []);
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -697,12 +759,16 @@
     const uiCompact = document.getElementById('ui-compact');
     const uiDim = document.getElementById('ui-dim-bg');
     const uiReduce = document.getElementById('ui-reduce-motion');
+    const uiBgMotion = document.getElementById('ui-bg-motion');
+    const uiThemeDark = document.getElementById('theme-dark');
     const uiToast = document.getElementById('ui-toast-duration');
     const uiConfirm = document.getElementById('ui-confirm-danger');
     const uiReset = document.getElementById('ui-reset');
     if (uiCompact) uiCompact.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_COMPACT, uiCompact.checked ? '1' : '0'); applyUiPrefs(); });
     if (uiDim) uiDim.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_DIM_BG, uiDim.checked ? '1' : '0'); applyUiPrefs(); });
     if (uiReduce) uiReduce.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_REDUCE_MOTION, uiReduce.checked ? '1' : '0'); applyUiPrefs(); });
+    if (uiBgMotion) uiBgMotion.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_BG_MOTION, uiBgMotion.checked ? '1' : '0'); applyUiPrefs(); syncBgParallaxListener(); });
+    if (uiThemeDark) uiThemeDark.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_THEME, uiThemeDark.checked ? 'dark' : 'light'); applyUiPrefs(); });
     if (uiToast) uiToast.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_TOAST_MS, String(parseInt(uiToast.value || '4000', 10) || 4000)); });
     if (uiConfirm) uiConfirm.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_CONFIRM_DANGER, uiConfirm.checked ? '1' : '0'); });
     if (uiReset) uiReset.addEventListener('click', () => {
@@ -710,12 +776,35 @@
         localStorage.removeItem(STORAGE_UI_COMPACT);
         localStorage.removeItem(STORAGE_UI_DIM_BG);
         localStorage.removeItem(STORAGE_UI_REDUCE_MOTION);
+        localStorage.removeItem(STORAGE_UI_BG_MOTION);
+        localStorage.removeItem(STORAGE_UI_THEME);
         localStorage.removeItem(STORAGE_UI_TOAST_MS);
         localStorage.removeItem(STORAGE_UI_CONFIRM_DANGER);
       } catch (_) {}
       applyUiPrefs();
+      syncBgParallaxListener();
       toast('UI сброшен');
       loadSettings();
+    });
+  }
+
+  const btnSaveAuto = document.getElementById('btn-save-auto');
+  if (btnSaveAuto) {
+    btnSaveAuto.addEventListener('click', async () => {
+      const enabled = !!document.getElementById('auto-enabled')?.checked;
+      const slotsRaw = (document.getElementById('auto-slots')?.value || '').trim();
+      const slots = slotsRaw ? slotsRaw.split(',').map(x => x.trim()).filter(Boolean) : [];
+      const store_ids = getAutoSelectedStoreIds();
+      if (!store_ids.length) {
+        toast('Выбери хотя бы один магазин для автозапуска', 'error');
+        return;
+      }
+      try {
+        await api('/auto-schedule', { method: 'POST', body: JSON.stringify({ enabled, slots, store_ids }) });
+        toast('Автозапуск сохранён');
+      } catch (err) {
+        toast(err.message, 'error');
+      }
     });
   }
 
@@ -744,6 +833,7 @@
       generate: 'Генерация',
       send: 'Отправка',
       template_apply: 'Шаблон',
+      auto_run: 'Автозапуск',
     };
     return m[a] || a || '—';
   }
@@ -1037,6 +1127,7 @@
   loadMe(true).then(me => {
     applyUiPrefs();
     wireUiPrefs();
+    syncBgParallaxListener();
     if (!me) {
       showLogin();
       return;

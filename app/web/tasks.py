@@ -55,6 +55,9 @@ async def run_load_new(db: Database, store_ids: Optional[list[int]]) -> str:
         try:
             total = len(stores)
             added_total = 0
+            # По требованию: перед загрузкой очищаем старые элементы выбранных магазинов.
+            clear_ids = [s.id for s in stores]
+            deleted = db.clear_items(clear_ids if clear_ids else None)
             for i, s in enumerate(stores):
                 async with _tasks_lock:
                     if task_id in _tasks:
@@ -68,7 +71,7 @@ async def run_load_new(db: Database, store_ids: Optional[list[int]]) -> str:
                 _tasks[task_id]["progress"] = [total, total]
                 _tasks[task_id]["detail"] = "Готово"
             try:
-                db.add_audit_event(actor="system", action="load_new", item_type="", result="ok", meta={"added": added_total, "stores": total})
+                db.add_audit_event(actor="system", action="load_new", item_type="", result="ok", meta={"added": added_total, "stores": total, "deleted_before_load": deleted})
             except Exception:
                 pass
         except UnauthorizedStoreError as e:

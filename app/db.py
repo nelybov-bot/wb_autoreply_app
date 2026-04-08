@@ -463,6 +463,26 @@ class Database:
             self._conn.execute("DELETE FROM items WHERE store_id=?", (store_id,))
             self._conn.commit()
 
+    def clear_items(self, store_ids: Optional[list[int]] = None) -> int:
+        """
+        Удаляет элементы (отзывы/вопросы) из items.
+        - store_ids=None: очищает все items
+        - store_ids=[...]: очищает только по указанным магазинам
+        Возвращает количество удалённых строк.
+        """
+        with _DB_LOCK:
+            if store_ids is None:
+                cur = self._conn.execute("DELETE FROM items")
+                self._conn.commit()
+                return int(cur.rowcount or 0)
+            ids = [int(x) for x in (store_ids or [])]
+            if not ids:
+                return 0
+            placeholders = ",".join("?" * len(ids))
+            cur = self._conn.execute(f"DELETE FROM items WHERE store_id IN ({placeholders})", ids)
+            self._conn.commit()
+            return int(cur.rowcount or 0)
+
     # ---------- Ozon SKU cache (названия товаров по sku) ----------
     def get_ozon_sku_names(self, skus: list[int]) -> dict[int, str]:
         """Возвращает {sku: name} только для тех sku, что есть в кэше."""

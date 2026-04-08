@@ -4,7 +4,9 @@ FastAPI-сервер веб-интерфейса WB Автоответчик.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
+import datetime as dt
 import hashlib
 import hmac
 import json
@@ -14,6 +16,7 @@ import secrets
 import time
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,10 +35,12 @@ setup_logging(LOG_PATH)
 
 from app.db import Database, Store, ItemRow, PromptRow, UserRow, AuditEventRow
 from app.web import tasks as web_tasks
+from app.core.workflows import load_new_all, generate_mass, send_mass_all
 
 log = logging.getLogger("web")
 
 app = FastAPI(title="WB Автоответчик", version="1.0")
+MSK_TZ = ZoneInfo("Europe/Moscow")
 
 def _parse_origins(value: str) -> list[str]:
     items = [x.strip() for x in (value or "").split(",")]
@@ -296,6 +301,157 @@ class ApplyTemplateBody(BaseModel):
 
 class BulkItemsBody(BaseModel):
     item_ids: list[int]
+
+class AutoScheduleBody(BaseModel):
+    enabled: bool = False
+    slots: list[str] = []   # ["09:00","13:30"]
+    store_ids: list[int] = []  # обязательный выбор магазинов
+
+AUTO_SCHEDULE_KEY = "auto_schedule_json"
+_scheduler_task: Optional[asyncio.Task] = None
+_scheduler_seen: set[str] = set()
+
+def _normalize_slots(slots: list[str]) -> list[str]:
+    out: list[str] = []
+    for s in slots or []:
+        t = (s or "").strip()
+        if len(t) != 5 or t[2] != ":":
+            continue
+        hh = t[:2]
+        mm = t[3:]
+        if not (hh.isdigit() and mm.isdigit()):
+            continue
+        h = int(hh)
+        m = int(mm)
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            out.append(f"{h:02d}:{m:02d}")
+    return sorted(set(out))
+
+def _get_auto_schedule(db: Database) -> dict:
+    raw = (db.get_setting(AUTO_SCHEDULE_KEY) or "").strip()
+    cfg = {"enabled": False, "slots": [], "store_ids": []}
+    if not raw:
+        return cfg
+    try:
+        obj = json.loads(raw)
+        cfg["enabled"] = bool(obj.get("enabled"))
+        cfg["slots"] = _normalize_slots(obj.get("slots") or [])
+        cfg["store_ids"] = [int(x) for x in (obj.get("store_ids") or [])]
+    except Exception:
+        pass
+    return cfg
+
+def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
+    cfg = {
+        "enabled": bool(body.enabled),
+        "slots": _normalize_slots(body.slots or []),
+        "store_ids": [int(x) for x in (body.store_ids or [])],
+    }
+    db.set_setting(AUTO_SCHEDULE_KEY, json.dumps(cfg, ensure_ascii=False))
+    return cfg
+
+def _collect_pending_item_ids(db: Database, store_ids: list[int], *, limit_per_type: int = 2000) -> list[int]:
+    ids: list[int] = []
+    for sid in store_ids:
+        for tp in ("review", "question"):
+            offset = 0
+            while True:
+                page = db.list_items_filtered(
+                    item_type=tp,
+                    store_id=sid,
+                    statuses=["new"],
+                    has_answer=False,
+                    limit=500,
+                    offset=offset,
+                )
+                if not page:
+                    break
+                ids.extend([r.id for r in page])
+                offset += len(page)
+                if offset >= limit_per_type:
+                    break
+    # dedupe with order
+    seen = set()
+    out = []
+    for i in ids:
+        if i in seen:
+            continue
+        seen.add(i)
+        out.append(i)
+    return out
+
+async def _run_auto_slot(slot: str) -> None:
+    db = get_db()
+    cfg = _get_auto_schedule(db)
+    if not cfg.get("enabled"):
+        return
+    store_ids = [int(x) for x in (cfg.get("store_ids") or [])]
+    stores = [s for s in db.list_stores() if s.active and s.id in store_ids]
+    if not stores:
+        return
+    deleted = db.clear_items([s.id for s in stores])
+    added = await load_new_all(db, stores)
+    item_ids = _collect_pending_item_ids(db, [s.id for s in stores])
+    gen_ok = gen_failed = 0
+    sent_ok = sent_skipped = sent_failed = 0
+    key = (db.get_setting("openai_key") or "").strip()
+    if item_ids and key:
+        gen_ok, gen_failed = await generate_mass(db, item_ids, key, model="gpt-5.2")
+        sent_ok, sent_skipped, sent_failed = await send_mass_all(db, item_ids)
+    db.add_audit_event(
+        actor="system",
+        action="auto_run",
+        item_type="mixed",
+        result="ok",
+        meta={
+            "slot": slot,
+            "store_ids": [s.id for s in stores],
+            "deleted_before_load": deleted,
+            "added": added,
+            "candidates": len(item_ids),
+            "gen_ok": gen_ok,
+            "gen_failed": gen_failed,
+            "sent_ok": sent_ok,
+            "sent_skipped": sent_skipped,
+            "sent_failed": sent_failed,
+        },
+    )
+
+async def _auto_scheduler_loop() -> None:
+    global _scheduler_seen
+    while True:
+        try:
+            db = get_db()
+            cfg = _get_auto_schedule(db)
+            now = dt.datetime.now(MSK_TZ)
+            day = now.strftime("%Y-%m-%d")
+            hm = now.strftime("%H:%M")
+            # чистим ключи прошлых дней
+            _scheduler_seen = {k for k in _scheduler_seen if k.startswith(day + "|")}
+            if cfg.get("enabled"):
+                for slot in (cfg.get("slots") or []):
+                    key = f"{day}|{slot}"
+                    if hm == slot and key not in _scheduler_seen:
+                        _scheduler_seen.add(key)
+                        try:
+                            await _run_auto_slot(slot)
+                        except Exception as e:
+                            try:
+                                db.add_audit_event(
+                                    actor="system",
+                                    action="auto_run",
+                                    item_type="mixed",
+                                    result="error",
+                                    meta={"slot": slot, "error": str(e)},
+                                )
+                            except Exception:
+                                pass
+            await asyncio.sleep(20)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("auto scheduler loop failed")
+            await asyncio.sleep(20)
 
 
 def _store_to_out(s: Store) -> StoreOut:
@@ -564,6 +720,16 @@ def api_set_settings(body: dict[str, str], db: Database = Depends(get_db), _: Us
     return {"ok": True}
 
 
+@app.get("/api/auto-schedule")
+def api_get_auto_schedule(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
+    return _get_auto_schedule(db)
+
+
+@app.post("/api/auto-schedule")
+def api_set_auto_schedule(body: AutoScheduleBody, db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
+    return _set_auto_schedule(db, body)
+
+
 # ---------- API: prompts ----------
 @app.get("/api/prompts", response_model=list[PromptOut])
 def api_list_prompts(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
@@ -758,6 +924,31 @@ def api_log_tail(db: Database = Depends(get_db), _: UserRow = Depends(require_pe
     except Exception as e:
         log.warning("log tail failed: %s", e)
         return {"text": str(e)}
+
+
+@app.on_event("startup")
+async def _startup_scheduler():
+    global _scheduler_task
+    try:
+        db = get_db()
+        _bootstrap_admin_if_needed(db)
+    except Exception:
+        log.exception("startup bootstrap failed")
+    if _scheduler_task is None or _scheduler_task.done():
+        _scheduler_task = asyncio.create_task(_auto_scheduler_loop())
+        log.info("Auto-scheduler started (MSK)")
+
+
+@app.on_event("shutdown")
+async def _shutdown_scheduler():
+    global _scheduler_task
+    if _scheduler_task and not _scheduler_task.done():
+        _scheduler_task.cancel()
+        try:
+            await _scheduler_task
+        except Exception:
+            pass
+    _scheduler_task = None
 
 
 # ---------- Static SPA & PWA ----------

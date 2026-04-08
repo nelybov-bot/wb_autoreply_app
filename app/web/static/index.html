@@ -299,16 +299,24 @@
           <div class="form-card" style="margin-top: 18px;">
             <h2>Интерфейс</h2>
             <div class="form-group">
-              <label><input type="checkbox" id="ui-compact"> Компактный режим</label>
+              <label class="checkbox-row"><input type="checkbox" id="ui-compact"> Компактный режим</label>
               <small class="form-hint">Меньше отступов и высоты элементов.</small>
             </div>
             <div class="form-group">
-              <label><input type="checkbox" id="ui-dim-bg"> Приглушить фон</label>
+              <label class="checkbox-row"><input type="checkbox" id="ui-dim-bg"> Приглушить фон</label>
               <small class="form-hint">Менее яркий градиент — легче читать таблицы.</small>
             </div>
             <div class="form-group">
-              <label><input type="checkbox" id="ui-reduce-motion"> Уменьшить анимации</label>
+              <label class="checkbox-row"><input type="checkbox" id="ui-reduce-motion"> Уменьшить анимации</label>
               <small class="form-hint">Меньше “прыжков” и эффектов.</small>
+            </div>
+            <div class="form-group">
+              <label class="checkbox-row"><input type="checkbox" id="ui-bg-motion"> Движение фона</label>
+              <small class="form-hint">Фон чуть “плывёт” при скролле.</small>
+            </div>
+            <div class="form-group">
+              <label class="checkbox-row"><input type="checkbox" id="theme-dark"> Тёмная тема</label>
+              <small class="form-hint">Читаемо в любое время.</small>
             </div>
             <div class="form-group">
               <label>Длительность тостов</label>
@@ -319,11 +327,32 @@
               </select>
             </div>
             <div class="form-group">
-              <label><input type="checkbox" id="ui-confirm-danger"> Подтверждать удаления</label>
+              <label class="checkbox-row"><input type="checkbox" id="ui-confirm-danger"> Подтверждать удаления</label>
               <small class="form-hint">Для магазинов/пользователей и других опасных действий.</small>
             </div>
             <div class="toolbar" style="margin: 10px 0 0; padding: 10px;">
               <button type="button" class="btn btn-secondary btn-sm" id="ui-reset">Сбросить UI</button>
+            </div>
+          </div>
+
+          <div class="form-card" style="margin-top: 18px;">
+            <h2>Автозапуск (по времени)</h2>
+            <div class="form-group">
+              <label class="checkbox-row"><input type="checkbox" id="auto-enabled"> Включить автозапуск</label>
+              <small class="form-hint">В каждом слоте по очереди: Загрузить новые → Сгенерировать → Отправить.</small>
+            </div>
+            <div class="form-group">
+              <label>Слоты времени (MSK)</label>
+              <input type="text" id="auto-slots" placeholder="09:00, 13:30, 21:00">
+              <small class="form-hint">Можно несколько, через запятую.</small>
+            </div>
+            <div class="form-group" style="margin-top: 12px;">
+              <label>Магазины для авто</label>
+              <div id="auto-store-list" class="auto-store-list"></div>
+              <small class="form-hint">Выбери конкретные магазины, без “все подряд”.</small>
+            </div>
+            <div class="toolbar" style="margin: 10px 0 0; padding: 10px;">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-save-auto">Сохранить автозапуск</button>
             </div>
           </div>
         </div>

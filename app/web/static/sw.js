@@ -1,4 +1,4 @@
-const CACHE = 'wb-autoreply-v1';
+const CACHE = 'marketai-v2';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then(() => self.skipWaiting()));
