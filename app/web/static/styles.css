@@ -28,25 +28,103 @@
 }
 
 body.theme-dark {
-  --bg: #0b1220;
-  --bg-elevated: rgba(15, 23, 42, 0.92);
-  --bg-card: rgba(15, 23, 42, 0.72);
-  --border: #22304a;
-  --text: #e5e7eb;
+  --bg: #0f172a;
+  --bg-elevated: rgba(15, 23, 42, 0.94);
+  --bg-card: rgba(15, 23, 42, 0.84);
+  --border: #334155;
+  --text: #e2e8f0;
   --text-muted: #94a3b8;
-  --accent: #60a5fa;
-  --accent-hover: #3b82f6;
-  --accent-dim: rgba(96, 165, 250, 0.16);
-  --accent-glow: rgba(96, 165, 250, 0.32);
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --accent-dim: rgba(59, 130, 246, 0.18);
+  --accent-glow: rgba(59, 130, 246, 0.30);
   --danger: #ef4444;
   --danger-dim: rgba(239, 68, 68, 0.14);
-  --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.25), 0 18px 60px rgba(0, 0, 0, 0.35);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.30), 0 14px 40px rgba(0, 0, 0, 0.38);
   --shadow-header: 0 2px 12px rgba(0, 0, 0, 0.35);
 }
 
 body.theme-dark::after {
-  opacity: 0.38;
-  filter: saturate(1.1) brightness(0.9);
+  opacity: 0.14;
+  filter: saturate(0.75) brightness(0.55);
+}
+
+body.theme-dark .header {
+  background: rgba(15, 23, 42, 0.78);
+  border-bottom-color: #334155;
+}
+
+body.theme-dark .tabs {
+  background: rgba(15, 23, 42, 0.72);
+  border-bottom-color: #334155;
+}
+
+body.theme-dark .tab {
+  color: #94a3b8;
+}
+
+body.theme-dark .tab:hover {
+  color: #cbd5e1;
+}
+
+body.theme-dark .tab.active {
+  color: #dbeafe;
+  background: rgba(59, 130, 246, 0.22);
+}
+
+body.theme-dark .header-logo {
+  background: rgba(15, 23, 42, 0.92);
+  border-color: #334155;
+}
+
+body.theme-dark .header-user {
+  background: rgba(2, 6, 23, 0.5);
+  border-color: #334155;
+}
+
+body.theme-dark .toolbar,
+body.theme-dark .progress-wrap,
+body.theme-dark .items-table-wrap,
+body.theme-dark .summary-item {
+  background: rgba(15, 23, 42, 0.70);
+  border-color: #334155;
+}
+
+body.theme-dark .toolbar select,
+body.theme-dark .toolbar input[type="text"],
+body.theme-dark .toolbar input[type="search"],
+body.theme-dark .toolbar input[type="url"],
+body.theme-dark .form-group input,
+body.theme-dark .form-group select,
+body.theme-dark .form-group textarea {
+  background: rgba(2, 6, 23, 0.42);
+  border-color: #334155;
+  color: #e2e8f0;
+}
+
+body.theme-dark .items-table tbody tr:nth-child(even) {
+  background: rgba(2, 6, 23, 0.25);
+}
+
+body.theme-dark .items-table tbody tr:hover {
+  background: rgba(59, 130, 246, 0.16);
+}
+
+body.theme-dark .items-table th {
+  background: rgba(2, 6, 23, 0.45);
+}
+
+body.theme-dark .btn-secondary {
+  background: rgba(2, 6, 23, 0.42);
+  border-color: #334155;
+  color: #e2e8f0;
+}
+
+body.theme-dark .btn-secondary:hover:not(:disabled) {
+  background: rgba(2, 6, 23, 0.65);
+  color: #dbeafe;
+  border-color: #3b82f6;
 }
 
 /* Чекбоксы в настройках — выравнивание как у нормальных клиентов */
