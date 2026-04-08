@@ -932,9 +932,19 @@ body.ui-compact .chart-section { padding: 22px; padding-left: 26px; }
 }
 
 /* Сводка / дашборд — glassmorphism + stagger появление */
+#panel-summary {
+  display: block;
+  width: 100%;
+}
+
+#panel-summary > .stats-grid,
+#panel-summary > .chart-section {
+  width: 100%;
+}
+
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 18px;
   margin-bottom: 36px;
 }
@@ -1182,7 +1192,7 @@ body.theme-dark .summary-item {
     min-height: 44px;
     padding: 10px 16px;
   }
-  .stats-grid {
+  #panel-summary .stats-grid {
     grid-template-columns: repeat(2, 1fr);
     gap: 16px;
     margin-bottom: 24px;
@@ -1236,7 +1246,7 @@ body.theme-dark .summary-item {
 }
 
 @media (max-width: 480px) {
-  .stats-grid {
+  #panel-summary .stats-grid {
     grid-template-columns: 1fr;
   }
   .panel.active .stat-card:nth-child(3) { animation-delay: 0.1s; }
