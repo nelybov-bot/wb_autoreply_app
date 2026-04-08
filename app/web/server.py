@@ -310,6 +310,15 @@ class AutoScheduleBody(BaseModel):
 AUTO_SCHEDULE_KEY = "auto_schedule_json"
 _scheduler_task: Optional[asyncio.Task] = None
 _scheduler_seen: set[str] = set()
+_auto_run_task: Optional[asyncio.Task] = None
+_auto_state: dict = {
+    "running": False,
+    "slot": "",
+    "phase": "idle",
+    "last_started_at": "",
+    "last_finished_at": "",
+    "last_error": "",
+}
 
 def _normalize_slots(slots: list[str]) -> list[str]:
     out: list[str] = []
@@ -381,6 +390,7 @@ def _collect_pending_item_ids(db: Database, store_ids: list[int], *, limit_per_t
     return out
 
 async def _run_auto_slot(slot: str) -> None:
+    global _auto_state
     db = get_db()
     cfg = _get_auto_schedule(db)
     if not cfg.get("enabled"):
@@ -389,36 +399,58 @@ async def _run_auto_slot(slot: str) -> None:
     stores = [s for s in db.list_stores() if s.active and s.id in store_ids]
     if not stores:
         return
-    deleted = db.clear_items([s.id for s in stores])
-    added = await load_new_all(db, stores)
-    item_ids = _collect_pending_item_ids(db, [s.id for s in stores])
-    gen_ok = gen_failed = 0
-    sent_ok = sent_skipped = sent_failed = 0
-    key = (db.get_setting("openai_key") or "").strip()
-    if item_ids and key:
-        gen_ok, gen_failed = await generate_mass(db, item_ids, key, model="gpt-5.2")
-        sent_ok, sent_skipped, sent_failed = await send_mass_all(db, item_ids)
-    db.add_audit_event(
-        actor="system",
-        action="auto_run",
-        item_type="mixed",
-        result="ok",
-        meta={
-            "slot": slot,
-            "store_ids": [s.id for s in stores],
-            "deleted_before_load": deleted,
-            "added": added,
-            "candidates": len(item_ids),
-            "gen_ok": gen_ok,
-            "gen_failed": gen_failed,
-            "sent_ok": sent_ok,
-            "sent_skipped": sent_skipped,
-            "sent_failed": sent_failed,
-        },
-    )
+    started = dt.datetime.now(MSK_TZ).isoformat(timespec="seconds")
+    _auto_state.update({
+        "running": True,
+        "slot": slot,
+        "phase": "load_new",
+        "last_started_at": started,
+        "last_error": "",
+    })
+    try:
+        deleted = db.clear_items([s.id for s in stores])
+        added = await load_new_all(db, stores)
+        _auto_state["phase"] = "generate"
+        item_ids = _collect_pending_item_ids(db, [s.id for s in stores])
+        gen_ok = gen_failed = 0
+        sent_ok = sent_skipped = sent_failed = 0
+        key = (db.get_setting("openai_key") or "").strip()
+        if item_ids and key:
+            gen_ok, gen_failed = await generate_mass(db, item_ids, key, model="gpt-5.2")
+            _auto_state["phase"] = "send"
+            sent_ok, sent_skipped, sent_failed = await send_mass_all(db, item_ids)
+        db.add_audit_event(
+            actor="system",
+            action="auto_run",
+            item_type="mixed",
+            result="ok",
+            meta={
+                "slot": slot,
+                "store_ids": [s.id for s in stores],
+                "deleted_before_load": deleted,
+                "added": added,
+                "candidates": len(item_ids),
+                "gen_ok": gen_ok,
+                "gen_failed": gen_failed,
+                "sent_ok": sent_ok,
+                "sent_skipped": sent_skipped,
+                "sent_failed": sent_failed,
+            },
+        )
+        _auto_state["phase"] = "done"
+    except asyncio.CancelledError:
+        _auto_state["phase"] = "cancelled"
+        raise
+    except Exception as e:
+        _auto_state["phase"] = "error"
+        _auto_state["last_error"] = str(e)
+        raise
+    finally:
+        _auto_state["running"] = False
+        _auto_state["last_finished_at"] = dt.datetime.now(MSK_TZ).isoformat(timespec="seconds")
 
 async def _auto_scheduler_loop() -> None:
-    global _scheduler_seen
+    global _scheduler_seen, _auto_run_task
     while True:
         try:
             db = get_db()
@@ -434,7 +466,8 @@ async def _auto_scheduler_loop() -> None:
                     if hm == slot and key not in _scheduler_seen:
                         _scheduler_seen.add(key)
                         try:
-                            await _run_auto_slot(slot)
+                            _auto_run_task = asyncio.create_task(_run_auto_slot(slot))
+                            await _auto_run_task
                         except Exception as e:
                             try:
                                 db.add_audit_event(
@@ -446,12 +479,38 @@ async def _auto_scheduler_loop() -> None:
                                 )
                             except Exception:
                                 pass
+                        finally:
+                            _auto_run_task = None
             await asyncio.sleep(20)
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception("auto scheduler loop failed")
             await asyncio.sleep(20)
+
+def _auto_status(db: Database) -> dict:
+    cfg = _get_auto_schedule(db)
+    now = dt.datetime.now(MSK_TZ)
+    hm = now.strftime("%H:%M")
+    # ближайший слот сегодня/завтра
+    next_slot = ""
+    slots = cfg.get("slots") or []
+    if slots:
+        for s in slots:
+            if s >= hm:
+                next_slot = s
+                break
+        if not next_slot:
+            next_slot = slots[0] + " (+1d)"
+    out = dict(_auto_state)
+    out.update({
+        "enabled": bool(cfg.get("enabled")),
+        "slots": slots,
+        "store_ids": cfg.get("store_ids") or [],
+        "next_slot": next_slot,
+        "timezone": "Europe/Moscow",
+    })
+    return out
 
 
 def _store_to_out(s: Store) -> StoreOut:
@@ -728,6 +787,28 @@ def api_get_auto_schedule(db: Database = Depends(get_db), _: UserRow = Depends(r
 @app.post("/api/auto-schedule")
 def api_set_auto_schedule(body: AutoScheduleBody, db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
     return _set_auto_schedule(db, body)
+
+
+@app.get("/api/auto-schedule/status")
+def api_auto_schedule_status(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
+    return _auto_status(db)
+
+
+@app.post("/api/auto-schedule/stop")
+async def api_auto_schedule_stop(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
+    global _auto_run_task
+    if _auto_run_task and not _auto_run_task.done():
+        _auto_run_task.cancel()
+        try:
+            await _auto_run_task
+        except Exception:
+            pass
+        _auto_run_task = None
+        _auto_state["running"] = False
+        _auto_state["phase"] = "cancelled"
+        _auto_state["last_finished_at"] = dt.datetime.now(MSK_TZ).isoformat(timespec="seconds")
+        return {"ok": True, "stopped": True}
+    return {"ok": True, "stopped": False}
 
 
 # ---------- API: prompts ----------

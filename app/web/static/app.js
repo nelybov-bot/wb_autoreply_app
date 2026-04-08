@@ -370,6 +370,44 @@
     return Array.from(wrap.querySelectorAll('input[type="checkbox"]:checked')).map(x => Number(x.value));
   }
 
+  let _autoStatusTimer = null;
+  async function refreshAutoStatus() {
+    const el = document.getElementById('auto-status-text');
+    if (!el) return;
+    try {
+      const s = await api('/auto-schedule/status');
+      const phaseMap = {
+        idle: 'ожидание',
+        load_new: 'загрузка новых',
+        generate: 'генерация',
+        send: 'отправка',
+        done: 'завершено',
+        cancelled: 'остановлено',
+        error: 'ошибка',
+      };
+      const phase = phaseMap[s.phase] || (s.phase || '—');
+      const run = s.running ? 'Выполняется' : 'Не выполняется';
+      const slot = s.slot ? `слот ${s.slot}` : '—';
+      const next = s.next_slot ? `следующий ${s.next_slot}` : 'нет слотов';
+      const err = s.last_error ? ` · ошибка: ${s.last_error}` : '';
+      el.textContent = `${run} · этап: ${phase} · текущий: ${slot} · ${next}${err}`;
+      const stopBtn = document.getElementById('btn-stop-auto');
+      if (stopBtn) stopBtn.disabled = !s.running;
+    } catch (e) {
+      el.textContent = 'Не удалось получить статус автозапуска';
+    }
+  }
+
+  function ensureAutoStatusPolling() {
+    if (_autoStatusTimer) return;
+    _autoStatusTimer = setInterval(() => {
+      const panel = document.getElementById('panel-settings');
+      if (panel && panel.classList.contains('active')) {
+        refreshAutoStatus();
+      }
+    }, 3000);
+  }
+
   // ---- Items (reviews / questions) ----
   let reviews = [];
   let questions = [];
@@ -750,6 +788,7 @@
         stores = await api('/stores');
       }
       renderAutoStoreList(autoCfg.store_ids || []);
+      await refreshAutoStatus();
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -802,6 +841,19 @@
       try {
         await api('/auto-schedule', { method: 'POST', body: JSON.stringify({ enabled, slots, store_ids }) });
         toast('Автозапуск сохранён');
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+  }
+
+  const btnStopAuto = document.getElementById('btn-stop-auto');
+  if (btnStopAuto) {
+    btnStopAuto.addEventListener('click', async () => {
+      try {
+        const r = await api('/auto-schedule/stop', { method: 'POST', body: JSON.stringify({}) });
+        toast(r && r.stopped ? 'Автозапуск остановлен' : 'Сейчас автозапуск не выполняется');
+        refreshAutoStatus();
       } catch (err) {
         toast(err.message, 'error');
       }
@@ -1128,6 +1180,7 @@
     applyUiPrefs();
     wireUiPrefs();
     syncBgParallaxListener();
+    ensureAutoStatusPolling();
     if (!me) {
       showLogin();
       return;
