@@ -10,6 +10,22 @@
   const STORAGE_UI_THEME = 'marketai_ui_theme';
   const STORAGE_UI_TOAST_MS = 'marketai_ui_toast_ms';
   const STORAGE_UI_CONFIRM_DANGER = 'marketai_ui_confirm_danger';
+  const STORAGE_UI_PREFS_VERSION = 'marketai_ui_prefs_version';
+  const UI_PREFS_VERSION = '2';
+
+  function migrateUiPrefsIfNeeded() {
+    try {
+      const current = localStorage.getItem(STORAGE_UI_PREFS_VERSION) || '';
+      if (current === UI_PREFS_VERSION) return;
+      // Reset old visual prefs once to avoid inheriting heavy/legacy look
+      localStorage.removeItem(STORAGE_UI_COMPACT);
+      localStorage.removeItem(STORAGE_UI_DIM_BG);
+      localStorage.removeItem(STORAGE_UI_REDUCE_MOTION);
+      localStorage.removeItem(STORAGE_UI_BG_MOTION);
+      localStorage.removeItem(STORAGE_UI_THEME);
+      localStorage.setItem(STORAGE_UI_PREFS_VERSION, UI_PREFS_VERSION);
+    } catch (_) {}
+  }
 
   function getUiToastMs() {
     const v = parseInt(localStorage.getItem(STORAGE_UI_TOAST_MS) || '4000', 10);
@@ -1223,6 +1239,7 @@
 
   // ---- Init ----
   loadMe(true).then(me => {
+    migrateUiPrefsIfNeeded();
     applyUiPrefs();
     wireUiPrefs();
     syncBgParallaxListener();

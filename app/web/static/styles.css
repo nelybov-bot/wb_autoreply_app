@@ -1005,12 +1005,7 @@ body.ui-compact .chart-section { padding: 22px; padding-left: 26px; }
   margin-bottom: 16px;
 }
 
-/* Сводка / дашборд — glassmorphism + stagger появление */
-#panel-summary {
-  display: block;
-  width: 100%;
-}
-
+/* Сводка / дашборд */
 #panel-summary > .stats-grid,
 #panel-summary > .chart-section {
   width: 100%;
