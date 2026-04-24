@@ -2,9 +2,9 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=Manrope:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
-  --bg: #f1f5f9;
+  --bg: #f8fafc;
   --bg-elevated: #ffffff;
-  --bg-card: rgba(255, 255, 255, 0.85);
+  --bg-card: #ffffff;
   --border: #e2e8f0;
   --text: #0f172a;
   --text-muted: #64748b;
@@ -17,9 +17,9 @@
   --radius: 12px;
   --radius-sm: 8px;
   --radius-lg: 16px;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-  --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.08);
-  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.04), 0 12px 40px rgba(0, 0, 0, 0.06);
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-lg: 0 8px 24px rgba(15, 23, 42, 0.08);
+  --shadow-card: 0 6px 18px rgba(15, 23, 42, 0.06);
   --shadow-header: 0 2px 12px rgba(0, 0, 0, 0.04);
   --font-sans: 'DM Sans', system-ui, sans-serif;
   --font-heading: 'Manrope', var(--font-sans);
@@ -388,7 +388,7 @@ body.ui-reduce-motion::after {
 }
 
 .panel.active {
-  display: block;
+  display: block !important;
 }
 
 @keyframes panelIn {
@@ -539,21 +539,16 @@ body.ui-reduce-motion::after {
 
 .store-card {
   background: var(--bg-card);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 20px;
-  padding-left: 24px;
-  border-left: 4px solid transparent;
+  padding: 18px;
   box-shadow: var(--shadow-card);
-  transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
+  transition: box-shadow var(--transition), transform var(--transition);
 }
 
 .store-card:hover {
-  border-left-color: var(--accent);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06), 0 20px 50px rgba(0, 0, 0, 0.08);
-  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-1px);
 }
 
 .store-card h3 {
@@ -591,21 +586,17 @@ body.ui-reduce-motion::after {
 /* Форма добавления магазина — glassmorphism + двойная тень */
 .form-card {
   background: var(--bg-card);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 28px;
-  padding-left: 32px;
+  padding: 22px;
   max-width: 480px;
   margin-bottom: 28px;
-  border-left: 4px solid var(--accent);
   box-shadow: var(--shadow-card);
   transition: box-shadow var(--transition), transform var(--transition);
 }
 
 .form-card:hover {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06), 0 20px 50px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-lg);
 }
 
 .form-card h2 {
@@ -1034,21 +1025,16 @@ body.ui-compact .chart-section { padding: 22px; padding-left: 26px; }
 
 .stat-card {
   background: var(--bg-card);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 22px;
-  padding-left: 26px;
-  border-left: 4px solid var(--accent);
+  padding: 18px;
   box-shadow: var(--shadow-card);
-  transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
+  transition: box-shadow var(--transition), transform var(--transition);
 }
 
 .stat-card:hover {
-  border-left-color: var(--accent-hover);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06), 0 20px 50px rgba(0, 0, 0, 0.08);
-  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-1px);
 }
 
 .stat-card .value {
@@ -1079,15 +1065,15 @@ body.ui-compact .chart-section { padding: 22px; padding-left: 26px; }
 
 .chart-section {
   background: var(--bg-card);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 28px;
-  padding-left: 32px;
+  padding: 22px;
   margin-bottom: 28px;
-  border-left: 4px solid var(--accent);
   box-shadow: var(--shadow-card);
+}
+
+#panel-auto .auto-card {
+  max-width: 860px;
 }
 
 .chart-section h3 {

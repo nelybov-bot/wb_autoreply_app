@@ -102,7 +102,9 @@
       }
       const msg = Array.isArray(err.detail) ? err.detail.map(d => d.msg || d).join(' ') : (err.detail || res.statusText);
       if (res.status === 401) {
-        showLogin();
+        if (!location.pathname.startsWith('/login')) {
+          window.location.href = '/login';
+        }
       }
       throw new Error(msg);
     }
@@ -1069,22 +1071,6 @@
   // ---- Auth UI ----
   let currentUser = null;
 
-  function showLogin() {
-    const m = document.getElementById('modal-login');
-    if (!m) return;
-    m.style.display = 'flex';
-    setTimeout(() => {
-      const u = document.getElementById('login-username');
-      if (u) u.focus();
-    }, 50);
-  }
-
-  function hideLogin() {
-    const m = document.getElementById('modal-login');
-    if (!m) return;
-    m.style.display = 'none';
-  }
-
   async function loadMe(silent = false) {
     try {
       const me = await api('/auth/me');
@@ -1111,44 +1097,18 @@
     }
   }
 
-  async function doLogin() {
-    const u = (document.getElementById('login-username').value || '').trim();
-    const p = document.getElementById('login-password').value || '';
-    if (!u || !p) {
-      toast('Введите логин и пароль', 'error');
-      return;
-    }
-    try {
-      await api('/auth/login', { method: 'POST', body: JSON.stringify({ username: u, password: p }) });
-      hideLogin();
-      toast('Вход выполнен');
-      await loadMe(true);
-      await loadStores();
-      fillStoreSelects();
-      await loadReviews();
-      await loadQuestions();
-      await loadStats();
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  }
-
   async function doLogout() {
     try {
       await api('/auth/logout', { method: 'POST', body: JSON.stringify({}) });
     } catch (_) {}
     currentUser = null;
-    showLogin();
+    window.location.href = '/login';
   }
 
-  const btnLogin = document.getElementById('btn-login');
-  if (btnLogin) btnLogin.addEventListener('click', doLogin);
   const btnLogout = document.getElementById('btn-logout');
   if (btnLogout) btnLogout.addEventListener('click', doLogout);
   const btnLogoutHeader = document.getElementById('btn-logout-header');
   if (btnLogoutHeader) btnLogoutHeader.addEventListener('click', doLogout);
-  const passEl = document.getElementById('login-password');
-  if (passEl) passEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
 
   async function refreshUsersSection() {
     const adminWrap = document.getElementById('users-admin-only');
@@ -1245,7 +1205,7 @@
     syncBgParallaxListener();
     ensureAutoStatusPolling();
     if (!me) {
-      showLogin();
+      window.location.href = '/login';
       return;
     }
     loadStats();
