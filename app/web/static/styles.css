@@ -211,6 +211,44 @@ body.ui-reduce-motion::after {
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
+.brand-watermarks {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.brand-watermarks .wm {
+  position: absolute;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  opacity: 0.08;
+  user-select: none;
+}
+
+.brand-watermarks .wm-wb {
+  top: 16%;
+  left: 7%;
+  font-size: clamp(48px, 10vw, 120px);
+  color: #7c3aed;
+}
+
+.brand-watermarks .wm-ozon {
+  top: 18%;
+  right: 8%;
+  font-size: clamp(38px, 8vw, 92px);
+  color: #0ea5e9;
+}
+
+.brand-watermarks .wm-ym {
+  bottom: 10%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: clamp(44px, 9vw, 106px);
+  color: #ef4444;
+}
+
 /* Шапка — glassmorphism + тень */
 .header {
   position: relative;
@@ -1073,7 +1111,12 @@ body.ui-compact .chart-section { padding: 22px; padding-left: 26px; }
 }
 
 #panel-auto .auto-card {
-  max-width: 860px;
+  width: 100%;
+  max-width: none;
+}
+
+#panel-auto .auto-store-list {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
 }
 
 .chart-section h3 {
