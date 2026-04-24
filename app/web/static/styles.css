@@ -182,8 +182,8 @@ body::after {
   background-repeat: no-repeat;
   pointer-events: none;
   z-index: 0;
-  opacity: 0.92;
-  animation: bgPulse 10s ease-in-out infinite;
+  opacity: 0.35;
+  animation: none;
   transform: translate3d(0, 0, 0);
   will-change: transform;
 }
@@ -668,15 +668,13 @@ body.ui-reduce-motion::after {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   margin-bottom: 16px;
-  padding: 12px 12px;
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(226, 232, 240, 0.9);
+  padding: 10px 10px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  box-shadow: none;
 }
 
 .toolbar select {
@@ -789,13 +787,11 @@ body.ui-reduce-motion::after {
 .progress-wrap {
   margin: 16px 0;
   display: none;
-  padding: 12px 12px;
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(226, 232, 240, 0.9);
+  padding: 10px 10px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  box-shadow: none;
 }
 
 .progress-wrap.visible {

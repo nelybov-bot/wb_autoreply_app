@@ -463,23 +463,35 @@ class Database:
             self._conn.execute("DELETE FROM items WHERE store_id=?", (store_id,))
             self._conn.commit()
 
-    def clear_items(self, store_ids: Optional[list[int]] = None) -> int:
+    def clear_items(self, store_ids: Optional[list[int]] = None, item_types: Optional[list[str]] = None) -> int:
         """
         Удаляет элементы (отзывы/вопросы) из items.
         - store_ids=None: очищает все items
         - store_ids=[...]: очищает только по указанным магазинам
+        - item_types=["review"|"question", ...]: ограничивает по типам
         Возвращает количество удалённых строк.
         """
         with _DB_LOCK:
+            where: list[str] = []
+            params: list = []
             if store_ids is None:
-                cur = self._conn.execute("DELETE FROM items")
-                self._conn.commit()
-                return int(cur.rowcount or 0)
-            ids = [int(x) for x in (store_ids or [])]
-            if not ids:
-                return 0
-            placeholders = ",".join("?" * len(ids))
-            cur = self._conn.execute(f"DELETE FROM items WHERE store_id IN ({placeholders})", ids)
+                pass
+            else:
+                ids = [int(x) for x in (store_ids or [])]
+                if not ids:
+                    return 0
+                placeholders = ",".join("?" * len(ids))
+                where.append(f"store_id IN ({placeholders})")
+                params.extend(ids)
+            tps = [str(x).strip() for x in (item_types or []) if str(x).strip() in ("review", "question")]
+            if tps:
+                placeholders = ",".join("?" * len(tps))
+                where.append(f"item_type IN ({placeholders})")
+                params.extend(tps)
+            sql = "DELETE FROM items"
+            if where:
+                sql += " WHERE " + " AND ".join(where)
+            cur = self._conn.execute(sql, params)
             self._conn.commit()
             return int(cur.rowcount or 0)
 

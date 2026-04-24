@@ -61,6 +61,7 @@
     <button type="button" class="tab" data-tab="stores">Магазины</button>
     <button type="button" class="tab" data-tab="reviews">Отзывы</button>
     <button type="button" class="tab" data-tab="questions">Вопросы</button>
+    <button type="button" class="tab" data-tab="auto">Автозапуск</button>
     <button type="button" class="tab" data-tab="settings">Настройки</button>
     <button type="button" class="tab" data-tab="log">Лог</button>
   </nav>
@@ -152,20 +153,15 @@
           <option value="ignored">Игнор</option>
           <option value="all">Все статусы</option>
         </select>
-        <select id="reviews-has-answer">
-          <option value="">Ответ: все</option>
-          <option value="yes">Ответ: есть</option>
-          <option value="no">Ответ: нет</option>
-        </select>
         <button type="button" class="btn btn-primary" id="btn-load-reviews">Загрузить новые</button>
-        <select id="reviews-generate-mode" title="Режим генерации" style="min-width: 240px;">
-          <option value="new_only">Генерировать: только новые</option>
-          <option value="all">Генерировать: включая старые (перезапись)</option>
-        </select>
         <button type="button" class="btn btn-secondary" id="btn-generate-reviews">Сгенерировать выбранные</button>
         <button type="button" class="btn btn-secondary" id="btn-send-reviews">Отправить выбранные</button>
       </div>
       <div class="toolbar" style="margin-top: 10px;">
+        <select id="reviews-generate-mode" title="Режим генерации" style="min-width: 220px;">
+          <option value="new_only">Генерация: только новые</option>
+          <option value="all">Генерация: с перезаписью</option>
+        </select>
         <select id="reviews-template-rating" title="Фильтр по оценке">
           <option value="all">Шаблон: все оценки</option>
           <option value="1">Шаблон: 1★</option>
@@ -221,11 +217,6 @@
           <option value="ignored">Игнор</option>
           <option value="all">Все статусы</option>
         </select>
-        <select id="questions-has-answer">
-          <option value="">Ответ: все</option>
-          <option value="yes">Ответ: есть</option>
-          <option value="no">Ответ: нет</option>
-        </select>
         <button type="button" class="btn btn-primary" id="btn-load-questions">Загрузить новые</button>
         <select id="questions-generate-mode" title="Режим генерации" style="min-width: 240px;">
           <option value="new_only">Генерировать: только новые</option>
@@ -263,6 +254,63 @@
       </div>
     </section>
 
+    <!-- Автозапуск -->
+    <section id="panel-auto" class="panel">
+      <div class="settings-layout">
+        <div class="settings-col">
+          <div class="form-card">
+            <h2>Автозапуск</h2>
+            <div class="form-group">
+              <label class="checkbox-row"><input type="checkbox" id="auto-enabled"> Включить автозапуск</label>
+              <small class="form-hint">Цикл: Загрузить новые → Сгенерировать → Отправить.</small>
+            </div>
+            <div class="form-group">
+              <label>Режим расписания</label>
+              <select id="auto-schedule-mode">
+                <option value="slots">По времени (слоты)</option>
+                <option value="interval">По интервалу (каждые N часов)</option>
+              </select>
+            </div>
+            <div class="form-group" id="auto-slots-wrap">
+              <label>Слоты времени (MSK)</label>
+              <input type="text" id="auto-slots" placeholder="09:00, 13:30, 21:00">
+              <small class="form-hint">Можно несколько, через запятую.</small>
+            </div>
+            <div class="form-group" id="auto-interval-wrap" style="display:none;">
+              <label>Интервал запуска</label>
+              <select id="auto-interval-hours">
+                <option value="1">Каждый 1 час</option>
+                <option value="2">Каждые 2 часа</option>
+                <option value="3">Каждые 3 часа</option>
+                <option value="4">Каждые 4 часа</option>
+                <option value="6">Каждые 6 часов</option>
+                <option value="8">Каждые 8 часов</option>
+                <option value="12">Каждые 12 часов</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Проверять в цикле</label>
+              <label class="checkbox-row"><input type="checkbox" id="auto-run-reviews" checked> Отзывы</label>
+              <label class="checkbox-row"><input type="checkbox" id="auto-run-questions" checked> Вопросы</label>
+            </div>
+            <div class="form-group" style="margin-top: 12px;">
+              <label>Магазины для авто</label>
+              <div id="auto-store-list" class="auto-store-list"></div>
+              <small class="form-hint">Выбери конкретные магазины, без “все подряд”.</small>
+            </div>
+            <div class="toolbar" style="margin: 10px 0 0; padding: 10px;">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-save-auto">Сохранить автозапуск</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-stop-auto">Остановить сейчас</button>
+            </div>
+            <div class="form-group" style="margin-top:10px;">
+              <label>Статус автозапуска</label>
+              <div class="form-hint" id="auto-status-text">—</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Настройки -->
     <section id="panel-settings" class="panel">
       <div class="settings-layout">
@@ -292,6 +340,9 @@
             <div class="form-group">
               <label>ID чата</label>
               <input type="text" id="setting-telegram_chat_id" placeholder="chat_id">
+            </div>
+            <div class="form-group">
+              <label class="checkbox-row"><input type="checkbox" id="setting-telegram_enabled"> Включить Telegram-уведомления</label>
             </div>
             <button type="button" class="btn btn-primary" id="btn-save-settings">Сохранить настройки</button>
           </div>
@@ -335,31 +386,6 @@
             </div>
           </div>
 
-          <div class="form-card" style="margin-top: 18px;">
-            <h2>Автозапуск (по времени)</h2>
-            <div class="form-group">
-              <label class="checkbox-row"><input type="checkbox" id="auto-enabled"> Включить автозапуск</label>
-              <small class="form-hint">В каждом слоте по очереди: Загрузить новые → Сгенерировать → Отправить.</small>
-            </div>
-            <div class="form-group">
-              <label>Слоты времени (MSK)</label>
-              <input type="text" id="auto-slots" placeholder="09:00, 13:30, 21:00">
-              <small class="form-hint">Можно несколько, через запятую.</small>
-            </div>
-            <div class="form-group" style="margin-top: 12px;">
-              <label>Магазины для авто</label>
-              <div id="auto-store-list" class="auto-store-list"></div>
-              <small class="form-hint">Выбери конкретные магазины, без “все подряд”.</small>
-            </div>
-            <div class="toolbar" style="margin: 10px 0 0; padding: 10px;">
-              <button type="button" class="btn btn-primary btn-sm" id="btn-save-auto">Сохранить автозапуск</button>
-              <button type="button" class="btn btn-secondary btn-sm" id="btn-stop-auto">Остановить сейчас</button>
-            </div>
-            <div class="form-group" style="margin-top:10px;">
-              <label>Статус автозапуска</label>
-              <div class="form-hint" id="auto-status-text">—</div>
-            </div>
-          </div>
         </div>
 
         <div class="settings-col">

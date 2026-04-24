@@ -306,8 +306,13 @@ class AutoScheduleBody(BaseModel):
     enabled: bool = False
     slots: list[str] = []   # ["09:00","13:30"]
     store_ids: list[int] = []  # обязательный выбор магазинов
+    schedule_mode: str = "slots"  # slots | interval
+    interval_hours: int = 1
+    run_reviews: bool = True
+    run_questions: bool = True
 
 AUTO_SCHEDULE_KEY = "auto_schedule_json"
+AUTO_LAST_RUN_KEY = "auto_schedule_last_run_at"
 _scheduler_task: Optional[asyncio.Task] = None
 _scheduler_seen: set[str] = set()
 _auto_run_task: Optional[asyncio.Task] = None
@@ -338,7 +343,15 @@ def _normalize_slots(slots: list[str]) -> list[str]:
 
 def _get_auto_schedule(db: Database) -> dict:
     raw = (db.get_setting(AUTO_SCHEDULE_KEY) or "").strip()
-    cfg = {"enabled": False, "slots": [], "store_ids": []}
+    cfg = {
+        "enabled": False,
+        "slots": [],
+        "store_ids": [],
+        "schedule_mode": "slots",
+        "interval_hours": 1,
+        "run_reviews": True,
+        "run_questions": True,
+    }
     if not raw:
         return cfg
     try:
@@ -346,23 +359,38 @@ def _get_auto_schedule(db: Database) -> dict:
         cfg["enabled"] = bool(obj.get("enabled"))
         cfg["slots"] = _normalize_slots(obj.get("slots") or [])
         cfg["store_ids"] = [int(x) for x in (obj.get("store_ids") or [])]
+        mode = str(obj.get("schedule_mode") or "slots").strip().lower()
+        cfg["schedule_mode"] = mode if mode in ("slots", "interval") else "slots"
+        cfg["interval_hours"] = max(1, min(int(obj.get("interval_hours") or 1), 24))
+        cfg["run_reviews"] = bool(obj.get("run_reviews", True))
+        cfg["run_questions"] = bool(obj.get("run_questions", True))
     except Exception:
         pass
     return cfg
 
 def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
+    mode = (body.schedule_mode or "slots").strip().lower()
+    if mode not in ("slots", "interval"):
+        mode = "slots"
+    interval_hours = max(1, min(int(body.interval_hours or 1), 24))
     cfg = {
         "enabled": bool(body.enabled),
         "slots": _normalize_slots(body.slots or []),
         "store_ids": [int(x) for x in (body.store_ids or [])],
+        "schedule_mode": mode,
+        "interval_hours": interval_hours,
+        "run_reviews": bool(body.run_reviews),
+        "run_questions": bool(body.run_questions),
     }
+    if not cfg["run_reviews"] and not cfg["run_questions"]:
+        raise HTTPException(400, "Нужно включить хотя бы один тип: отзывы или вопросы")
     db.set_setting(AUTO_SCHEDULE_KEY, json.dumps(cfg, ensure_ascii=False))
     return cfg
 
-def _collect_pending_item_ids(db: Database, store_ids: list[int], *, limit_per_type: int = 2000) -> list[int]:
+def _collect_pending_item_ids(db: Database, store_ids: list[int], *, item_types: list[str], limit_per_type: int = 2000) -> list[int]:
     ids: list[int] = []
     for sid in store_ids:
-        for tp in ("review", "question"):
+        for tp in item_types:
             offset = 0
             while True:
                 page = db.list_items_filtered(
@@ -399,7 +427,8 @@ async def _run_auto_slot(slot: str) -> None:
     stores = [s for s in db.list_stores() if s.active and s.id in store_ids]
     if not stores:
         return
-    started = dt.datetime.now(MSK_TZ).isoformat(timespec="seconds")
+    started_dt = dt.datetime.now(MSK_TZ)
+    started = started_dt.isoformat(timespec="seconds")
     _auto_state.update({
         "running": True,
         "slot": slot,
@@ -408,10 +437,19 @@ async def _run_auto_slot(slot: str) -> None:
         "last_error": "",
     })
     try:
-        deleted = db.clear_items([s.id for s in stores])
+        run_reviews = bool(cfg.get("run_reviews", True))
+        run_questions = bool(cfg.get("run_questions", True))
+        item_types: list[str] = []
+        if run_reviews:
+            item_types.append("review")
+        if run_questions:
+            item_types.append("question")
+        if not item_types:
+            return
+        deleted = db.clear_items([s.id for s in stores], item_types=item_types)
         added = await load_new_all(db, stores)
         _auto_state["phase"] = "generate"
-        item_ids = _collect_pending_item_ids(db, [s.id for s in stores])
+        item_ids = _collect_pending_item_ids(db, [s.id for s in stores], item_types=item_types)
         gen_ok = gen_failed = 0
         sent_ok = sent_skipped = sent_failed = 0
         key = (db.get_setting("openai_key") or "").strip()
@@ -427,6 +465,7 @@ async def _run_auto_slot(slot: str) -> None:
             meta={
                 "slot": slot,
                 "store_ids": [s.id for s in stores],
+                "item_types": item_types,
                 "deleted_before_load": deleted,
                 "added": added,
                 "candidates": len(item_ids),
@@ -447,7 +486,12 @@ async def _run_auto_slot(slot: str) -> None:
         raise
     finally:
         _auto_state["running"] = False
-        _auto_state["last_finished_at"] = dt.datetime.now(MSK_TZ).isoformat(timespec="seconds")
+        finished_dt = dt.datetime.now(MSK_TZ)
+        _auto_state["last_finished_at"] = finished_dt.isoformat(timespec="seconds")
+        try:
+            db.set_setting(AUTO_LAST_RUN_KEY, finished_dt.isoformat(timespec="seconds"))
+        except Exception:
+            pass
 
 async def _auto_scheduler_loop() -> None:
     global _scheduler_seen, _auto_run_task
@@ -460,27 +504,49 @@ async def _auto_scheduler_loop() -> None:
             hm = now.strftime("%H:%M")
             # чистим ключи прошлых дней
             _scheduler_seen = {k for k in _scheduler_seen if k.startswith(day + "|")}
-            if cfg.get("enabled"):
-                for slot in (cfg.get("slots") or []):
-                    key = f"{day}|{slot}"
-                    if hm == slot and key not in _scheduler_seen:
-                        _scheduler_seen.add(key)
+            if cfg.get("enabled") and (_auto_run_task is None or _auto_run_task.done()):
+                mode = str(cfg.get("schedule_mode") or "slots")
+                run_reason = ""
+                if mode == "interval":
+                    interval_h = max(1, int(cfg.get("interval_hours") or 1))
+                    last_run_s = (db.get_setting(AUTO_LAST_RUN_KEY) or "").strip()
+                    due = False
+                    if not last_run_s:
+                        due = True
+                    else:
                         try:
-                            _auto_run_task = asyncio.create_task(_run_auto_slot(slot))
-                            await _auto_run_task
-                        except Exception as e:
-                            try:
-                                db.add_audit_event(
-                                    actor="system",
-                                    action="auto_run",
-                                    item_type="mixed",
-                                    result="error",
-                                    meta={"slot": slot, "error": str(e)},
-                                )
-                            except Exception:
-                                pass
-                        finally:
-                            _auto_run_task = None
+                            last_dt = dt.datetime.fromisoformat(last_run_s)
+                            if last_dt.tzinfo is None:
+                                last_dt = last_dt.replace(tzinfo=MSK_TZ)
+                            due = (now - last_dt).total_seconds() >= interval_h * 3600
+                        except Exception:
+                            due = True
+                    if due:
+                        run_reason = f"interval:{interval_h}h"
+                else:
+                    for slot in (cfg.get("slots") or []):
+                        key = f"{day}|{slot}"
+                        if hm == slot and key not in _scheduler_seen:
+                            _scheduler_seen.add(key)
+                            run_reason = slot
+                            break
+                if run_reason:
+                    try:
+                        _auto_run_task = asyncio.create_task(_run_auto_slot(run_reason))
+                        await _auto_run_task
+                    except Exception as e:
+                        try:
+                            db.add_audit_event(
+                                actor="system",
+                                action="auto_run",
+                                item_type="mixed",
+                                result="error",
+                                meta={"slot": run_reason, "error": str(e)},
+                            )
+                        except Exception:
+                            pass
+                    finally:
+                        _auto_run_task = None
             await asyncio.sleep(20)
         except asyncio.CancelledError:
             raise
@@ -495,18 +561,37 @@ def _auto_status(db: Database) -> dict:
     # ближайший слот сегодня/завтра
     next_slot = ""
     slots = cfg.get("slots") or []
-    if slots:
-        for s in slots:
-            if s >= hm:
-                next_slot = s
-                break
-        if not next_slot:
-            next_slot = slots[0] + " (+1d)"
+    if cfg.get("schedule_mode") == "interval":
+        interval_h = max(1, int(cfg.get("interval_hours") or 1))
+        last_run_s = (db.get_setting(AUTO_LAST_RUN_KEY) or "").strip()
+        if last_run_s:
+            try:
+                last_dt = dt.datetime.fromisoformat(last_run_s)
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=MSK_TZ)
+                due_at = last_dt + dt.timedelta(hours=interval_h)
+                next_slot = due_at.strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                next_slot = f"каждые {interval_h}ч"
+        else:
+            next_slot = "при первом цикле сразу"
+    else:
+        if slots:
+            for s in slots:
+                if s >= hm:
+                    next_slot = s
+                    break
+            if not next_slot:
+                next_slot = slots[0] + " (+1d)"
     out = dict(_auto_state)
     out.update({
         "enabled": bool(cfg.get("enabled")),
         "slots": slots,
         "store_ids": cfg.get("store_ids") or [],
+        "schedule_mode": cfg.get("schedule_mode") or "slots",
+        "interval_hours": int(cfg.get("interval_hours") or 1),
+        "run_reviews": bool(cfg.get("run_reviews", True)),
+        "run_questions": bool(cfg.get("run_questions", True)),
         "next_slot": next_slot,
         "timezone": "Europe/Moscow",
     })
@@ -768,7 +853,7 @@ def api_items_bulk(body: BulkItemsBody, db: Database = Depends(get_db), _: UserR
 # ---------- API: settings ----------
 @app.get("/api/settings")
 def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
-    keys = ["openai_key", "telegram_bot_token", "telegram_chat_id", "theme"]
+    keys = ["openai_key", "telegram_bot_token", "telegram_chat_id", "telegram_enabled", "theme"]
     return {k: db.get_setting(k) or "" for k in keys}
 
 
@@ -1041,7 +1126,7 @@ if STATIC_DIR.exists():
         db = get_db()
         _bootstrap_admin_if_needed(db)
         if _get_current_user(request, db):
-            return RedirectResponse(url="/")
+            return RedirectResponse(url="/app")
         return FileResponse(STATIC_DIR / "login.html")
 
     @app.get("/reset")
@@ -1049,6 +1134,10 @@ if STATIC_DIR.exists():
         return FileResponse(STATIC_DIR / "reset.html")
 
     @app.get("/")
+    def landing_page():
+        return FileResponse(STATIC_DIR / "landing.html")
+
+    @app.get("/app")
     def index(request: Request):
         db = get_db()
         _bootstrap_admin_if_needed(db)

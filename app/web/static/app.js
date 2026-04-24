@@ -113,11 +113,14 @@
     document.querySelectorAll('.tab').forEach(tab => {
       const id = tab.getAttribute('data-tab');
       if (id === 'settings') tab.style.display = canSettings ? '' : 'none';
+      else if (id === 'auto') tab.style.display = canSettings ? '' : 'none';
       else if (id === 'log') tab.style.display = (canLog || canOpsLog) ? '' : 'none';
     });
     const panelSettings = document.getElementById('panel-settings');
+    const panelAuto = document.getElementById('panel-auto');
     const panelLog = document.getElementById('panel-log');
     if (panelSettings) panelSettings.style.display = canSettings ? '' : 'none';
+    if (panelAuto) panelAuto.style.display = canSettings ? '' : 'none';
     if (panelLog) panelLog.style.display = (canLog || canOpsLog) ? '' : 'none';
   }
 
@@ -173,6 +176,7 @@
       if (id === 'stores') loadStores();
       if (id === 'reviews') { loadReviews(); resumePanelTask('reviews'); }
       if (id === 'questions') { loadQuestions(); resumePanelTask('questions'); }
+      if (id === 'auto') loadAutoSchedulePanel();
       if (id === 'settings') loadSettings();
       if (id === 'log') loadLog();
     });
@@ -199,11 +203,13 @@
         cancelled: 'остановлено',
         error: 'ошибка',
       };
+      const processed = (q.sent_reviews ?? 0) + (q.sent_questions ?? 0);
       const summary = [
         { k: 'Новых отзывов', v: String(q.new_reviews ?? 0) },
         { k: 'Новых вопросов', v: String(q.new_questions ?? 0) },
         { k: 'Сгенерировано (отзывы)', v: String(q.generated_reviews ?? 0) },
         { k: 'Сгенерировано (вопросы)', v: String(q.generated_questions ?? 0) },
+        { k: 'Обработано (отправлено)', v: String(processed) },
         { k: 'Магазины активные', v: `${storesMeta.active ?? 0} / ${storesMeta.total ?? 0}` },
         { k: 'Автозапуск', v: auto ? `${auto.running ? 'идёт' : 'ожидание'} · ${autoPhaseRu[auto.phase] || auto.phase || '—'}` : '—' },
         { k: 'Следующий слот (MSK)', v: auto?.next_slot || '—' },
@@ -410,7 +416,7 @@
   function ensureAutoStatusPolling() {
     if (_autoStatusTimer) return;
     _autoStatusTimer = setInterval(() => {
-      const panel = document.getElementById('panel-settings');
+      const panel = document.getElementById('panel-auto');
       if (panel && panel.classList.contains('active')) {
         refreshAutoStatus();
       }
@@ -496,11 +502,9 @@
   async function loadReviews(reset = true) {
     const storeId = document.getElementById('reviews-store').value || null;
     const status = (document.getElementById('reviews-status')?.value || 'new,generated');
-    const hasAnswer = (document.getElementById('reviews-has-answer')?.value || '');
     if (reset) { reviewsOffset = 0; reviews = []; }
     const q = (storeId ? ('?item_type=review&store_id=' + storeId) : '?item_type=review')
       + (status ? '&status=' + encodeURIComponent(status) : '')
-      + (hasAnswer ? '&has_answer=' + encodeURIComponent(hasAnswer) : '')
       + ('&limit=' + PAGE_SIZE + '&offset=' + reviewsOffset);
     try {
       const page = await api('/items' + q);
@@ -519,11 +523,9 @@
   async function loadQuestions(reset = true) {
     const storeId = document.getElementById('questions-store').value || null;
     const status = (document.getElementById('questions-status')?.value || 'new,generated');
-    const hasAnswer = (document.getElementById('questions-has-answer')?.value || '');
     if (reset) { questionsOffset = 0; questions = []; }
     const q = (storeId ? ('?item_type=question&store_id=' + storeId) : '?item_type=question')
       + (status ? '&status=' + encodeURIComponent(status) : '')
-      + (hasAnswer ? '&has_answer=' + encodeURIComponent(hasAnswer) : '')
       + ('&limit=' + PAGE_SIZE + '&offset=' + questionsOffset);
     try {
       const page = await api('/items' + q);
@@ -742,9 +744,7 @@
   document.getElementById('reviews-store').addEventListener('change', () => loadReviews(true));
   document.getElementById('questions-store').addEventListener('change', () => loadQuestions(true));
   document.getElementById('reviews-status').addEventListener('change', () => loadReviews(true));
-  document.getElementById('reviews-has-answer').addEventListener('change', () => loadReviews(true));
   document.getElementById('questions-status').addEventListener('change', () => loadQuestions(true));
-  document.getElementById('questions-has-answer').addEventListener('change', () => loadQuestions(true));
   document.getElementById('btn-more-reviews').addEventListener('click', () => loadReviews(false));
   document.getElementById('btn-more-questions').addEventListener('click', () => loadQuestions(false));
 
@@ -774,6 +774,8 @@
         const el = document.getElementById('setting-' + k);
         if (el) el.value = data[k] || '';
       });
+      const tgEnabled = document.getElementById('setting-telegram_enabled');
+      if (tgEnabled) tgEnabled.checked = String(data.telegram_enabled || '1') !== '0';
       const prompts = await api('/prompts');
       const wrap = document.getElementById('prompts-list');
       wrap.innerHTML = prompts.map(p => `
@@ -788,14 +790,36 @@
           toast('Промпт сохранён');
         });
       });
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  function syncAutoScheduleModeUi() {
+    const mode = document.getElementById('auto-schedule-mode')?.value || 'slots';
+    const slotsWrap = document.getElementById('auto-slots-wrap');
+    const intervalWrap = document.getElementById('auto-interval-wrap');
+    if (slotsWrap) slotsWrap.style.display = mode === 'slots' ? 'block' : 'none';
+    if (intervalWrap) intervalWrap.style.display = mode === 'interval' ? 'block' : 'none';
+  }
+
+  async function loadAutoSchedulePanel() {
+    try {
+      if (!stores.length) stores = await api('/stores');
       const autoCfg = await api('/auto-schedule');
       const autoEnabled = document.getElementById('auto-enabled');
       const autoSlots = document.getElementById('auto-slots');
+      const autoMode = document.getElementById('auto-schedule-mode');
+      const autoInt = document.getElementById('auto-interval-hours');
+      const autoRunReviews = document.getElementById('auto-run-reviews');
+      const autoRunQuestions = document.getElementById('auto-run-questions');
       if (autoEnabled) autoEnabled.checked = !!autoCfg.enabled;
       if (autoSlots) autoSlots.value = (autoCfg.slots || []).join(', ');
-      if (!stores.length) {
-        stores = await api('/stores');
-      }
+      if (autoMode) autoMode.value = autoCfg.schedule_mode || 'slots';
+      if (autoInt) autoInt.value = String(autoCfg.interval_hours || 1);
+      if (autoRunReviews) autoRunReviews.checked = !!autoCfg.run_reviews;
+      if (autoRunQuestions) autoRunQuestions.checked = !!autoCfg.run_questions;
+      syncAutoScheduleModeUi();
       renderAutoStoreList(autoCfg.store_ids || []);
       await refreshAutoStatus();
     } catch (err) {
@@ -842,19 +866,31 @@
       const enabled = !!document.getElementById('auto-enabled')?.checked;
       const slotsRaw = (document.getElementById('auto-slots')?.value || '').trim();
       const slots = slotsRaw ? slotsRaw.split(',').map(x => x.trim()).filter(Boolean) : [];
+      const schedule_mode = (document.getElementById('auto-schedule-mode')?.value || 'slots');
+      const interval_hours = parseInt(document.getElementById('auto-interval-hours')?.value || '1', 10) || 1;
+      const run_reviews = !!document.getElementById('auto-run-reviews')?.checked;
+      const run_questions = !!document.getElementById('auto-run-questions')?.checked;
       const store_ids = getAutoSelectedStoreIds();
       if (!store_ids.length) {
         toast('Выбери хотя бы один магазин для автозапуска', 'error');
         return;
       }
+      if (!run_reviews && !run_questions) {
+        toast('Выбери хотя бы один тип: отзывы или вопросы', 'error');
+        return;
+      }
       try {
-        await api('/auto-schedule', { method: 'POST', body: JSON.stringify({ enabled, slots, store_ids }) });
+        await api('/auto-schedule', { method: 'POST', body: JSON.stringify({ enabled, slots, store_ids, schedule_mode, interval_hours, run_reviews, run_questions }) });
         toast('Автозапуск сохранён');
+        await loadAutoSchedulePanel();
       } catch (err) {
         toast(err.message, 'error');
       }
     });
   }
+
+  const autoModeEl = document.getElementById('auto-schedule-mode');
+  if (autoModeEl) autoModeEl.addEventListener('change', syncAutoScheduleModeUi);
 
   const btnStopAuto = document.getElementById('btn-stop-auto');
   if (btnStopAuto) {
@@ -874,6 +910,7 @@
       openai_key: document.getElementById('setting-openai_key').value,
       telegram_bot_token: document.getElementById('setting-telegram_bot_token').value,
       telegram_chat_id: document.getElementById('setting-telegram_chat_id').value,
+      telegram_enabled: document.getElementById('setting-telegram_enabled')?.checked ? '1' : '0',
     };
     try {
       await api('/settings', { method: 'POST', body: JSON.stringify(body) });

@@ -180,7 +180,7 @@
         })
           .then(function (res) {
             if (res.ok) {
-              window.location.href = '/';
+              window.location.href = '/app';
               return;
             }
             return res.json().then(function (j) { return Promise.reject(j.detail || res.statusText); });

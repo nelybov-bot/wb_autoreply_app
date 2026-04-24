@@ -596,9 +596,10 @@ async def _generate_one(
             db.set_generated(item_id, reply)
             packer_issue = bool(obj.get("packer_issue"))
             if row.item_type == "review" and packer_issue:
+                telegram_enabled = (db.get_setting("telegram_enabled") or "1").strip() != "0"
                 telegram_token = db.get_setting("telegram_bot_token")
                 telegram_chat_id = db.get_setting("telegram_chat_id")
-                if telegram_token and telegram_chat_id:
+                if telegram_enabled and telegram_token and telegram_chat_id:
                     store_name = _store_name(db, row.store_id)
                     await send_review_to_chat(
                         telegram_token,
