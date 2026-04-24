@@ -1,4 +1,4 @@
-const CACHE = 'marketai-v2';
+const CACHE = 'marketai-v3';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then(() => self.skipWaiting()));
@@ -13,15 +13,24 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const u = new URL(e.request.url);
   if (u.origin !== location.origin || e.request.method !== 'GET') return;
-  if (!u.pathname.startsWith('/static/') && u.pathname !== '/') return;
+  // Never cache HTML entry pages to avoid stale UI/auth state.
+  if (u.pathname === '/' || u.pathname === '/app' || u.pathname === '/login' || u.pathname === '/landing') {
+    return;
+  }
+  if (!u.pathname.startsWith('/static/')) return;
+  // Network-first for static assets: always try fresh version,
+  // fallback to cache only when network is unavailable.
   e.respondWith(
-    caches.open(CACHE).then((cache) =>
-      cache.match(e.request).then((cached) =>
-        cached || fetch(e.request).then((r) => {
-          if (r.ok) cache.put(e.request, r.clone());
-          return r;
-        })
-      )
-    )
+    fetch(e.request)
+      .then((r) => {
+        if (r.ok) {
+          return caches.open(CACHE).then((cache) => {
+            cache.put(e.request, r.clone());
+            return r;
+          });
+        }
+        return caches.match(e.request).then((cached) => cached || r);
+      })
+      .catch(() => caches.match(e.request))
   );
 });
