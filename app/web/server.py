@@ -1331,13 +1331,47 @@ def api_stats(db: Database = Depends(get_db), _: UserRow = Depends(require_user)
     return db.get_stats()
 
 
+def _collapse_traceback_lines_for_log_ui(lines: list[str]) -> list[str]:
+    """Убирает многострочный Python-traceback из хвоста файла (старые ERROR|wf с log.exception)."""
+    out: list[str] = []
+    in_tb = False
+    for line in lines:
+        if "Traceback (most recent call last):" in line:
+            in_tb = True
+            continue
+        if in_tb:
+            if len(line) >= 10 and line[:4].isdigit() and line[4] == "-":
+                in_tb = False
+                out.append(line)
+                continue
+            st = line.lstrip()
+            if st.startswith("The above exception") or st.startswith("During handling"):
+                continue
+            if st.startswith("File \"") or st.startswith("File '"):
+                continue
+            if line.startswith("    ") or line.startswith("  "):
+                continue
+            if not st:
+                continue
+            if "Error:" in line or "Exception:" in line:
+                in_tb = False
+                if len(line) > 500:
+                    out.append(line[:480] + " …")
+                else:
+                    out.append(line)
+                continue
+            continue
+        out.append(line)
+    return out
+
+
 def _sanitize_log_for_admin_ui(text: str) -> str:
-    """Вкладка «Лог»: без километровых JSON; старые строки в файле не переформатируются — только сжатие хвоста."""
+    """Вкладка «Лог»: без километровых JSON и тел tracebacks; хвост файла."""
     if not text:
         return ""
     max_chunk = 150_000
     chunk = text[-max_chunk:] if len(text) > max_chunk else text
-    lines = chunk.splitlines()
+    lines = _collapse_traceback_lines_for_log_ui(chunk.splitlines())
     out: list[str] = []
     for line in lines:
         if len(line) > 800 and ("insufficient_quota" in line or "rate_limit" in line.lower()):
@@ -1346,6 +1380,10 @@ def _sanitize_log_for_admin_ui(text: str) -> str:
                 + " … [OpenAI JSON сокращён — в биллинге platform.openai.com] … "
                 + line[-100:]
             )
+        elif len(line) > 800 and ("load_new_all" in line or "Generate failed" in line):
+            out.append(line[:360] + " …(обрезано)… " + line[-140:])
+        elif len(line) > 800 and ("global limiter" in line or "s2s-api-auth-feedbacks" in line):
+            out.append(line[:380] + " …(WB 429, см. dev.wildberries.ru)… " + line[-120:])
         elif len(line) > 800 and ("HTTP 429" in line or "buyer-chat" in line or "wb_chat" in line):
             out.append(line[:320] + " …(обрезано)… " + line[-160:])
         elif len(line) > 1500:

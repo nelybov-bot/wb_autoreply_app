@@ -546,7 +546,17 @@ async def load_new_all(
         except UnauthorizedStoreError:
             raise
         except Exception as e:
-            log.exception("load_new_all магазин %s (%s) store_id=%s: %s", store.name, store.marketplace, store.id, e)
+            if isinstance(e, HttpStatusError):
+                log.error(
+                    "load_new_all магазин %s (%s) store_id=%s: HTTP %s — %s",
+                    store.name,
+                    store.marketplace,
+                    store.id,
+                    e.status,
+                    (e.body or "")[:600],
+                )
+            else:
+                log.exception("load_new_all магазин %s (%s) store_id=%s: %s", store.name, store.marketplace, store.id, e)
         _progress(i + 1, n_stores)
     return total
 
@@ -619,7 +629,15 @@ async def _generate_one(
         except (asyncio.CancelledError, GeneratorExit):
             raise
         except Exception as e:
-            log.exception("Generate failed item=%s: %s", item_id, e)
+            if isinstance(e, HttpStatusError):
+                log.error(
+                    "Generate failed item=%s: HTTP %s — %s",
+                    item_id,
+                    e.status,
+                    (e.body or "")[:500],
+                )
+            else:
+                log.exception("Generate failed item=%s: %s", item_id, e)
             return False
 
 
