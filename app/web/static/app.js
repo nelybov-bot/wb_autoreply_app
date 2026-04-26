@@ -194,6 +194,7 @@
       if (id === 'stores') loadStores();
       if (id === 'reviews') { loadReviews(); resumePanelTask('reviews'); }
       if (id === 'questions') { loadQuestions(); resumePanelTask('questions'); }
+      if (id === 'wb-chats') { loadWbChatsPanel(); }
       if (id === 'auto') loadAutoSchedulePanel();
       if (id === 'settings') loadSettings();
       if (id === 'log') loadLog();
@@ -379,6 +380,13 @@
     const opts = '<option value="">Все магазины</option>' + stores.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
     document.getElementById('reviews-store').innerHTML = opts;
     document.getElementById('questions-store').innerHTML = opts;
+    const wbSel = document.getElementById('wb-chats-store');
+    if (wbSel) {
+      const wb = stores.filter(s => s.marketplace === 'wb');
+      wbSel.innerHTML = wb.length
+        ? wb.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')
+        : '<option value="">Нет магазинов WB</option>';
+    }
   }
 
   function renderAutoStoreList(selectedIds) {
@@ -439,6 +447,175 @@
         refreshAutoStatus();
       }
     }, 3000);
+  }
+
+  // ---- WB buyer chats ----
+  let wbChatsRaw = [];
+  let wbChatSelectedId = null;
+  let wbChatReplySign = '';
+
+  function getWbChatsStoreId() {
+    const el = document.getElementById('wb-chats-store');
+    const v = el && el.value ? String(el.value).trim() : '';
+    return v ? Number(v) : null;
+  }
+
+  function renderWbChatsList() {
+    const wrap = document.getElementById('wb-chats-list');
+    if (!wrap) return;
+    if (!wbChatsRaw.length) {
+      wrap.innerHTML = '<div class="form-hint">Нет чатов. Нажмите «Обновить список чатов».</div>';
+      return;
+    }
+    wrap.innerHTML = wbChatsRaw.map(c => {
+      const id = String(c.chatID || '');
+      const enc = encodeURIComponent(id);
+      const name = escapeHtml(c.clientName || 'Покупатель');
+      const raw = c.lastMessage && c.lastMessage.text ? String(c.lastMessage.text) : '';
+      const lm = escapeHtml(raw.slice(0, 140)) || '—';
+      const active = wbChatSelectedId === id ? 'wb-chat-item active' : 'wb-chat-item';
+      return `<button type="button" class="${active}" data-chat-id="${enc}"><div class="wb-chat-item-name">${name}</div><div class="wb-chat-item-preview">${lm}</div></button>`;
+    }).join('');
+    wrap.querySelectorAll('.wb-chat-item').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const chatId = decodeURIComponent(btn.getAttribute('data-chat-id') || '');
+        wbChatSelectedId = chatId;
+        renderWbChatsList();
+        void loadWbChatThread(chatId);
+      });
+    });
+  }
+
+  async function refreshWbChatsList() {
+    const sid = getWbChatsStoreId();
+    if (!sid) {
+      toast('Выберите магазин WB', 'error');
+      return;
+    }
+    try {
+      const data = await api(`/wb/buyer-chats/${sid}`);
+      wbChatsRaw = data.chats || [];
+      wbChatSelectedId = null;
+      wbChatReplySign = '';
+      renderWbChatsList();
+      const hint = document.getElementById('wb-chats-hint');
+      const body = document.getElementById('wb-chats-detail-body');
+      if (hint) {
+        hint.style.display = '';
+        hint.textContent = 'Выберите чат слева.';
+      }
+      if (body) body.style.display = 'none';
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  async function loadWbChatThread(chatId) {
+    const sid = getWbChatsStoreId();
+    if (!sid || !chatId) return;
+    try {
+      const path = `/wb/buyer-chats/${sid}/${encodeURIComponent(chatId)}/thread`;
+      const t = await api(path);
+      wbChatReplySign = (t.reply_sign || '').trim();
+      const titleEl = document.getElementById('wb-chats-product-title');
+      if (titleEl) titleEl.textContent = t.product_title || '—';
+      const threadEl = document.getElementById('wb-chats-thread');
+      const lines = t.lines || [];
+      if (threadEl) {
+        threadEl.innerHTML = lines.length
+          ? lines.map(l => {
+            const lab = l.role === 'client' ? 'Покупатель' : l.role === 'seller' ? 'Вы' : escapeHtml(l.role || '');
+            return `<div class="wb-chat-line"><span class="wb-chat-role">${lab}</span><span class="wb-chat-text">${escapeHtml(l.text)}</span></div>`;
+          }).join('')
+          : '<div class="form-hint">Нет текста сообщений в выборке событий.</div>';
+      }
+      const hint = document.getElementById('wb-chats-hint');
+      const body = document.getElementById('wb-chats-detail-body');
+      if (hint) hint.style.display = 'none';
+      if (body) body.style.display = '';
+      const ta = document.getElementById('wb-chats-draft');
+      if (ta) ta.value = '';
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  async function loadWbChatsPanel() {
+    if (!stores.length) {
+      try { await loadStores(); } catch (_) {}
+    }
+    fillStoreSelects();
+    wbChatsRaw = [];
+    wbChatSelectedId = null;
+    wbChatReplySign = '';
+    renderWbChatsList();
+    const sid = getWbChatsStoreId();
+    if (sid) await refreshWbChatsList();
+  }
+
+  async function wbChatsGenerateDraft() {
+    const sid = getWbChatsStoreId();
+    if (!sid || !wbChatSelectedId) {
+      toast('Выберите чат слева', 'error');
+      return;
+    }
+    try {
+      const r = await api(`/wb/buyer-chats/${sid}/generate-draft`, {
+        method: 'POST',
+        body: JSON.stringify({ chat_id: wbChatSelectedId }),
+      });
+      const ta = document.getElementById('wb-chats-draft');
+      if (ta) ta.value = (r.draft || '').trim();
+      const titleEl = document.getElementById('wb-chats-product-title');
+      if (titleEl && r.product_title) titleEl.textContent = r.product_title;
+      toast('Черновик сгенерирован');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  async function wbChatsSendMessage() {
+    const sid = getWbChatsStoreId();
+    if (!sid) {
+      toast('Выберите магазин WB', 'error');
+      return;
+    }
+    const ta = document.getElementById('wb-chats-draft');
+    const msg = (ta && ta.value ? ta.value : '').trim();
+    if (!msg) {
+      toast('Введите текст ответа', 'error');
+      return;
+    }
+    if (!wbChatReplySign) {
+      toast('Нет reply_sign — нажмите «Загрузить переписку»', 'error');
+      return;
+    }
+    try {
+      await api(`/wb/buyer-chats/${sid}/send`, {
+        method: 'POST',
+        body: JSON.stringify({ reply_sign: wbChatReplySign, message: msg }),
+      });
+      toast('Сообщение отправлено');
+      if (wbChatSelectedId) await loadWbChatThread(wbChatSelectedId);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  function wireWbChatsPanel() {
+    const sel = document.getElementById('wb-chats-store');
+    if (sel) sel.addEventListener('change', () => { void refreshWbChatsList(); });
+    const b1 = document.getElementById('btn-wb-chats-refresh');
+    if (b1) b1.addEventListener('click', () => { void refreshWbChatsList(); });
+    const b2 = document.getElementById('btn-wb-chats-load-thread');
+    if (b2) b2.addEventListener('click', () => {
+      if (wbChatSelectedId) void loadWbChatThread(wbChatSelectedId);
+      else toast('Выберите чат', 'error');
+    });
+    const b3 = document.getElementById('btn-wb-chats-generate');
+    if (b3) b3.addEventListener('click', () => { void wbChatsGenerateDraft(); });
+    const b4 = document.getElementById('btn-wb-chats-send');
+    if (b4) b4.addEventListener('click', () => { void wbChatsSendMessage(); });
   }
 
   // ---- Items (reviews / questions) ----
@@ -1211,6 +1388,7 @@
     loadStats();
     loadStores().then(() => {
       fillStoreSelects();
+      wireWbChatsPanel();
       loadReviews();
       loadQuestions();
     });

@@ -42,6 +42,7 @@
     <button type="button" class="tab" data-tab="stores">Магазины</button>
     <button type="button" class="tab" data-tab="reviews">Отзывы</button>
     <button type="button" class="tab" data-tab="questions">Вопросы</button>
+    <button type="button" class="tab" data-tab="wb-chats">Чаты WB</button>
     <button type="button" class="tab" data-tab="auto">Автозапуск</button>
     <button type="button" class="tab" data-tab="settings">Настройки</button>
     <button type="button" class="tab" data-tab="log">Лог</button>
@@ -230,6 +231,43 @@
       </div>
       <div class="toolbar" style="margin-top: 12px; justify-content:center;">
         <button type="button" class="btn btn-secondary" id="btn-more-questions">Показать ещё</button>
+      </div>
+    </section>
+
+    <!-- Чаты WB -->
+    <section id="panel-wb-chats" class="panel">
+      <p class="form-hint" style="margin: 0 0 12px;">Используется тот же API-ключ WB, что для отзывов и вопросов. Если WB вернёт 401, в кабинете WB создайте токен с категорией «Чат с покупателями».</p>
+      <div class="toolbar">
+        <select id="wb-chats-store" title="Магазин WB"></select>
+        <button type="button" class="btn btn-primary" id="btn-wb-chats-refresh">Обновить список чатов</button>
+      </div>
+      <div class="wb-chats-layout">
+        <div class="wb-chats-list-wrap">
+          <h3 class="wb-chats-subtitle">Чаты</h3>
+          <div id="wb-chats-list" class="wb-chats-list"></div>
+        </div>
+        <div class="wb-chats-detail">
+          <div class="form-hint" id="wb-chats-hint">Выберите чат слева.</div>
+          <div id="wb-chats-detail-body" style="display:none;">
+            <div class="form-group">
+              <label>Товар (из данных WB)</label>
+              <div id="wb-chats-product-title" class="wb-chats-product"></div>
+            </div>
+            <div class="form-group">
+              <label>Переписка</label>
+              <div id="wb-chats-thread" class="wb-chats-thread"></div>
+            </div>
+            <div class="form-group">
+              <label>Ответ</label>
+              <textarea id="wb-chats-draft" rows="6" style="width:100%; max-width:720px;" placeholder="Текст ответа покупателю (до 1000 символов)"></textarea>
+            </div>
+            <div class="toolbar" style="flex-wrap:wrap;">
+              <button type="button" class="btn btn-secondary" id="btn-wb-chats-load-thread">Загрузить переписку</button>
+              <button type="button" class="btn btn-secondary" id="btn-wb-chats-generate">Сгенерировать</button>
+              <button type="button" class="btn btn-primary" id="btn-wb-chats-send">Отправить в WB</button>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 

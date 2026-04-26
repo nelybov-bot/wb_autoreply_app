@@ -827,3 +827,37 @@ async def send_mass_all(
             done_items += len(ids)
             _progress(done_items, total_items or 1)
     return sent_ok, skipped, failed
+
+
+async def generate_wb_buyer_chat_reply(
+    db: Database,
+    openai_key: str,
+    *,
+    product_title: str,
+    conversation_excerpt: str,
+    model: str = "gpt-5.2",
+) -> str:
+    """
+    Черновик ответа продавца в чате WB: тот же JSON-формат, что и для вопросов/отзывов.
+    """
+    client = OpenAIClient(openai_key, model=model)
+    system = (
+        "Ты — официальный представитель магазина на Wildberries в переписке с покупателем. "
+        "Отвечай строго вежливо, кратко и по делу. Без эмодзи. Без фамильярности. "
+        "Без предложений компенсаций или обращений в поддержку. Не задавай вопросов покупателю. "
+        "Не выдумывай факты. 2–4 коротких предложения. Не повторяй полное название товара в ответе."
+    )
+    p = db.get_prompt("question", "general")
+    user = (
+        f"{p}\n\nТовар: {product_title}\nПереписка (покупатель / продавец):\n{conversation_excerpt}\n\n"
+        f"Сформируй ответ продавца на последние сообщения покупателя.{_JSON_FORMAT_INSTRUCTION}"
+    )
+    txt = await client.generate(system, user)
+    txt = (txt or "").strip()
+    if not txt:
+        raise ValueError("Пустой ответ модели")
+    obj = json.loads(txt)
+    reply = (obj.get("reply") or "").strip()
+    if not reply:
+        raise ValueError("В ответе модели нет поля reply")
+    return reply

@@ -35,7 +35,15 @@ setup_logging(LOG_PATH)
 
 from app.db import Database, Store, ItemRow, PromptRow, UserRow, AuditEventRow
 from app.web import tasks as web_tasks
-from app.core.workflows import load_new_all, generate_mass, send_mass_all
+from app.core.net import HttpStatusError
+from app.core.wb_buyer_chat import (
+    WbBuyerChatClient,
+    collect_thread_lines,
+    fetch_events_for_chat,
+    merge_good_card,
+    product_title_from_wb_chat,
+)
+from app.core.workflows import load_new_all, generate_mass, send_mass_all, generate_wb_buyer_chat_reply
 
 log = logging.getLogger("web")
 
@@ -301,6 +309,15 @@ class ApplyTemplateBody(BaseModel):
 
 class BulkItemsBody(BaseModel):
     item_ids: list[int]
+
+
+class WbBuyerChatGenerateBody(BaseModel):
+    chat_id: str
+
+
+class WbBuyerChatSendBody(BaseModel):
+    reply_sign: str
+    message: str
 
 class AutoScheduleBody(BaseModel):
     enabled: bool = False
@@ -1072,6 +1089,175 @@ async def api_cancel_task(task_id: str, _: UserRow = Depends(require_user)):
     return {"ok": True}
 
 
+def _require_wb_store_for_chats(db: Database, store_id: int) -> Store:
+    stores = [s for s in db.list_stores() if s.id == int(store_id)]
+    if not stores:
+        raise HTTPException(404, "Магазин не найден")
+    s = stores[0]
+    if s.marketplace != "wb":
+        raise HTTPException(400, "Чаты WB доступны только для магазинов Wildberries")
+    if not (s.api_key or "").strip():
+        raise HTTPException(400, "Не задан API-ключ магазина")
+    return s
+
+
+def _wb_chat_http_error(e: HttpStatusError) -> HTTPException:
+    body = (e.body or "")[:500]
+    if e.status == 401:
+        return HTTPException(
+            401,
+            "WB buyer-chat: 401. Проверьте API-ключ и категорию токена «Чат с покупателями» (если WB разделил права — нужен токен с доступом к buyer-chat-api).",
+        )
+    if e.status == 402:
+        return HTTPException(402, "WB buyer-chat: платный доступ или подписка (402).")
+    if e.status == 429:
+        return HTTPException(429, "WB buyer-chat: слишком много запросов (429). Подождите и повторите.")
+    return HTTPException(e.status, f"WB buyer-chat: {body or e.status}")
+
+
+@app.get("/api/wb/buyer-chats/{store_id}")
+async def api_wb_buyer_chat_list(store_id: int, db: Database = Depends(get_db), _: UserRow = Depends(require_user)):
+    s = _require_wb_store_for_chats(db, store_id)
+    client = WbBuyerChatClient(s.api_key)
+    try:
+        chats = await client.list_chats()
+    except HttpStatusError as e:
+        raise _wb_chat_http_error(e) from e
+    return {"chats": chats}
+
+
+@app.get("/api/wb/buyer-chats/{store_id}/{chat_id}/thread")
+async def api_wb_buyer_chat_thread(
+    store_id: int,
+    chat_id: str,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    s = _require_wb_store_for_chats(db, store_id)
+    client = WbBuyerChatClient(s.api_key)
+    try:
+        chats = await client.list_chats()
+    except HttpStatusError as e:
+        raise _wb_chat_http_error(e) from e
+    chat_row = next((c for c in chats if str(c.get("chatID") or "") == str(chat_id)), None)
+    if not chat_row:
+        raise HTTPException(404, "Чат не найден в списке. Нажмите «Обновить список чатов».")
+    try:
+        events, _next = await fetch_events_for_chat(client, chat_id, max_wb_requests=8)
+    except HttpStatusError as e:
+        raise _wb_chat_http_error(e) from e
+    gc = merge_good_card(chat_row if isinstance(chat_row, dict) else {}, events)
+    lines_ts = collect_thread_lines(events, chat_id)
+    lines = [{"role": r, "text": t, "addTimestamp": ts} for r, t, ts in lines_ts]
+    texts_for_title = [t for _, t, __ in lines_ts]
+    product_title = product_title_from_wb_chat(gc, texts_for_title)
+    reply_sign = str(chat_row.get("replySign") or "").strip()
+    return {
+        "chat": chat_row,
+        "events": events,
+        "lines": lines,
+        "product_title": product_title,
+        "reply_sign": reply_sign,
+        "good_card": gc,
+    }
+
+
+@app.post("/api/wb/buyer-chats/{store_id}/generate-draft")
+async def api_wb_buyer_chat_generate(
+    store_id: int,
+    body: WbBuyerChatGenerateBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    s = _require_wb_store_for_chats(db, store_id)
+    key = (db.get_setting("openai_key") or "").strip()
+    if not key:
+        raise HTTPException(400, "Не задан OpenAI ключ в настройках")
+    chat_id = (body.chat_id or "").strip()
+    if not chat_id:
+        raise HTTPException(400, "chat_id пустой")
+    client = WbBuyerChatClient(s.api_key)
+    try:
+        chats = await client.list_chats()
+    except HttpStatusError as e:
+        raise _wb_chat_http_error(e) from e
+    chat_row = next((c for c in chats if str(c.get("chatID") or "") == str(chat_id)), None)
+    if not chat_row:
+        raise HTTPException(404, "Чат не найден в списке")
+    try:
+        events, _ = await fetch_events_for_chat(client, chat_id, max_wb_requests=8)
+    except HttpStatusError as e:
+        raise _wb_chat_http_error(e) from e
+    gc = merge_good_card(chat_row if isinstance(chat_row, dict) else {}, events)
+    lines_ts = collect_thread_lines(events, chat_id)
+    texts_for_title = [t for _, t, __ in lines_ts]
+    product_title = product_title_from_wb_chat(gc, texts_for_title)
+    excerpt_parts = []
+    for role, text, _ in lines_ts:
+        label = "Покупатель" if role == "client" else "Продавец" if role == "seller" else role
+        excerpt_parts.append(f"{label}: {text}")
+    conversation = "\n".join(excerpt_parts) if excerpt_parts else "(сообщений пока нет)"
+    try:
+        draft = await generate_wb_buyer_chat_reply(
+            db,
+            key,
+            product_title=product_title,
+            conversation_excerpt=conversation,
+        )
+    except json.JSONDecodeError:
+        raise HTTPException(502, "Модель вернула не JSON — попробуйте сгенерировать ещё раз")
+    except ValueError as e:
+        raise HTTPException(502, str(e))
+    except Exception as e:
+        log.exception("wb buyer chat generate: %s", e)
+        raise HTTPException(502, f"Ошибка генерации: {e}") from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="wb_buyer_chat_generate",
+            item_type="wb_chat",
+            store_id=store_id,
+            result="ok",
+            meta={"chat_id": chat_id, "product_title": product_title[:200]},
+        )
+    except Exception:
+        pass
+    return {"draft": draft, "product_title": product_title}
+
+
+@app.post("/api/wb/buyer-chats/{store_id}/send")
+async def api_wb_buyer_chat_send(
+    store_id: int,
+    body: WbBuyerChatSendBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    s = _require_wb_store_for_chats(db, store_id)
+    client = WbBuyerChatClient(s.api_key)
+    msg = (body.message or "").strip()
+    if not msg:
+        raise HTTPException(400, "Текст сообщения пустой")
+    rs = (body.reply_sign or "").strip()
+    if not rs:
+        raise HTTPException(400, "reply_sign пустой — обновите чат (кнопка «Загрузить переписку»)")
+    try:
+        out = await client.send_message(rs, msg)
+    except HttpStatusError as e:
+        raise _wb_chat_http_error(e) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="wb_buyer_chat_send",
+            item_type="wb_chat",
+            store_id=store_id,
+            result="ok",
+            meta={"len": len(msg)},
+        )
+    except Exception:
+        pass
+    return {"ok": True, "result": out}
+
+
 # ---------- API: stats ----------
 @app.get("/api/stats")
 def api_stats(db: Database = Depends(get_db), _: UserRow = Depends(require_user)):
@@ -1135,7 +1321,7 @@ if STATIC_DIR.exists():
 
     @app.get("/")
     def landing_page():
-        return FileResponse(STATIC_DIR / "landing.html")
+        return RedirectResponse(url="/login")
 
     @app.get("/app")
     def index(request: Request):

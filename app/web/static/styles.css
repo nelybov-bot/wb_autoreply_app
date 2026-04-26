@@ -1350,3 +1350,104 @@ body.theme-dark .summary-item {
   .panel.active .stat-card:nth-child(3) { animation-delay: 0.1s; }
   .panel.active .stat-card:nth-child(4) { animation-delay: 0.15s; }
 }
+
+/* Чаты WB */
+.wb-chats-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  gap: 20px;
+  margin-top: 16px;
+  align-items: start;
+}
+.wb-chats-subtitle {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+  color: var(--text-muted);
+}
+.wb-chats-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+}
+.wb-chat-item {
+  text-align: left;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.55);
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color var(--transition), background var(--transition);
+}
+.wb-chat-item:hover {
+  border-color: var(--accent);
+}
+.wb-chat-item.active {
+  border-color: var(--accent);
+  background: rgba(37, 99, 235, 0.08);
+}
+body.theme-dark .wb-chat-item {
+  background: rgba(15, 23, 42, 0.45);
+}
+body.theme-dark .wb-chat-item.active {
+  background: rgba(37, 99, 235, 0.18);
+}
+.wb-chat-item-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.wb-chat-item-preview {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+  word-break: break-word;
+}
+.wb-chats-product {
+  font-size: 0.95rem;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.45);
+}
+body.theme-dark .wb-chats-product {
+  background: rgba(15, 23, 42, 0.35);
+}
+.wb-chats-thread {
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.45);
+  font-size: 0.9rem;
+}
+body.theme-dark .wb-chats-thread {
+  background: rgba(15, 23, 42, 0.35);
+}
+.wb-chat-line {
+  margin-bottom: 10px;
+  line-height: 1.45;
+}
+.wb-chat-line:last-child { margin-bottom: 0; }
+.wb-chat-role {
+  display: inline-block;
+  min-width: 92px;
+  font-weight: 600;
+  color: var(--text-muted);
+  vertical-align: top;
+}
+.wb-chat-text {
+  display: inline;
+  word-break: break-word;
+}
+@media (max-width: 900px) {
+  .wb-chats-layout {
+    grid-template-columns: 1fr;
+  }
+  .wb-chats-list {
+    max-height: 240px;
+  }
+}
