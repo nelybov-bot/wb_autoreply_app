@@ -29,6 +29,13 @@ from .wb_buyer_chat import (
 
 log = logging.getLogger("wf")
 
+
+def _wb_http_body_one_line(body: str, *, max_len: int = 240) -> str:
+    s = (body or "").replace("\r", " ").replace("\n", " ")
+    s = " ".join(s.split())
+    return (s[:max_len] + "…") if len(s) > max_len else s
+
+
 def _rating_group(rating: Optional[int]) -> str:
     if rating is None:
         return "general"
@@ -166,10 +173,33 @@ async def _load_new_wb(db: Database, store: Store) -> int:
     except HttpStatusError as e:
         if e.status == 401:
             raise UnauthorizedStoreError(store_id, store.name, str(e)) from e
-        if e.status in (400, 403, 404):
-            log.warning("WB API %s: %s", e.status, e.body)
+        if e.status == 429:
+            log.warning(
+                "WB load_new store_id=%s name=%s: HTTP 429 feedbacks-api (global limiter) — %s",
+                store_id,
+                store.name,
+                _wb_http_body_one_line(e.body or ""),
+            )
+            await asyncio.sleep(4)
             return 0
-        raise
+        if e.status in (400, 403, 404):
+            log.warning("WB API %s: %s", e.status, _wb_http_body_one_line(e.body or ""))
+            return 0
+        if e.status >= 500:
+            log.error(
+                "WB load_new store_id=%s: HTTP %s — %s",
+                store_id,
+                e.status,
+                _wb_http_body_one_line(e.body or ""),
+            )
+            return 0
+        log.warning(
+            "WB load_new store_id=%s: HTTP %s — %s",
+            store_id,
+            e.status,
+            _wb_http_body_one_line(e.body or ""),
+        )
+        return 0
 
 
 async def _load_new_yam(db: Database, store: Store) -> int:
@@ -547,13 +577,14 @@ async def load_new_all(
             raise
         except Exception as e:
             if isinstance(e, HttpStatusError):
-                log.error(
+                lvl = log.warning if e.status == 429 else log.error
+                lvl(
                     "load_new_all магазин %s (%s) store_id=%s: HTTP %s — %s",
                     store.name,
                     store.marketplace,
                     store.id,
                     e.status,
-                    (e.body or "")[:600],
+                    _wb_http_body_one_line(e.body or "", max_len=400),
                 )
             else:
                 log.exception("load_new_all магазин %s (%s) store_id=%s: %s", store.name, store.marketplace, store.id, e)

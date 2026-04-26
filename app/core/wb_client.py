@@ -25,7 +25,8 @@ class WbClient:
     def __init__(self, api_key: str, *, timeout_s: float = 20.0) -> None:
         self.api_key = api_key.strip()
         self.timeout = aiohttp.ClientTimeout(connect=15, total=timeout_s)
-        self.limiter = RateLimiter(3.0)
+        # Док: до 3 rps; «global limiter» на стороне WB чаще срабатывает при плотных сериях — держим ~1 rps.
+        self.limiter = RateLimiter(1.0)
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -55,7 +56,8 @@ class WbClient:
                         except Exception as e:
                             log.warning("WB API invalid JSON: %s", e)
                             raise HttpStatusError(502, f"Invalid JSON: {(str(e)[:200])}")
-        return await retry(_do)
+        # 429 от WB «global limiter» повторять бессмысно — только усугубляет лимит; отдаём наверх сразу.
+        return await retry(_do, retry_on_status=(500, 502, 503, 504), retries=4)
 
     async def has_new(self) -> dict:
         return await self._request("GET", "/api/v1/new-feedbacks-questions")
