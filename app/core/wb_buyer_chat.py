@@ -26,21 +26,29 @@ log = logging.getLogger("wb_chat")
 
 BASE = "https://buyer-chat-api.wildberries.ru"
 
-# Один лимитер на весь процесс: не чаще ~1 запроса к buyer-chat-api в 4.5 с (ниже лимита 10/10 с).
-_wb_buyer_rl = RateLimiter(0.22)
+# Один лимитер на весь процесс (~1 запрос / 7 с к buyer-chat-api).
+_wb_buyer_rl = RateLimiter(0.14)
 _wb_buyer_serial = asyncio.Lock()
 
 
 def _wb_retry_after_seconds(headers: Any) -> int:
-    for key in ("X-Ratelimit-Retry", "Retry-After", "X-RateLimit-Reset"):
+    """
+    Секунды ожидания после 429. Заголовки WB иногда дают timestamp вместо «секунд» — не спим 120 с.
+    """
+    for key in ("Retry-After", "X-Ratelimit-Retry"):
         v = headers.get(key)
         if v is None:
             continue
         try:
-            return max(8, min(120, int(float(str(v))) + 3))
+            raw = float(str(v).strip())
         except (ValueError, TypeError):
             continue
-    return 15
+        # Unix ms / s (огромное число) — не трактуем как «секунды ожидания»
+        if raw > 100_000:
+            return 22
+        sec = int(raw) + 1
+        return max(6, min(40, sec))
+    return 18
 
 
 @asynccontextmanager

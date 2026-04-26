@@ -53,7 +53,7 @@ from app.core.workflows import (
 
 log = logging.getLogger("web")
 
-app = FastAPI(title="MarketAI", version="1.3")
+app = FastAPI(title="MarketAI", version="1.4")
 MSK_TZ = ZoneInfo("Europe/Moscow")
 
 def _parse_origins(value: str) -> list[str]:
@@ -154,7 +154,7 @@ def _bootstrap_admin_if_needed(db: Database) -> None:
     if not init_pass:
         raise HTTPException(503, "Нет пользователей и не задан ADMIN_INIT_PASSWORD (переменная окружения).")
     db.create_user("admin", _hash_password(init_pass), role="admin")
-    log.warning("Создан пользователь admin (bootstrap). Рекомендуется сменить пароль.")
+    log.info("Создан пользователь admin (первый запуск). Смените пароль в настройках.")
 
 
 def _get_current_user(request: Request, db: Database) -> Optional[UserRow]:
@@ -1153,7 +1153,10 @@ def _wb_chat_http_error(e: HttpStatusError) -> HTTPException:
     if e.status == 402:
         return HTTPException(402, "WB buyer-chat: платный доступ или подписка (402).")
     if e.status == 429:
-        return HTTPException(429, "WB buyer-chat: слишком много запросов (429). Подождите и повторите.")
+        return HTTPException(
+            429,
+            "WB чаты: лимит запросов (429). Подождите 2–5 минут без «Обновить» или отключите второй инстанс на Render.",
+        )
     return HTTPException(e.status, f"WB buyer-chat: {body or e.status}")
 
 
@@ -1265,8 +1268,12 @@ async def api_wb_buyer_chat_generate(
         raise HTTPException(502, "Модель вернула не JSON — попробуйте сгенерировать ещё раз")
     except ValueError as e:
         raise HTTPException(502, str(e))
+    except HttpStatusError as e:
+        st = e.status if 400 <= e.status < 600 else 502
+        log.warning("wb buyer chat generate OpenAI: %s %s", st, (e.body or "")[:300])
+        raise HTTPException(st, e.body or str(e)) from e
     except Exception as e:
-        log.exception("wb buyer chat generate: %s", e)
+        log.warning("wb buyer chat generate: %s", e)
         raise HTTPException(502, f"Ошибка генерации: {e}") from e
     try:
         db.add_audit_event(
@@ -1339,6 +1346,8 @@ def api_log_tail(db: Database = Depends(get_db), _: UserRow = Depends(require_pe
 @app.on_event("startup")
 async def _startup_scheduler():
     global _scheduler_task
+    # После инициализации uvicorn — ещё раз, чтобы формат логов не затирался дефолтом воркера
+    setup_logging(LOG_PATH)
     try:
         db = get_db()
         _bootstrap_admin_if_needed(db)
