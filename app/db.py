@@ -885,6 +885,18 @@ class Database:
             active_stores = int(active_stores_row["n"]) if active_stores_row else 0
             total_stores = int(total_stores_row["n"]) if total_stores_row else 0
 
+            wb_chat_row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM audit_events WHERE action=? AND result=?",
+                ("wb_buyer_chat_send", "ok"),
+            ).fetchone()
+            wb_chat_sent = int(wb_chat_row["n"]) if wb_chat_row else 0
+            today_prefix = dt.datetime.now().strftime("%Y-%m-%d")
+            wb_today_row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM audit_events WHERE action=? AND result=? AND substr(ts,1,10)=?",
+                ("wb_buyer_chat_send", "ok", today_prefix),
+            ).fetchone()
+            wb_chat_sent_today = int(wb_today_row["n"]) if wb_today_row else 0
+
         return {
             "total_sent": total_sent,
             "sent_today": sent_today,
@@ -892,4 +904,6 @@ class Database:
             "by_store": by_store,
             "queue": queue,
             "stores": {"active": active_stores, "total": total_stores},
+            "wb_chat_sent": wb_chat_sent,
+            "wb_chat_sent_today": wb_chat_sent_today,
         }

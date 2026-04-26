@@ -68,6 +68,10 @@
           <div class="value" id="stat-questions">—</div>
           <div class="label">Вопросов отправлено</div>
         </div>
+        <div class="stat-card">
+          <div class="value" id="stat-wb-chats">—</div>
+          <div class="label">Сообщений в чаты WB</div>
+        </div>
       </div>
       <div class="chart-section">
         <h3>Операционная сводка</h3>
@@ -236,7 +240,7 @@
 
     <!-- Чаты WB -->
     <section id="panel-wb-chats" class="panel">
-      <p class="form-hint" style="margin: 0 0 12px;">Используется тот же API-ключ WB, что для отзывов и вопросов. Если WB вернёт 401, в кабинете WB создайте токен с категорией «Чат с покупателями».</p>
+      <p class="form-hint" style="margin: 0 0 12px;">Тот же API-ключ WB, что для отзывов и вопросов. Запросы к buyer-chat идут строго по одному (лимит WB); первая загрузка списка и переписки может занять 15–40 с. При 429 подождите или нажмите снова через минуту. Если WB вернёт 401 — в кабинете WB нужен токен с категорией «Чат с покупателями».</p>
       <div class="toolbar">
         <select id="wb-chats-store" title="Магазин WB"></select>
         <button type="button" class="btn btn-primary" id="btn-wb-chats-refresh">Обновить список чатов</button>
@@ -262,7 +266,8 @@
               <textarea id="wb-chats-draft" rows="6" style="width:100%; max-width:720px;" placeholder="Текст ответа покупателю (до 1000 символов)"></textarea>
             </div>
             <div class="toolbar" style="flex-wrap:wrap;">
-              <button type="button" class="btn btn-secondary" id="btn-wb-chats-load-thread">Загрузить переписку</button>
+              <button type="button" class="btn btn-secondary" id="btn-wb-chats-load-thread">Обновить переписку</button>
+              <button type="button" class="btn btn-secondary" id="btn-wb-chats-more-history" title="Больше страниц ленты WB (медленнее, реже 429)">Больше истории</button>
               <button type="button" class="btn btn-secondary" id="btn-wb-chats-generate">Сгенерировать</button>
               <button type="button" class="btn btn-primary" id="btn-wb-chats-send">Отправить в WB</button>
             </div>

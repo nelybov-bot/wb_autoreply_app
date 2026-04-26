@@ -209,6 +209,8 @@
       document.getElementById('stat-today').textContent = s.sent_today ?? 0;
       document.getElementById('stat-reviews').textContent = s.by_type?.review ?? 0;
       document.getElementById('stat-questions').textContent = s.by_type?.question ?? 0;
+      const wbEl = document.getElementById('stat-wb-chats');
+      if (wbEl) wbEl.textContent = s.wb_chat_sent ?? 0;
       const q = s.queue || {};
       const storesMeta = s.stores || {};
       let auto = null;
@@ -230,6 +232,8 @@
         { k: 'Новых вопросов', v: String(q.new_questions ?? 0) },
         { k: 'Сгенерировано (отзывы)', v: String(q.generated_reviews ?? 0) },
         { k: 'Сгенерировано (вопросы)', v: String(q.generated_questions ?? 0) },
+        { k: 'Сообщений в чаты WB (всего)', v: String(s.wb_chat_sent ?? 0) },
+        { k: 'Чаты WB сегодня', v: String(s.wb_chat_sent_today ?? 0) },
         { k: 'Обработано (отправлено)', v: String(processed) },
         { k: 'Магазины активные', v: `${storesMeta.active ?? 0} / ${storesMeta.total ?? 0}` },
         { k: 'Автозапуск', v: auto ? `${auto.running ? 'идёт' : 'ожидание'} · ${autoPhaseRu[auto.phase] || auto.phase || '—'}` : '—' },
@@ -457,6 +461,7 @@
   let wbChatsRaw = [];
   let wbChatSelectedId = null;
   let wbChatReplySign = '';
+  let wbChatThreadPages = 2;
 
   function getWbChatsStoreId() {
     const el = document.getElementById('wb-chats-store');
@@ -518,6 +523,7 @@
       btn.addEventListener('click', () => {
         const chatId = decodeURIComponent(btn.getAttribute('data-chat-id') || '');
         wbChatSelectedId = chatId;
+        wbChatThreadPages = 2;
         const row = wbChatsRaw.find(c => String(c.chatID || '') === chatId);
         renderWbChatsList();
         wbChatShowDetailShell(row);
@@ -554,7 +560,8 @@
     const sid = getWbChatsStoreId();
     if (!sid || !chatId) return;
     try {
-      const path = `/wb/buyer-chats/${sid}/${encodeURIComponent(chatId)}/thread`;
+      const pages = Math.max(1, Math.min(8, wbChatThreadPages || 2));
+      const path = `/wb/buyer-chats/${sid}/${encodeURIComponent(chatId)}/thread?pages=${pages}`;
       const t = await api(path);
       wbChatReplySign = (t.reply_sign || '').trim();
       const titleEl = document.getElementById('wb-chats-product-title');
@@ -635,7 +642,7 @@
       return;
     }
     if (!wbChatReplySign) {
-      toast('Нет reply_sign — нажмите «Загрузить переписку»', 'error');
+      toast('Нет reply_sign — нажмите «Обновить переписку»', 'error');
       return;
     }
     try {
@@ -657,8 +664,21 @@
     if (b1) b1.addEventListener('click', () => { void refreshWbChatsList(); });
     const b2 = document.getElementById('btn-wb-chats-load-thread');
     if (b2) b2.addEventListener('click', () => {
-      if (wbChatSelectedId) void loadWbChatThread(wbChatSelectedId);
-      else toast('Выберите чат', 'error');
+      if (!wbChatSelectedId) {
+        toast('Выберите чат', 'error');
+        return;
+      }
+      wbChatThreadPages = 2;
+      void loadWbChatThread(wbChatSelectedId);
+    });
+    const bMore = document.getElementById('btn-wb-chats-more-history');
+    if (bMore) bMore.addEventListener('click', () => {
+      if (!wbChatSelectedId) {
+        toast('Выберите чат', 'error');
+        return;
+      }
+      wbChatThreadPages = Math.min(8, (wbChatThreadPages || 2) + 2);
+      void loadWbChatThread(wbChatSelectedId);
     });
     const b3 = document.getElementById('btn-wb-chats-generate');
     if (b3) b3.addEventListener('click', () => { void wbChatsGenerateDraft(); });

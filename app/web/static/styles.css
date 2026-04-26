@@ -1042,7 +1042,7 @@ body.ui-compact .chart-section { padding: 22px; padding-left: 26px; }
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 18px;
   margin-bottom: 36px;
 }
@@ -1055,6 +1055,7 @@ body.ui-compact .chart-section { padding: 22px; padding-left: 26px; }
 .panel.active .stat-card:nth-child(2) { animation-delay: 0.1s; }
 .panel.active .stat-card:nth-child(3) { animation-delay: 0.15s; }
 .panel.active .stat-card:nth-child(4) { animation-delay: 0.2s; }
+.panel.active .stat-card:nth-child(5) { animation-delay: 0.25s; }
 
 @keyframes cardStagger {
   from { opacity: 0; transform: translateY(12px); }
@@ -1349,6 +1350,7 @@ body.theme-dark .summary-item {
   }
   .panel.active .stat-card:nth-child(3) { animation-delay: 0.1s; }
   .panel.active .stat-card:nth-child(4) { animation-delay: 0.15s; }
+  .panel.active .stat-card:nth-child(5) { animation-delay: 0.2s; }
 }
 
 /* Чаты WB */

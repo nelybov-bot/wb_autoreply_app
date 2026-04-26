@@ -875,7 +875,7 @@ async def auto_process_wb_buyer_chats(
     stores: List[Store],
     *,
     openai_key: str,
-    event_pages: int = 10,
+    event_pages: int = 6,
     max_autosend_per_store: int = 5,
     model: str = "gpt-5.2",
 ) -> Dict[str, int]:

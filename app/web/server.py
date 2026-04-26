@@ -53,7 +53,7 @@ from app.core.workflows import (
 
 log = logging.getLogger("web")
 
-app = FastAPI(title="MarketAI", version="1.1")
+app = FastAPI(title="MarketAI", version="1.3")
 MSK_TZ = ZoneInfo("Europe/Moscow")
 
 def _parse_origins(value: str) -> list[str]:
@@ -1176,6 +1176,7 @@ async def api_wb_buyer_chat_list(
 async def api_wb_buyer_chat_thread(
     store_id: int,
     chat_id: str,
+    pages: int = Query(2, ge=1, le=8, description="Сколько страниц ленты /events обойти для этого чата"),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):
@@ -1189,7 +1190,7 @@ async def api_wb_buyer_chat_thread(
     if not chat_row:
         raise HTTPException(404, "Чат не найден в списке. Нажмите «Обновить список чатов».")
     try:
-        events, _next = await fetch_events_for_chat(client, chat_id, max_wb_requests=3)
+        events, _next = await fetch_events_for_chat(client, chat_id, max_wb_requests=pages)
     except HttpStatusError as e:
         raise _wb_chat_http_error(e) from e
     gc = merge_good_card(chat_row if isinstance(chat_row, dict) else {}, events)
@@ -1236,7 +1237,7 @@ async def api_wb_buyer_chat_generate(
     if not chat_row:
         raise HTTPException(404, "Чат не найден в списке")
     try:
-        events, _ = await fetch_events_for_chat(client, chat_id, max_wb_requests=3)
+        events, _ = await fetch_events_for_chat(client, chat_id, max_wb_requests=4)
     except HttpStatusError as e:
         raise _wb_chat_http_error(e) from e
     gc = merge_good_card(chat_row if isinstance(chat_row, dict) else {}, events)

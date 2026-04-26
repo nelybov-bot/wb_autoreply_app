@@ -2,14 +2,20 @@
 Клиент Wildberries «Чат с покупателями» (buyer-chat-api).
 
 Тот же API-ключ, что и для отзывов/вопросов (Authorization: Bearer …).
-Лимит: до 10 запросов / 10 с — держим ~1 req/s.
+
+Лимиты WB: жёстко сериализуем все запросы к buyer-chat-api в одном процессе
+(один RateLimiter + Lock), иначе «список чатов» + «события» давали двойную частоту и 429.
+
+При 429: пауза по X-Ratelimit-Retry / Retry-After и одна повторная попытка.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-import socket
 import re
+import socket
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
@@ -20,13 +26,34 @@ log = logging.getLogger("wb_chat")
 
 BASE = "https://buyer-chat-api.wildberries.ru"
 
+# Один лимитер на весь процесс: не чаще ~1 запроса к buyer-chat-api в 4.5 с (ниже лимита 10/10 с).
+_wb_buyer_rl = RateLimiter(0.22)
+_wb_buyer_serial = asyncio.Lock()
+
+
+def _wb_retry_after_seconds(headers: Any) -> int:
+    for key in ("X-Ratelimit-Retry", "Retry-After", "X-RateLimit-Reset"):
+        v = headers.get(key)
+        if v is None:
+            continue
+        try:
+            return max(8, min(120, int(float(str(v))) + 3))
+        except (ValueError, TypeError):
+            continue
+    return 15
+
+
+@asynccontextmanager
+async def _wb_buyer_slot():
+    async with _wb_buyer_serial:
+        await _wb_buyer_rl.wait()
+        yield
+
 
 class WbBuyerChatClient:
     def __init__(self, api_key: str, *, timeout_s: float = 45.0) -> None:
         self.api_key = api_key.strip()
         self.timeout = aiohttp.ClientTimeout(connect=15, total=timeout_s)
-        # WB: до 10 запросов / 10 с; не ретраим 429 (ретраи только усугубляют лимит)
-        self.limiter = RateLimiter(0.42)
 
     def _headers_json(self) -> Dict[str, str]:
         return {
@@ -35,84 +62,107 @@ class WbBuyerChatClient:
             "User-Agent": USER_AGENT,
         }
 
-    def _headers_no_body(self) -> Dict[str, str]:
+    def _headers_form(self) -> Dict[str, str]:
         return {
             "Authorization": f"Bearer {self.api_key}",
             "User-Agent": USER_AGENT,
         }
 
-    async def list_chats(self) -> list[dict]:
-        url = BASE + "/api/v1/seller/chats"
-
-        async def _do():
-            await self.limiter.wait()
-            connector = aiohttp.TCPConnector(force_close=True, family=socket.AF_INET)
-            async with connector:
+    async def _http_get_json(self, path: str, *, params: Optional[dict] = None) -> Any:
+        url = BASE + path
+        for attempt in range(3):
+            async with _wb_buyer_slot():
+                connector = aiohttp.TCPConnector(force_close=True, family=socket.AF_INET)
                 async with aiohttp.ClientSession(timeout=self.timeout, connector=connector) as s:
-                    async with s.get(url, headers=self._headers_json()) as resp:
+                    async with s.get(url, headers=self._headers_json(), params=params or None) as resp:
                         txt = await resp.text()
-                        if resp.status >= 400:
-                            raise HttpStatusError(resp.status, txt)
-                        data = json.loads(txt) if txt else {}
-                        res = data.get("result")
-                        if isinstance(res, list):
-                            return res
-                        log.warning("WB buyer chat chats: unexpected result shape: %s", type(res))
-                        return []
+                        st = resp.status
+                        hdrs = resp.headers
+            if st == 429 and attempt < 2:
+                wait = _wb_retry_after_seconds(hdrs)
+                log.warning("WB buyer-chat GET %s: 429, sleep %ss", path, wait)
+                await asyncio.sleep(wait)
+                continue
+            if st >= 400:
+                raise HttpStatusError(st, txt)
+            if st == 204 or not txt:
+                return None
+            try:
+                return json.loads(txt)
+            except Exception as e:
+                log.warning("WB buyer-chat invalid JSON: %s", e)
+                raise HttpStatusError(502, f"Invalid JSON: {str(e)[:200]}") from e
+        raise HttpStatusError(429, "Too many requests")
 
-        return await retry(_do, retry_on_status=(500, 502, 503, 504), retries=4)
+    async def _http_post_multipart(self, path: str, form: aiohttp.FormData) -> Any:
+        url = BASE + path
+        for attempt in range(3):
+            async with _wb_buyer_slot():
+                connector = aiohttp.TCPConnector(force_close=True, family=socket.AF_INET)
+                async with aiohttp.ClientSession(timeout=self.timeout, connector=connector) as s:
+                    async with s.post(url, headers=self._headers_form(), data=form) as resp:
+                        txt = await resp.text()
+                        st = resp.status
+                        hdrs = resp.headers
+            if st == 429 and attempt < 2:
+                wait = _wb_retry_after_seconds(hdrs)
+                log.warning("WB buyer-chat POST %s: 429, sleep %ss", path, wait)
+                await asyncio.sleep(wait)
+                continue
+            if st >= 400:
+                raise HttpStatusError(st, txt)
+            if not txt:
+                return {}
+            try:
+                return json.loads(txt)
+            except Exception as e:
+                log.warning("WB buyer-chat send: invalid JSON: %s", e)
+                return {}
+        raise HttpStatusError(429, "Too many requests")
+
+    async def list_chats(self) -> list[dict]:
+        async def _do():
+            data = await self._http_get_json("/api/v1/seller/chats")
+            if not isinstance(data, dict):
+                return []
+            res = data.get("result")
+            if isinstance(res, list):
+                return res
+            log.warning("WB buyer chat chats: unexpected result shape: %s", type(res))
+            return []
+
+        return await retry(_do, retry_on_status=(500, 502, 503, 504), retries=3)
 
     async def get_events(self, *, next_cursor: Optional[int] = None) -> dict:
-        url = BASE + "/api/v1/seller/events"
         params: dict[str, str] = {}
         if next_cursor is not None:
             params["next"] = str(int(next_cursor))
 
         async def _do():
-            await self.limiter.wait()
-            connector = aiohttp.TCPConnector(force_close=True, family=socket.AF_INET)
-            async with connector:
-                async with aiohttp.ClientSession(timeout=self.timeout, connector=connector) as s:
-                    async with s.get(url, headers=self._headers_json(), params=params or None) as resp:
-                        txt = await resp.text()
-                        if resp.status >= 400:
-                            raise HttpStatusError(resp.status, txt)
-                        data = json.loads(txt) if txt else {}
-                        res = data.get("result")
-                        if isinstance(res, dict):
-                            return res
-                        return {}
+            data = await self._http_get_json("/api/v1/seller/events", params=params or None)
+            if not isinstance(data, dict):
+                return {}
+            res = data.get("result")
+            if isinstance(res, dict):
+                return res
+            return {}
 
-        return await retry(_do, retry_on_status=(500, 502, 503, 504), retries=4)
+        return await retry(_do, retry_on_status=(500, 502, 503, 504), retries=3)
 
     async def send_message(self, reply_sign: str, message: str) -> dict:
-        url = BASE + "/api/v1/seller/message"
         reply_sign = (reply_sign or "").strip()
         message = (message or "").strip()
         if not reply_sign or not message:
             raise ValueError("reply_sign и message обязательны")
+        msg_cut = message[:1000]
 
         async def _do():
-            await self.limiter.wait()
             form = aiohttp.FormData()
             form.add_field("replySign", reply_sign)
-            form.add_field("message", message[:1000])
-            connector = aiohttp.TCPConnector(force_close=True, family=socket.AF_INET)
-            async with connector:
-                async with aiohttp.ClientSession(timeout=self.timeout, connector=connector) as s:
-                    async with s.post(url, headers=self._headers_no_body(), data=form) as resp:
-                        txt = await resp.text()
-                        if resp.status >= 400:
-                            raise HttpStatusError(resp.status, txt)
-                        if not txt:
-                            return {}
-                        try:
-                            return json.loads(txt)
-                        except Exception as e:
-                            log.warning("WB buyer chat send: invalid JSON: %s", e)
-                            return {}
+            form.add_field("message", msg_cut)
+            return await self._http_post_multipart("/api/v1/seller/message", form)
 
-        return await retry(_do, retry_on_status=(500, 502, 503, 504), retries=4)
+        return await retry(_do, retry_on_status=(500, 502, 503, 504), retries=3)
 
 
 async def collect_global_events_by_chat(
@@ -122,7 +172,6 @@ async def collect_global_events_by_chat(
 ) -> Dict[str, List[dict]]:
     """
     Один проход по ленте /seller/events с пагинацией next; события сгруппированы по chatID.
-    Нужен для автозапуска без отдельного обхода по каждому чату.
     """
     by_chat: Dict[str, List[dict]] = {}
     next_cursor: Optional[int] = None
