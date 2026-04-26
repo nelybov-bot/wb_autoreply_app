@@ -53,7 +53,7 @@ from app.core.workflows import (
 
 log = logging.getLogger("web")
 
-app = FastAPI(title="MarketAI", version="1.4")
+app = FastAPI(title="MarketAI", version="1.5")
 MSK_TZ = ZoneInfo("Europe/Moscow")
 
 def _parse_origins(value: str) -> list[str]:
@@ -1155,7 +1155,9 @@ def _wb_chat_http_error(e: HttpStatusError) -> HTTPException:
     if e.status == 429:
         return HTTPException(
             429,
-            "WB чаты: лимит запросов (429). Подождите 2–5 минут без «Обновить» или отключите второй инстанс на Render.",
+            "WB чаты: 429 (лимит buyer-chat-api: 10 запросов / 10 с по документации). "
+            "Подождите 1–2 минуты. Проверьте токен с категорией «Чат с покупателями». "
+            "На Render: один инстанс сервиса и uvicorn с --workers 1, иначе параллельные запросы снова дадут 429.",
         )
     return HTTPException(e.status, f"WB buyer-chat: {body or e.status}")
 
@@ -1329,13 +1331,39 @@ def api_stats(db: Database = Depends(get_db), _: UserRow = Depends(require_user)
     return db.get_stats()
 
 
+def _sanitize_log_for_admin_ui(text: str) -> str:
+    """Вкладка «Лог»: без километровых JSON; старые строки в файле не переформатируются — только сжатие хвоста."""
+    if not text:
+        return ""
+    max_chunk = 150_000
+    chunk = text[-max_chunk:] if len(text) > max_chunk else text
+    lines = chunk.splitlines()
+    out: list[str] = []
+    for line in lines:
+        if len(line) > 800 and ("insufficient_quota" in line or "rate_limit" in line.lower()):
+            out.append(
+                line[:180]
+                + " … [OpenAI JSON сокращён — в биллинге platform.openai.com] … "
+                + line[-100:]
+            )
+        elif len(line) > 800 and ("HTTP 429" in line or "buyer-chat" in line or "wb_chat" in line):
+            out.append(line[:320] + " …(обрезано)… " + line[-160:])
+        elif len(line) > 1500:
+            out.append(line[:500] + " …(длинная строка)… " + line[-200:])
+        else:
+            out.append(line)
+    tail_lines = out[-450:]
+    return "\n".join(tail_lines)
+
+
 # ---------- API: log ----------
 @app.get("/api/log")
 def api_log_tail(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_log"))):
     try:
         with open(LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
-            f.seek(max(0, f.seek(0, 2) - 100 * 1024))
-            return {"text": f.read()}
+            f.seek(max(0, f.seek(0, 2) - 120 * 1024))
+            raw = f.read()
+        return {"text": _sanitize_log_for_admin_ui(raw)}
     except FileNotFoundError:
         return {"text": ""}
     except Exception as e:
