@@ -493,15 +493,24 @@ async def _run_auto_slot(slot: str) -> None:
         gen_ok = gen_failed = 0
         sent_ok = sent_skipped = sent_failed = 0
         key = (db.get_setting("openai_key") or "").strip()
+        reviews_phase_error = ""
         if item_types:
-            deleted = db.clear_items([s.id for s in stores], item_types=item_types)
-            added = await load_new_all(db, stores)
-            _auto_state["phase"] = "generate"
-            item_ids = _collect_pending_item_ids(db, [s.id for s in stores], item_types=item_types)
-            if item_ids and key:
-                gen_ok, gen_failed = await generate_mass(db, item_ids, key, model="gpt-5.2")
-                _auto_state["phase"] = "send"
-                sent_ok, sent_skipped, sent_failed = await send_mass_all(db, item_ids)
+            try:
+                deleted = db.clear_items([s.id for s in stores], item_types=item_types)
+                added = await load_new_all(db, stores)
+                _auto_state["phase"] = "generate"
+                item_ids = _collect_pending_item_ids(db, [s.id for s in stores], item_types=item_types)
+                if item_ids and key:
+                    gen_ok, gen_failed = await generate_mass(db, item_ids, key, model="gpt-5.2")
+                    _auto_state["phase"] = "send"
+                    sent_ok, sent_skipped, sent_failed = await send_mass_all(db, item_ids)
+            except (asyncio.CancelledError, GeneratorExit):
+                raise
+            except Exception as e:
+                reviews_phase_error = str(e)[:800]
+                log.exception(
+                    "auto_run: этап отзывы/вопросы прерван; фаза чатов WB (если включена) выполняется отдельно",
+                )
         wb_stats: dict = {}
         if run_wb_chats:
             _auto_state["phase"] = "wb_chats"
@@ -509,26 +518,29 @@ async def _run_auto_slot(slot: str) -> None:
                 wb_stats = await auto_process_wb_buyer_chats(db, stores, openai_key=key)
             else:
                 wb_stats = {"wb_chat_skipped": 1, "reason": "no_openai_key"}
+        meta_run = {
+            "slot": slot,
+            "store_ids": [s.id for s in stores],
+            "item_types": item_types,
+            "deleted_before_load": deleted,
+            "added": added,
+            "candidates": len(item_ids),
+            "gen_ok": gen_ok,
+            "gen_failed": gen_failed,
+            "sent_ok": sent_ok,
+            "sent_skipped": sent_skipped,
+            "sent_failed": sent_failed,
+            "run_wb_chats": run_wb_chats,
+            **wb_stats,
+        }
+        if reviews_phase_error:
+            meta_run["reviews_phase_error"] = reviews_phase_error
         db.add_audit_event(
             actor="system",
             action="auto_run",
             item_type="mixed",
             result="ok",
-            meta={
-                "slot": slot,
-                "store_ids": [s.id for s in stores],
-                "item_types": item_types,
-                "deleted_before_load": deleted,
-                "added": added,
-                "candidates": len(item_ids),
-                "gen_ok": gen_ok,
-                "gen_failed": gen_failed,
-                "sent_ok": sent_ok,
-                "sent_skipped": sent_skipped,
-                "sent_failed": sent_failed,
-                "run_wb_chats": run_wb_chats,
-                **wb_stats,
-            },
+            meta=meta_run,
         )
         _auto_state["phase"] = "done"
     except asyncio.CancelledError:
@@ -623,6 +635,12 @@ def _schedule_hint(cfg: dict, db: Database) -> str:
         slots = cfg.get("slots") or []
         if not slots:
             return "Режим «по слотам»: укажите время как 09:00, 14:30 (два символа в часе) и сохраните."
+    if cfg.get("run_wb_chats"):
+        wb_stores = [s for s in stores if s.marketplace == "wb" and (s.api_key or "").strip()]
+        if not wb_stores:
+            return "В цикле включены чаты WB, но среди выбранных магазинов нет WB с API-ключом."
+        if not (db.get_setting("openai_key") or "").strip():
+            return "Автоответы в чатах WB: нужен ключ OpenAI в «Настройки» (генерация текста)."
     return ""
 
 
