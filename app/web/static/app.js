@@ -389,9 +389,16 @@
     const wbSel = document.getElementById('wb-chats-store');
     if (wbSel) {
       const wb = stores.filter(s => s.marketplace === 'wb');
+      const prev = String(wbSel.value || '').trim();
+      wbChatsSuppressSelectChange = true;
       wbSel.innerHTML = wb.length
         ? wb.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')
         : '<option value="">Нет магазинов WB</option>';
+      if (wb.length) {
+        const ids = new Set(wb.map(s => String(s.id)));
+        if (prev && ids.has(prev)) wbSel.value = prev;
+      }
+      setTimeout(() => { wbChatsSuppressSelectChange = false; }, 0);
     }
   }
 
@@ -459,6 +466,10 @@
 
   // ---- WB buyer chats ----
   let wbChatsRaw = [];
+  /** id магазина, для которого wbChatsRaw актуален; иначе список нельзя показывать */
+  let wbChatsListStoreId = null;
+  /** не реагировать на change во время fillStoreSelects (программный wbSel.value) */
+  let wbChatsSuppressSelectChange = false;
   let wbChatSelectedId = null;
   let wbChatReplySign = '';
   let wbChatThreadPages = 2;
@@ -503,6 +514,18 @@
     if (ta) ta.value = '';
   }
 
+  function wbChatsSortKey(c) {
+    const lm = c && c.lastMessage;
+    if (lm && typeof lm === 'object') {
+      const t = lm.addTimestamp ?? lm.addTime ?? lm.timestamp ?? lm.time;
+      const n = Number(t);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    const u = c.chatUpdatedAt ?? c.updatedAt;
+    const n2 = Number(u);
+    return Number.isFinite(n2) && n2 > 0 ? n2 : 0;
+  }
+
   function renderWbChatsList() {
     const wrap = document.getElementById('wb-chats-list');
     if (!wrap) return;
@@ -510,7 +533,8 @@
       wrap.innerHTML = '<div class="form-hint">Нет чатов. Нажмите «Обновить список чатов».</div>';
       return;
     }
-    wrap.innerHTML = wbChatsRaw.map(c => {
+    const rows = [...wbChatsRaw].sort((a, b) => wbChatsSortKey(b) - wbChatsSortKey(a));
+    wrap.innerHTML = rows.map(c => {
       const id = String(c.chatID || '');
       const enc = encodeURIComponent(id);
       const name = escapeHtml(c.clientName || 'Покупатель');
@@ -538,9 +562,12 @@
       toast('Выберите магазин WB', 'error');
       return;
     }
+    const wrap = document.getElementById('wb-chats-list');
+    if (wrap) wrap.innerHTML = '<div class="form-hint">Загрузка списка…</div>';
     try {
       const data = await api(`/wb/buyer-chats/${sid}?refresh=1`);
       wbChatsRaw = data.chats || [];
+      wbChatsListStoreId = sid;
       wbChatSelectedId = null;
       wbChatReplySign = '';
       renderWbChatsList();
@@ -552,6 +579,11 @@
       }
       if (body) body.style.display = 'none';
     } catch (err) {
+      wbChatsRaw = [];
+      wbChatsListStoreId = null;
+      wbChatSelectedId = null;
+      wbChatReplySign = '';
+      renderWbChatsList();
       toast(err.message, 'error');
     }
   }
@@ -601,10 +633,23 @@
       try { await loadStores(); } catch (_) {}
     }
     fillStoreSelects();
-    if (!wbChatsRaw.length) {
+    const sid = getWbChatsStoreId();
+    const listMatches = sid != null && wbChatsListStoreId != null && Number(sid) === Number(wbChatsListStoreId);
+    if (!listMatches) {
+      wbChatsRaw = [];
+      wbChatsListStoreId = null;
       wbChatSelectedId = null;
       wbChatReplySign = '';
       renderWbChatsList();
+      const hint = document.getElementById('wb-chats-hint');
+      const body = document.getElementById('wb-chats-detail-body');
+      if (hint) {
+        hint.style.display = '';
+        hint.textContent = sid
+          ? 'Список не загружен для этого магазина. Нажмите «Обновить список чатов».'
+          : 'Выберите магазин WB в списке выше.';
+      }
+      if (body) body.style.display = 'none';
     }
   }
 
@@ -659,7 +704,16 @@
 
   function wireWbChatsPanel() {
     const sel = document.getElementById('wb-chats-store');
-    if (sel) sel.addEventListener('change', () => { void refreshWbChatsList(); });
+    if (sel) {
+      sel.addEventListener('change', () => {
+        if (wbChatsSuppressSelectChange) return;
+        wbChatsRaw = [];
+        wbChatsListStoreId = null;
+        wbChatSelectedId = null;
+        wbChatReplySign = '';
+        void refreshWbChatsList();
+      });
+    }
     const b1 = document.getElementById('btn-wb-chats-refresh');
     if (b1) b1.addEventListener('click', () => { void refreshWbChatsList(); });
     const b2 = document.getElementById('btn-wb-chats-load-thread');
