@@ -455,6 +455,11 @@ async def _run_auto_slot(slot: str) -> None:
     store_ids = [int(x) for x in (cfg.get("store_ids") or [])]
     stores = [s for s in db.list_stores() if s.active and s.id in store_ids]
     if not stores:
+        log.warning(
+            "auto_run slot=%s: пропуск — нет активных магазинов для store_ids=%s",
+            slot,
+            store_ids,
+        )
         return
     started_dt = dt.datetime.now(MSK_TZ)
     started = started_dt.isoformat(timespec="seconds")
@@ -469,6 +474,14 @@ async def _run_auto_slot(slot: str) -> None:
         run_reviews = bool(cfg.get("run_reviews", True))
         run_questions = bool(cfg.get("run_questions", True))
         run_wb_chats = bool(cfg.get("run_wb_chats", False))
+        log.info(
+            "auto_run start slot=%s stores=%s reviews=%s questions=%s wb_chats=%s",
+            slot,
+            [s.id for s in stores],
+            run_reviews,
+            run_questions,
+            run_wb_chats,
+        )
         item_types: list[str] = []
         if run_reviews:
             item_types.append("review")
@@ -588,12 +601,30 @@ async def _auto_scheduler_loop() -> None:
                             pass
                     finally:
                         _auto_run_task = None
-            await asyncio.sleep(20)
+            await asyncio.sleep(15)
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception("auto scheduler loop failed")
-            await asyncio.sleep(20)
+            await asyncio.sleep(15)
+
+def _schedule_hint(cfg: dict, db: Database) -> str:
+    """Почему автозапуск включён, но цикл не пойдет (для UI)."""
+    if not cfg.get("enabled"):
+        return ""
+    sids = [int(x) for x in (cfg.get("store_ids") or [])]
+    if not sids:
+        return "Включён автозапуск, но не выбраны магазины — отметьте их и нажмите «Сохранить автозапуск»."
+    stores = [s for s in db.list_stores() if s.active and s.id in sids]
+    if not stores:
+        return "Выбранные магазины не найдены или снята галочка «активен» — проверьте вкладку «Магазины»."
+    mode = str(cfg.get("schedule_mode") or "slots")
+    if mode == "slots":
+        slots = cfg.get("slots") or []
+        if not slots:
+            return "Режим «по слотам»: укажите время как 09:00, 14:30 (два символа в часе) и сохраните."
+    return ""
+
 
 def _auto_status(db: Database) -> dict:
     cfg = _get_auto_schedule(db)
@@ -636,6 +667,7 @@ def _auto_status(db: Database) -> dict:
         "run_wb_chats": bool(cfg.get("run_wb_chats", False)),
         "next_slot": next_slot,
         "timezone": "Europe/Moscow",
+        "schedule_hint": _schedule_hint(cfg, db),
     })
     return out
 

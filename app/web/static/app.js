@@ -238,6 +238,7 @@
         { k: 'Магазины активные', v: `${storesMeta.active ?? 0} / ${storesMeta.total ?? 0}` },
         { k: 'Автозапуск', v: auto ? `${auto.running ? 'идёт' : 'ожидание'} · ${autoPhaseRu[auto.phase] || auto.phase || '—'}` : '—' },
         { k: 'Следующий слот (MSK)', v: auto?.next_slot || '—' },
+        ...(auto && auto.schedule_hint ? [{ k: 'Авто: внимание', v: auto.schedule_hint }] : []),
       ];
       const wrap = document.getElementById('summary-grid');
       if (wrap) {
@@ -446,7 +447,8 @@
       const slot = s.slot ? `слот ${s.slot}` : '—';
       const next = s.next_slot ? `следующий ${s.next_slot}` : 'нет слотов';
       const err = s.last_error ? ` · ошибка: ${s.last_error}` : '';
-      el.textContent = `${run} · этап: ${phase} · текущий: ${slot} · ${next}${err}`;
+      const hint = s.schedule_hint ? `\n${s.schedule_hint}` : '';
+      el.textContent = `${run} · этап: ${phase} · текущий: ${slot} · ${next}${err}${hint}`;
       const stopBtn = document.getElementById('btn-stop-auto');
       if (stopBtn) stopBtn.disabled = !s.running;
     } catch (e) {

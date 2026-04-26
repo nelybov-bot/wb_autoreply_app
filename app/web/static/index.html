@@ -282,7 +282,7 @@
         <h2>Автозапуск</h2>
         <div class="form-group">
           <label class="checkbox-row"><input type="checkbox" id="auto-enabled"> Включить автозапуск</label>
-          <small class="form-hint">Цикл: Загрузить новые → Сгенерировать → Отправить. Чаты WB: по ленте событий WB, до 5 автоответов за слот на магазин (последнее сообщение от покупателя).</small>
+          <small class="form-hint">Цикл: Загрузить новые → Сгенерировать → Отправить. Чаты WB: по ленте событий WB, до 5 автоответов за слот на магазин (последнее сообщение от покупателя). Планировщик живёт внутри запущенного веб-сервера: на Render при «засыпании» инстанса слот по времени может не сработать — нужен постоянно работающий процесс или режим «по интервалу» после пробуждения.</small>
         </div>
         <div class="form-group">
           <label>Режим расписания</label>
@@ -294,7 +294,7 @@
         <div class="form-group" id="auto-slots-wrap">
           <label>Слоты времени (MSK)</label>
           <input type="text" id="auto-slots" placeholder="09:00, 13:30, 21:00">
-          <small class="form-hint">Можно несколько, через запятую.</small>
+          <small class="form-hint">Можно несколько, через запятую. Формат строго <strong>ЧЧ:ММ</strong> (например 09:00), иначе слот не сохранится.</small>
         </div>
         <div class="form-group" id="auto-interval-wrap" style="display:none;">
           <label>Интервал запуска</label>
