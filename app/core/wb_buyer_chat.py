@@ -4,9 +4,12 @@
 Ключ: в кабинете WB API нужна категория «Чат с покупателями» (buyer-chat-api);
 ключ «Вопросы и отзывы» к feedbacks-api не подходит для этого хоста.
 
-Лимиты WB (документация): 10 запросов / 10 с на аккаунт (~1 с между запросами в среднем).
-Сериализация: один asyncio.Lock держится на весь цикл «запрос → при 429 пауза → повтор»,
-иначе второй корутиной можно снова упереться в 429, пока первый только спит.
+Лимиты WB: для персонального/сервисного ключа — 10 запросов / 10 с к buyer-chat-api.
+Тариф «Базовый» в доке — 1 запрос / час: тогда в логах будут паузы до часа; без такого ключа
+частый опрос чатов невозможен.
+
+Сериализация: один asyncio.Lock на весь цикл «запрос → при 429 пауза → повтор».
+После 429 пауза берётся из Retry-After / X-Ratelimit-Retry (не обрезается до ~35 с).
 """
 from __future__ import annotations
 
@@ -15,6 +18,7 @@ import json
 import logging
 import re
 import socket
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
@@ -30,10 +34,18 @@ _wb_buyer_rl = RateLimiter(0.9)
 _wb_buyer_serial = asyncio.Lock()
 
 
-def _wb_retry_after_seconds(headers: Any) -> int:
+def _wb_buyer_429_sleep_seconds(headers: Any) -> tuple[int, str]:
     """
-    Секунды ожидания после 429. Заголовки WB иногда дают timestamp вместо «секунд» — не спим 120 с.
+    Пауза после 429 по заголовкам WB.
+
+    Раньше всё резали до ~40 с: при тарифе API «Базовый» (1 запрос/час к buyer-chat)
+    Retry-After может быть тысячи секунд — мы просыпались слишком рано и снова ловили 429.
     """
+    max_sleep = 7200  # один sleep не дольше 2 ч (воркер не «мёртвый» навсегда)
+    min_sleep = 8
+    default = 28
+    now = time.time()
+
     for key in ("Retry-After", "X-Ratelimit-Retry"):
         v = headers.get(key)
         if v is None:
@@ -42,12 +54,22 @@ def _wb_retry_after_seconds(headers: Any) -> int:
             raw = float(str(v).strip())
         except (ValueError, TypeError):
             continue
-        # Unix ms / s (огромное число) — не трактуем как «секунды ожидания»
-        if raw > 100_000:
-            return 22
-        sec = int(raw) + 1
-        return max(6, min(40, sec))
-    return 18
+
+        if raw > 1e12:
+            target_s = raw / 1000.0
+            wait = int(max(0.0, target_s - now)) + 1
+            note = f"{key}=unix_ms"
+        elif raw > 1e9:
+            wait = int(max(0.0, raw - now)) + 1
+            note = f"{key}=unix_s"
+        else:
+            wait = int(raw) + 1
+            note = f"{key}=Δs"
+
+        wait = max(min_sleep, min(max_sleep, wait))
+        return wait, note
+
+    return default, "no_retry_header"
 
 
 class WbBuyerChatClient:
@@ -80,8 +102,25 @@ class WbBuyerChatClient:
                         st = resp.status
                         hdrs = resp.headers
                 if st == 429 and attempt < 2:
-                    wait = min(35, _wb_retry_after_seconds(hdrs))
-                    log.warning("WB buyer-chat GET %s: 429, sleep %ss (attempt %s/3)", path, wait, attempt + 1)
+                    wait, why = _wb_buyer_429_sleep_seconds(hdrs)
+                    if wait >= 180:
+                        log.warning(
+                            "WB buyer-chat GET %s: 429, пауза %ss (%s), попытка %s/3. "
+                            "Долгая пауза часто значит тариф WB API «Базовый» (до 1 запроса/ч к чату) — "
+                            "нужен персональный или сервисный ключ «Чат с покупателями».",
+                            path,
+                            wait,
+                            why,
+                            attempt + 1,
+                        )
+                    else:
+                        log.warning(
+                            "WB buyer-chat GET %s: 429, пауза %ss (%s), попытка %s/3",
+                            path,
+                            wait,
+                            why,
+                            attempt + 1,
+                        )
                     await asyncio.sleep(wait)
                     continue
                 if st >= 400:
@@ -106,8 +145,24 @@ class WbBuyerChatClient:
                         st = resp.status
                         hdrs = resp.headers
                 if st == 429 and attempt < 2:
-                    wait = min(35, _wb_retry_after_seconds(hdrs))
-                    log.warning("WB buyer-chat POST %s: 429, sleep %ss (attempt %s/3)", path, wait, attempt + 1)
+                    wait, why = _wb_buyer_429_sleep_seconds(hdrs)
+                    if wait >= 180:
+                        log.warning(
+                            "WB buyer-chat POST %s: 429, пауза %ss (%s), попытка %s/3. "
+                            "Проверьте тариф ключа «Чат с покупателями» (не «Базовый» для частого опроса).",
+                            path,
+                            wait,
+                            why,
+                            attempt + 1,
+                        )
+                    else:
+                        log.warning(
+                            "WB buyer-chat POST %s: 429, пауза %ss (%s), попытка %s/3",
+                            path,
+                            wait,
+                            why,
+                            attempt + 1,
+                        )
                     await asyncio.sleep(wait)
                     continue
                 if st >= 400:
