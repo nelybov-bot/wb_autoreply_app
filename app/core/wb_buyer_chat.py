@@ -25,7 +25,8 @@ class WbBuyerChatClient:
     def __init__(self, api_key: str, *, timeout_s: float = 45.0) -> None:
         self.api_key = api_key.strip()
         self.timeout = aiohttp.ClientTimeout(connect=15, total=timeout_s)
-        self.limiter = RateLimiter(1.0)
+        # WB: до 10 запросов / 10 с; не ретраим 429 (ретраи только усугубляют лимит)
+        self.limiter = RateLimiter(0.42)
 
     def _headers_json(self) -> Dict[str, str]:
         return {
@@ -59,7 +60,7 @@ class WbBuyerChatClient:
                         log.warning("WB buyer chat chats: unexpected result shape: %s", type(res))
                         return []
 
-        return await retry(_do)
+        return await retry(_do, retry_on_status=(500, 502, 503, 504), retries=4)
 
     async def get_events(self, *, next_cursor: Optional[int] = None) -> dict:
         url = BASE + "/api/v1/seller/events"
@@ -82,7 +83,7 @@ class WbBuyerChatClient:
                             return res
                         return {}
 
-        return await retry(_do)
+        return await retry(_do, retry_on_status=(500, 502, 503, 504), retries=4)
 
     async def send_message(self, reply_sign: str, message: str) -> dict:
         url = BASE + "/api/v1/seller/message"
@@ -111,7 +112,41 @@ class WbBuyerChatClient:
                             log.warning("WB buyer chat send: invalid JSON: %s", e)
                             return {}
 
-        return await retry(_do)
+        return await retry(_do, retry_on_status=(500, 502, 503, 504), retries=4)
+
+
+async def collect_global_events_by_chat(
+    client: WbBuyerChatClient,
+    *,
+    max_pages: int = 12,
+) -> Dict[str, List[dict]]:
+    """
+    Один проход по ленте /seller/events с пагинацией next; события сгруппированы по chatID.
+    Нужен для автозапуска без отдельного обхода по каждому чату.
+    """
+    by_chat: Dict[str, List[dict]] = {}
+    next_cursor: Optional[int] = None
+    for _ in range(max_pages):
+        block = await client.get_events(next_cursor=next_cursor)
+        events = block.get("events") or []
+        if not isinstance(events, list):
+            events = []
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            cid = str(ev.get("chatID") or "").strip()
+            if cid:
+                by_chat.setdefault(cid, []).append(ev)
+        if int(block.get("totalEvents") or 0) == 0:
+            break
+        raw_next = block.get("next")
+        if raw_next is None:
+            break
+        try:
+            next_cursor = int(raw_next)
+        except (TypeError, ValueError):
+            break
+    return by_chat
 
 
 _GOOD_TITLE_KEYS = ("productName", "name", "title", "subject", "imtName", "supplierArticle", "brandName")

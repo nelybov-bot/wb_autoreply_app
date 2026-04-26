@@ -218,6 +218,8 @@
         load_new: 'загрузка новых',
         generate: 'генерация',
         send: 'отправка',
+        wb_chats: 'чаты WB',
+        idle_items: 'без отзывов/вопросов',
         done: 'завершено',
         cancelled: 'остановлено',
         error: 'ошибка',
@@ -422,6 +424,8 @@
         load_new: 'загрузка новых',
         generate: 'генерация',
         send: 'отправка',
+        wb_chats: 'чаты WB',
+        idle_items: 'без отзывов/вопросов',
         done: 'завершено',
         cancelled: 'остановлено',
         error: 'ошибка',
@@ -460,6 +464,40 @@
     return v ? Number(v) : null;
   }
 
+  function wbGuessProductTitleFromRow(row) {
+    if (!row || !row.goodCard) return '—';
+    const g = row.goodCard;
+    const keys = ['productName', 'name', 'title', 'subject'];
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      if (g[k] && String(g[k]).trim()) return String(g[k]).trim();
+    }
+    const lm = row.lastMessage && row.lastMessage.text ? String(row.lastMessage.text) : '';
+    const m = lm.match(/по\s+товару\s*"([^"]+)"/i);
+    if (m) return m[1].trim();
+    if (g.nmID != null && String(g.nmID).trim() !== '') return 'Товар nmID ' + g.nmID;
+    return '—';
+  }
+
+  function wbChatShowDetailShell(row) {
+    const hint = document.getElementById('wb-chats-hint');
+    const body = document.getElementById('wb-chats-detail-body');
+    if (hint) hint.style.display = 'none';
+    if (body) body.style.display = '';
+    wbChatReplySign = (row && row.replySign) ? String(row.replySign).trim() : '';
+    const titleEl = document.getElementById('wb-chats-product-title');
+    if (titleEl) titleEl.textContent = wbGuessProductTitleFromRow(row);
+    const threadEl = document.getElementById('wb-chats-thread');
+    const lm = row && row.lastMessage && row.lastMessage.text ? String(row.lastMessage.text) : '';
+    if (threadEl) {
+      threadEl.innerHTML = lm
+        ? `<div class="wb-chat-line"><span class="wb-chat-role">Список WB</span><span class="wb-chat-text">${escapeHtml(lm)}</span></div><div class="form-hint" style="margin-top:8px;">Подгружаю полную переписку…</div>`
+        : '<div class="form-hint">Подгружаю полную переписку…</div>';
+    }
+    const ta = document.getElementById('wb-chats-draft');
+    if (ta) ta.value = '';
+  }
+
   function renderWbChatsList() {
     const wrap = document.getElementById('wb-chats-list');
     if (!wrap) return;
@@ -480,7 +518,9 @@
       btn.addEventListener('click', () => {
         const chatId = decodeURIComponent(btn.getAttribute('data-chat-id') || '');
         wbChatSelectedId = chatId;
+        const row = wbChatsRaw.find(c => String(c.chatID || '') === chatId);
         renderWbChatsList();
+        wbChatShowDetailShell(row);
         void loadWbChatThread(chatId);
       });
     });
@@ -493,7 +533,7 @@
       return;
     }
     try {
-      const data = await api(`/wb/buyer-chats/${sid}`);
+      const data = await api(`/wb/buyer-chats/${sid}?refresh=1`);
       wbChatsRaw = data.chats || [];
       wbChatSelectedId = null;
       wbChatReplySign = '';
@@ -537,6 +577,15 @@
       if (ta) ta.value = '';
     } catch (err) {
       toast(err.message, 'error');
+      const threadEl = document.getElementById('wb-chats-thread');
+      if (threadEl) {
+        const extra = 'Можно нажать «Сгенерировать» — контекст подтянется из списка чатов. Reply-sign уже из списка WB.';
+        threadEl.innerHTML = `<div class="form-hint" style="color:#b91c1c;">${escapeHtml(err.message)}</div><div class="form-hint" style="margin-top:8px;">${escapeHtml(extra)}</div>`;
+      }
+      const body = document.getElementById('wb-chats-detail-body');
+      if (body) body.style.display = '';
+      const hint = document.getElementById('wb-chats-hint');
+      if (hint) hint.style.display = 'none';
     }
   }
 
@@ -545,12 +594,11 @@
       try { await loadStores(); } catch (_) {}
     }
     fillStoreSelects();
-    wbChatsRaw = [];
-    wbChatSelectedId = null;
-    wbChatReplySign = '';
-    renderWbChatsList();
-    const sid = getWbChatsStoreId();
-    if (sid) await refreshWbChatsList();
+    if (!wbChatsRaw.length) {
+      wbChatSelectedId = null;
+      wbChatReplySign = '';
+      renderWbChatsList();
+    }
   }
 
   async function wbChatsGenerateDraft() {
@@ -1008,12 +1056,14 @@
       const autoInt = document.getElementById('auto-interval-hours');
       const autoRunReviews = document.getElementById('auto-run-reviews');
       const autoRunQuestions = document.getElementById('auto-run-questions');
+      const autoRunWbChats = document.getElementById('auto-run-wb-chats');
       if (autoEnabled) autoEnabled.checked = !!autoCfg.enabled;
       if (autoSlots) autoSlots.value = (autoCfg.slots || []).join(', ');
       if (autoMode) autoMode.value = autoCfg.schedule_mode || 'slots';
       if (autoInt) autoInt.value = String(autoCfg.interval_hours || 1);
       if (autoRunReviews) autoRunReviews.checked = !!autoCfg.run_reviews;
       if (autoRunQuestions) autoRunQuestions.checked = !!autoCfg.run_questions;
+      if (autoRunWbChats) autoRunWbChats.checked = !!autoCfg.run_wb_chats;
       syncAutoScheduleModeUi();
       renderAutoStoreList(autoCfg.store_ids || []);
       await refreshAutoStatus();
@@ -1065,17 +1115,18 @@
       const interval_hours = parseInt(document.getElementById('auto-interval-hours')?.value || '1', 10) || 1;
       const run_reviews = !!document.getElementById('auto-run-reviews')?.checked;
       const run_questions = !!document.getElementById('auto-run-questions')?.checked;
+      const run_wb_chats = !!document.getElementById('auto-run-wb-chats')?.checked;
       const store_ids = getAutoSelectedStoreIds();
       if (!store_ids.length) {
         toast('Выбери хотя бы один магазин для автозапуска', 'error');
         return;
       }
-      if (!run_reviews && !run_questions) {
-        toast('Выбери хотя бы один тип: отзывы или вопросы', 'error');
+      if (!run_reviews && !run_questions && !run_wb_chats) {
+        toast('Выбери хотя бы один тип: отзывы, вопросы или чаты WB', 'error');
         return;
       }
       try {
-        await api('/auto-schedule', { method: 'POST', body: JSON.stringify({ enabled, slots, store_ids, schedule_mode, interval_hours, run_reviews, run_questions }) });
+        await api('/auto-schedule', { method: 'POST', body: JSON.stringify({ enabled, slots, store_ids, schedule_mode, interval_hours, run_reviews, run_questions, run_wb_chats }) });
         toast('Автозапуск сохранён');
         await loadAutoSchedulePanel();
       } catch (err) {

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException, Depends, Request, Response
+from fastapi import FastAPI, HTTPException, Depends, Request, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -43,7 +43,13 @@ from app.core.wb_buyer_chat import (
     merge_good_card,
     product_title_from_wb_chat,
 )
-from app.core.workflows import load_new_all, generate_mass, send_mass_all, generate_wb_buyer_chat_reply
+from app.core.workflows import (
+    auto_process_wb_buyer_chats,
+    generate_mass,
+    generate_wb_buyer_chat_reply,
+    load_new_all,
+    send_mass_all,
+)
 
 log = logging.getLogger("web")
 
@@ -327,9 +333,12 @@ class AutoScheduleBody(BaseModel):
     interval_hours: int = 1
     run_reviews: bool = True
     run_questions: bool = True
+    run_wb_chats: bool = False
 
 AUTO_SCHEDULE_KEY = "auto_schedule_json"
 AUTO_LAST_RUN_KEY = "auto_schedule_last_run_at"
+_WB_CHAT_LIST_TTL_S = 55.0
+_wb_chat_list_cache: dict[int, tuple[float, list]] = {}
 _scheduler_task: Optional[asyncio.Task] = None
 _scheduler_seen: set[str] = set()
 _auto_run_task: Optional[asyncio.Task] = None
@@ -368,6 +377,7 @@ def _get_auto_schedule(db: Database) -> dict:
         "interval_hours": 1,
         "run_reviews": True,
         "run_questions": True,
+        "run_wb_chats": False,
     }
     if not raw:
         return cfg
@@ -381,6 +391,7 @@ def _get_auto_schedule(db: Database) -> dict:
         cfg["interval_hours"] = max(1, min(int(obj.get("interval_hours") or 1), 24))
         cfg["run_reviews"] = bool(obj.get("run_reviews", True))
         cfg["run_questions"] = bool(obj.get("run_questions", True))
+        cfg["run_wb_chats"] = bool(obj.get("run_wb_chats", False))
     except Exception:
         pass
     return cfg
@@ -398,9 +409,10 @@ def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
         "interval_hours": interval_hours,
         "run_reviews": bool(body.run_reviews),
         "run_questions": bool(body.run_questions),
+        "run_wb_chats": bool(body.run_wb_chats),
     }
-    if not cfg["run_reviews"] and not cfg["run_questions"]:
-        raise HTTPException(400, "Нужно включить хотя бы один тип: отзывы или вопросы")
+    if not cfg["run_reviews"] and not cfg["run_questions"] and not cfg["run_wb_chats"]:
+        raise HTTPException(400, "Нужно включить хотя бы один тип: отзывы, вопросы или чаты WB")
     db.set_setting(AUTO_SCHEDULE_KEY, json.dumps(cfg, ensure_ascii=False))
     return cfg
 
@@ -456,24 +468,34 @@ async def _run_auto_slot(slot: str) -> None:
     try:
         run_reviews = bool(cfg.get("run_reviews", True))
         run_questions = bool(cfg.get("run_questions", True))
+        run_wb_chats = bool(cfg.get("run_wb_chats", False))
         item_types: list[str] = []
         if run_reviews:
             item_types.append("review")
         if run_questions:
             item_types.append("question")
-        if not item_types:
-            return
-        deleted = db.clear_items([s.id for s in stores], item_types=item_types)
-        added = await load_new_all(db, stores)
-        _auto_state["phase"] = "generate"
-        item_ids = _collect_pending_item_ids(db, [s.id for s in stores], item_types=item_types)
+        deleted = 0
+        added = 0
+        item_ids: list[int] = []
         gen_ok = gen_failed = 0
         sent_ok = sent_skipped = sent_failed = 0
         key = (db.get_setting("openai_key") or "").strip()
-        if item_ids and key:
-            gen_ok, gen_failed = await generate_mass(db, item_ids, key, model="gpt-5.2")
-            _auto_state["phase"] = "send"
-            sent_ok, sent_skipped, sent_failed = await send_mass_all(db, item_ids)
+        if item_types:
+            deleted = db.clear_items([s.id for s in stores], item_types=item_types)
+            added = await load_new_all(db, stores)
+            _auto_state["phase"] = "generate"
+            item_ids = _collect_pending_item_ids(db, [s.id for s in stores], item_types=item_types)
+            if item_ids and key:
+                gen_ok, gen_failed = await generate_mass(db, item_ids, key, model="gpt-5.2")
+                _auto_state["phase"] = "send"
+                sent_ok, sent_skipped, sent_failed = await send_mass_all(db, item_ids)
+        wb_stats: dict = {}
+        if run_wb_chats:
+            _auto_state["phase"] = "wb_chats"
+            if key:
+                wb_stats = await auto_process_wb_buyer_chats(db, stores, openai_key=key)
+            else:
+                wb_stats = {"wb_chat_skipped": 1, "reason": "no_openai_key"}
         db.add_audit_event(
             actor="system",
             action="auto_run",
@@ -491,6 +513,8 @@ async def _run_auto_slot(slot: str) -> None:
                 "sent_ok": sent_ok,
                 "sent_skipped": sent_skipped,
                 "sent_failed": sent_failed,
+                "run_wb_chats": run_wb_chats,
+                **wb_stats,
             },
         )
         _auto_state["phase"] = "done"
@@ -609,6 +633,7 @@ def _auto_status(db: Database) -> dict:
         "interval_hours": int(cfg.get("interval_hours") or 1),
         "run_reviews": bool(cfg.get("run_reviews", True)),
         "run_questions": bool(cfg.get("run_questions", True)),
+        "run_wb_chats": bool(cfg.get("run_wb_chats", False)),
         "next_slot": next_slot,
         "timezone": "Europe/Moscow",
     })
@@ -1089,6 +1114,23 @@ async def api_cancel_task(task_id: str, _: UserRow = Depends(require_user)):
     return {"ok": True}
 
 
+async def _wb_buyer_chat_list_cached(store_id: int, api_key: str, *, force_refresh: bool) -> list:
+    sid = int(store_id)
+    if force_refresh:
+        _wb_chat_list_cache.pop(sid, None)
+    now = time.monotonic()
+    ent = _wb_chat_list_cache.get(sid)
+    if ent and (now - ent[0]) < _WB_CHAT_LIST_TTL_S:
+        return list(ent[1])
+    client = WbBuyerChatClient(api_key)
+    try:
+        chats = await client.list_chats()
+    except HttpStatusError:
+        raise
+    _wb_chat_list_cache[sid] = (now, chats)
+    return chats
+
+
 def _require_wb_store_for_chats(db: Database, store_id: int) -> Store:
     stores = [s for s in db.list_stores() if s.id == int(store_id)]
     if not stores:
@@ -1116,11 +1158,15 @@ def _wb_chat_http_error(e: HttpStatusError) -> HTTPException:
 
 
 @app.get("/api/wb/buyer-chats/{store_id}")
-async def api_wb_buyer_chat_list(store_id: int, db: Database = Depends(get_db), _: UserRow = Depends(require_user)):
+async def api_wb_buyer_chat_list(
+    store_id: int,
+    refresh: bool = Query(False, description="Сбросить кэш и заново запросить список у WB"),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
     s = _require_wb_store_for_chats(db, store_id)
-    client = WbBuyerChatClient(s.api_key)
     try:
-        chats = await client.list_chats()
+        chats = await _wb_buyer_chat_list_cached(store_id, s.api_key, force_refresh=refresh)
     except HttpStatusError as e:
         raise _wb_chat_http_error(e) from e
     return {"chats": chats}
@@ -1136,18 +1182,23 @@ async def api_wb_buyer_chat_thread(
     s = _require_wb_store_for_chats(db, store_id)
     client = WbBuyerChatClient(s.api_key)
     try:
-        chats = await client.list_chats()
+        chats = await _wb_buyer_chat_list_cached(store_id, s.api_key, force_refresh=False)
     except HttpStatusError as e:
         raise _wb_chat_http_error(e) from e
     chat_row = next((c for c in chats if str(c.get("chatID") or "") == str(chat_id)), None)
     if not chat_row:
         raise HTTPException(404, "Чат не найден в списке. Нажмите «Обновить список чатов».")
     try:
-        events, _next = await fetch_events_for_chat(client, chat_id, max_wb_requests=8)
+        events, _next = await fetch_events_for_chat(client, chat_id, max_wb_requests=3)
     except HttpStatusError as e:
         raise _wb_chat_http_error(e) from e
     gc = merge_good_card(chat_row if isinstance(chat_row, dict) else {}, events)
     lines_ts = collect_thread_lines(events, chat_id)
+    if not lines_ts and isinstance(chat_row, dict):
+        lm = chat_row.get("lastMessage") or {}
+        t = str(lm.get("text") or "").strip()
+        if t:
+            lines_ts = [("client", t, int(lm.get("addTimestamp") or 0))]
     lines = [{"role": r, "text": t, "addTimestamp": ts} for r, t, ts in lines_ts]
     texts_for_title = [t for _, t, __ in lines_ts]
     product_title = product_title_from_wb_chat(gc, texts_for_title)
@@ -1178,18 +1229,23 @@ async def api_wb_buyer_chat_generate(
         raise HTTPException(400, "chat_id пустой")
     client = WbBuyerChatClient(s.api_key)
     try:
-        chats = await client.list_chats()
+        chats = await _wb_buyer_chat_list_cached(store_id, s.api_key, force_refresh=False)
     except HttpStatusError as e:
         raise _wb_chat_http_error(e) from e
     chat_row = next((c for c in chats if str(c.get("chatID") or "") == str(chat_id)), None)
     if not chat_row:
         raise HTTPException(404, "Чат не найден в списке")
     try:
-        events, _ = await fetch_events_for_chat(client, chat_id, max_wb_requests=8)
+        events, _ = await fetch_events_for_chat(client, chat_id, max_wb_requests=3)
     except HttpStatusError as e:
         raise _wb_chat_http_error(e) from e
     gc = merge_good_card(chat_row if isinstance(chat_row, dict) else {}, events)
     lines_ts = collect_thread_lines(events, chat_id)
+    if not lines_ts and isinstance(chat_row, dict):
+        lm = chat_row.get("lastMessage") or {}
+        t = str(lm.get("text") or "").strip()
+        if t:
+            lines_ts = [("client", t, int(lm.get("addTimestamp") or 0))]
     texts_for_title = [t for _, t, __ in lines_ts]
     product_title = product_title_from_wb_chat(gc, texts_for_title)
     excerpt_parts = []
@@ -1244,6 +1300,7 @@ async def api_wb_buyer_chat_send(
         out = await client.send_message(rs, msg)
     except HttpStatusError as e:
         raise _wb_chat_http_error(e) from e
+    _wb_chat_list_cache.pop(int(store_id), None)
     try:
         db.add_audit_event(
             actor=user.username,

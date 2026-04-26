@@ -19,6 +19,13 @@ from .yam_client import YamClient
 from .ozon_client import OzonClient
 from .openai_client import OpenAIClient
 from .telegram_notify import send_review_to_chat
+from .wb_buyer_chat import (
+    WbBuyerChatClient,
+    collect_global_events_by_chat,
+    collect_thread_lines,
+    merge_good_card,
+    product_title_from_wb_chat,
+)
 
 log = logging.getLogger("wf")
 
@@ -861,3 +868,94 @@ async def generate_wb_buyer_chat_reply(
     if not reply:
         raise ValueError("В ответе модели нет поля reply")
     return reply
+
+
+async def auto_process_wb_buyer_chats(
+    db: Database,
+    stores: List[Store],
+    *,
+    openai_key: str,
+    event_pages: int = 10,
+    max_autosend_per_store: int = 5,
+    model: str = "gpt-5.2",
+) -> Dict[str, int]:
+    """
+    Автоответ в чатах WB: один проход по ленте событий, чаты где последнее сообщение от покупателя —
+    генерим и отправляем (как по отзывам/вопросам). Не больше max_autosend_per_store чатов за слот на магазин.
+    """
+    stats: Dict[str, int] = {
+        "wb_chat_stores": 0,
+        "wb_chat_candidates": 0,
+        "wb_chat_sent": 0,
+        "wb_chat_gen_failed": 0,
+        "wb_chat_send_failed": 0,
+    }
+    key = (openai_key or "").strip()
+    if not key:
+        return stats
+    for store in stores:
+        if store.marketplace != "wb" or not (store.api_key or "").strip():
+            continue
+        stats["wb_chat_stores"] += 1
+        client = WbBuyerChatClient(store.api_key)
+        try:
+            chats = await client.list_chats()
+            by_chat = await collect_global_events_by_chat(client, max_pages=event_pages)
+        except HttpStatusError as e:
+            log.warning("wb_chat_auto store=%s: HTTP %s", store.id, e.status)
+            continue
+        except (asyncio.CancelledError, GeneratorExit):
+            raise
+        except Exception:
+            log.exception("wb_chat_auto store=%s: list/events failed", store.id)
+            continue
+        chat_by_id = {str(c.get("chatID") or ""): c for c in chats if c.get("chatID")}
+        candidates: List[str] = []
+        for cid, evs in by_chat.items():
+            lines_ts = collect_thread_lines(evs, cid)
+            if not lines_ts or lines_ts[-1][0] != "client":
+                continue
+            if cid not in chat_by_id:
+                continue
+            candidates.append(cid)
+        stats["wb_chat_candidates"] += min(len(candidates), max_autosend_per_store)
+        for cid in candidates[:max_autosend_per_store]:
+            row = chat_by_id.get(cid)
+            if not row or not isinstance(row, dict):
+                continue
+            evs = by_chat.get(cid) or []
+            gc = merge_good_card(row, evs)
+            lines_ts = collect_thread_lines(evs, cid)
+            texts = [t for _, t, __ in lines_ts]
+            title = product_title_from_wb_chat(gc, texts)
+            excerpt_parts = []
+            for role, text, _ in lines_ts:
+                label = "Покупатель" if role == "client" else "Продавец" if role == "seller" else role
+                excerpt_parts.append(f"{label}: {text}")
+            conversation = "\n".join(excerpt_parts)
+            reply_sign = str(row.get("replySign") or "").strip()
+            if not reply_sign:
+                stats["wb_chat_send_failed"] += 1
+                continue
+            try:
+                draft = await generate_wb_buyer_chat_reply(
+                    db, key, product_title=title, conversation_excerpt=conversation, model=model
+                )
+            except (asyncio.CancelledError, GeneratorExit):
+                raise
+            except Exception:
+                log.exception("wb_chat_auto generate store=%s chat=%s", store.id, cid)
+                stats["wb_chat_gen_failed"] += 1
+                continue
+            try:
+                await client.send_message(reply_sign, draft)
+                stats["wb_chat_sent"] += 1
+            except HttpStatusError:
+                log.warning("wb_chat_auto send HTTP store=%s chat=%s", store.id, cid)
+                stats["wb_chat_send_failed"] += 1
+            except (asyncio.CancelledError, GeneratorExit):
+                raise
+            except Exception:
+                log.exception("wb_chat_auto send store=%s chat=%s", store.id, cid)
+                stats["wb_chat_send_failed"] += 1
+    return stats
