@@ -524,7 +524,7 @@
     if (ozSel) {
       const oz = storesForMarketplace('ozon');
       const prevOz = String(ozSel.value || '').trim();
-      ozChatsSuppressSelectChange = true;
+      ozonChatsSuppressSelectChange = true;
       ozSel.innerHTML = oz.length
         ? oz.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')
         : '<option value="">Нет магазинов Ozon — добавьте во вкладке «Магазины»</option>';
@@ -533,7 +533,7 @@
         if (prevOz && ids.has(prevOz)) ozSel.value = prevOz;
         else selectFirstStoreOption(ozSel);
       }
-      setTimeout(() => { ozChatsSuppressSelectChange = false; }, 0);
+      setTimeout(() => { ozonChatsSuppressSelectChange = false; }, 0);
     }
   }
 
