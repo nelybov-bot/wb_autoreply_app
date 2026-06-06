@@ -1,8 +1,11 @@
 """Ozon «Чаты с покупателями» — разбор сообщений и заголовков."""
 from __future__ import annotations
 
+import datetime as dt
 import re
 from typing import Any, Dict, List, Optional, Tuple
+
+from .chat_common import parse_api_error_detail
 
 
 def _ozon_user_role(user: Any) -> str:
@@ -122,3 +125,107 @@ def is_ozon_buyer_chat_row(row: dict) -> bool:
 def is_ozon_support_chat_row(row: dict) -> bool:
     ct = _norm_ozon_chat_type(ozon_chat_type(row))
     return bool(ct) and not is_ozon_buyer_chat_row(row)
+
+
+def _parse_ozon_iso(iso: str) -> Optional[dt.datetime]:
+    s = (iso or "").strip()
+    if not s:
+        return None
+    try:
+        msg_dt = dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if msg_dt.tzinfo is None:
+            msg_dt = msg_dt.replace(tzinfo=dt.timezone.utc)
+        return msg_dt
+    except ValueError:
+        return None
+
+
+def hours_since_ozon_iso(iso: str, *, now: Optional[dt.datetime] = None) -> Optional[float]:
+    msg_dt = _parse_ozon_iso(iso)
+    if msg_dt is None:
+        return None
+    ref = now or dt.datetime.now(dt.timezone.utc)
+    return (ref - msg_dt.astimezone(dt.timezone.utc)).total_seconds() / 3600.0
+
+
+def ozon_reply_window_hint(
+    lines: List[Tuple[str, str, str, str]],
+    *,
+    chat_status: str = "",
+) -> Dict[str, Any]:
+    """
+    Оценка, можно ли ещё ответить в чате через API.
+    Ozon часто возвращает 403 access period has expired — это срок диалога, не Premium.
+    """
+    st = str(chat_status or "").strip().lower()
+    if st == "closed":
+        return {
+            "blocked": True,
+            "reason": "Чат закрыт в Ozon — отправка через API недоступна.",
+            "warning": "",
+            "last_client_message_at": "",
+            "hours_since_client": None,
+        }
+    info = last_client_message_info(lines)
+    if not info:
+        return {
+            "blocked": False,
+            "reason": "",
+            "warning": "",
+            "last_client_message_at": "",
+            "hours_since_client": None,
+        }
+    _mid, created = info
+    hours = hours_since_ozon_iso(created)
+    out: Dict[str, Any] = {
+        "blocked": False,
+        "reason": "",
+        "warning": "",
+        "last_client_message_at": created,
+        "hours_since_client": hours,
+    }
+    if hours is None:
+        return out
+    # По ошибкам Ozon окно часто ~10 суток; 233 ч ≈ 9.7 дня.
+    if hours >= 240:
+        out["blocked"] = True
+        days = int(hours // 24)
+        out["reason"] = (
+            f"Последнее сообщение покупателя {days} дн. назад — окно ответа Ozon, скорее всего, закрыто."
+        )
+    elif hours >= 72:
+        out["warning"] = (
+            f"С последнего сообщения покупателя прошло {int(hours)} ч. "
+            "Ozon может отклонить ответ, если срок диалога истёк."
+        )
+    return out
+
+
+def ozon_chat_error_message(status: int, body: str) -> str:
+    detail = parse_api_error_detail(body or "")
+    low = detail.lower()
+    if status == 401:
+        return f"Ozon chat: 401 — проверьте Client-Id и Api-Key. {detail}"
+    if status == 403:
+        if "access period has expired" in low or "actions with this chat not permitted" in low:
+            return (
+                "Ozon chat: окно для ответа в этом чате закрыто (истёк срок доступа). "
+                "Это не Premium и не право «Чат» у ключа — Ozon запрещает отправку в этот диалог. "
+                "Попробуйте более свежий чат или ответ из кабинета продавца, если там ещё доступно. "
+                f"Детали: {detail}"
+            )
+        if any(x in low for x in ("premium", "subscription", "tariff", "plus")):
+            return (
+                "Ozon chat: 403 — нет доступа к чатам. Нужны Premium Plus/Pro и право «Чат» у API-ключа. "
+                + detail
+            )
+        return f"Ozon chat: 403 — доступ запрещён. {detail}"
+    if status == 429:
+        return f"Ozon chat: слишком много запросов (лимит 1 req/s). {detail}"
+    if status == 400:
+        return f"Ozon chat: неверный параметр. {detail}"
+    if status == 404:
+        return f"Ozon chat: чат не найден. {detail}"
+    if status == 409:
+        return f"Ozon chat: конфликт (возможно, чат уже закрыт). {detail}"
+    return f"Ozon chat: {detail or status}"

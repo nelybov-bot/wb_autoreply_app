@@ -31,6 +31,7 @@ from .ozon_buyer_chat import (
     is_ozon_buyer_chat_row,
     last_client_message_info as ozon_last_client_info,
     ozon_chat_row_id,
+    ozon_reply_window_hint,
     product_title_from_ozon_chat,
 )
 from .wb_buyer_chat import (
@@ -1199,6 +1200,7 @@ async def ozon_buyer_chats_mass_generate_send_for_store(
         "ozon_chat_skipped_already_replied": 0,
         "ozon_chat_skipped_before_cutoff": 0,
         "ozon_chat_skipped_support": 0,
+        "ozon_chat_skipped_reply_window": 0,
     }
     key = (openai_key or "").strip()
     if not key:
@@ -1224,6 +1226,12 @@ async def ozon_buyer_chats_mass_generate_send_for_store(
         if not isinstance(messages, list):
             messages = []
         lines = collect_ozon_thread_lines(messages)
+        chat_obj = row.get("chat") if isinstance(row.get("chat"), dict) else {}
+        chat_status = str(chat_obj.get("chat_status") or "")
+        window = ozon_reply_window_hint(lines, chat_status=chat_status)
+        if window.get("blocked"):
+            stats["ozon_chat_skipped_reply_window"] += 1
+            continue
         ok, reason, msg_key, _created = _ozon_chat_eligibility(db, store.id, chat_id, lines, reply_from)
         if not ok:
             if reason == "already_replied":

@@ -1154,6 +1154,8 @@
     if (ta) ta.value = '';
     const statusHint = document.getElementById('ozon-chats-status-hint');
     if (statusHint) statusHint.textContent = '';
+    const sendBtn = document.getElementById('btn-ozon-chats-send');
+    if (sendBtn) sendBtn.disabled = false;
   }
 
   async function refreshOzonChatsList(forceRefresh = true) {
@@ -1248,8 +1250,17 @@
           : '<div class="form-hint">Нет текста сообщений.</div>';
       }
       const statusHint = document.getElementById('ozon-chats-status-hint');
+      const sendBtn = document.getElementById('btn-ozon-chats-send');
+      const replyBlocked = !!t.reply_window_blocked;
+      if (sendBtn) sendBtn.disabled = replyBlocked;
       if (statusHint) {
-        if (t.already_replied) {
+        if (replyBlocked) {
+          statusHint.textContent = t.reply_window_reason || 'Окно ответа Ozon закрыто — отправка недоступна.';
+          statusHint.style.color = '#b91c1c';
+        } else if (t.reply_window_warning) {
+          statusHint.textContent = t.reply_window_warning;
+          statusHint.style.color = '#b45309';
+        } else if (t.already_replied) {
           statusHint.textContent = 'На последнее сообщение покупателя уже отвечали.';
           statusHint.style.color = '#b45309';
         } else if (t.skip_reason === 'before_cutoff') {
@@ -1260,6 +1271,7 @@
           statusHint.style.color = '';
         } else {
           statusHint.textContent = '';
+          statusHint.style.color = '';
         }
       }
     } catch (err) {
@@ -1345,7 +1357,7 @@
         body: JSON.stringify({ max_chats: 50 }),
       });
       toast(
-        `Ozon: отправлено ${r.ozon_chat_sent ?? 0}, уже отвечено ${r.ozon_chat_skipped_already_replied ?? 0}, раньше даты ${r.ozon_chat_skipped_before_cutoff ?? 0}, поддержка ${r.ozon_chat_skipped_support ?? 0}.`,
+        `Ozon: отправлено ${r.ozon_chat_sent ?? 0}, уже отвечено ${r.ozon_chat_skipped_already_replied ?? 0}, раньше даты ${r.ozon_chat_skipped_before_cutoff ?? 0}, окно закрыто ${r.ozon_chat_skipped_reply_window ?? 0}, поддержка ${r.ozon_chat_skipped_support ?? 0}.`,
       );
       await refreshOzonChatsList(true);
     } catch (err) {
