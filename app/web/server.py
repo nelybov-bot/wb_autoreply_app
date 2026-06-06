@@ -61,7 +61,7 @@ from app.core.ozon_actions import (
     remove_products_from_actions,
 )
 from app.core.ozon_client import OzonClient
-from app.core.chat_common import SETTING_REPLY_FROM, parse_api_error_detail
+from app.core.chat_common import SETTING_AUTO_CHAT_MAX_AGE_DAYS, SETTING_REPLY_FROM, parse_api_error_detail
 from app.core.workflows import (
     auto_process_ozon_buyer_chats,
     auto_process_wb_buyer_chats,
@@ -1142,7 +1142,7 @@ def api_items_bulk(body: BulkItemsBody, db: Database = Depends(get_db), _: UserR
 # ---------- API: settings ----------
 @app.get("/api/settings")
 def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
-    keys = ["openai_key", "telegram_bot_token", "telegram_chat_id", "telegram_enabled", "theme", SETTING_REPLY_FROM]
+    keys = ["openai_key", "telegram_bot_token", "telegram_chat_id", "telegram_enabled", "theme", SETTING_REPLY_FROM, SETTING_AUTO_CHAT_MAX_AGE_DAYS]
     return {k: db.get_setting(k) or "" for k in keys}
 
 

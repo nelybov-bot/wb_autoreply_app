@@ -22,7 +22,11 @@ from .telegram_notify import send_review_to_chat
 from .chat_common import (
     SETTING_REPLY_FROM,
     ozon_iso_after_cutoff,
+    parse_auto_chat_max_age_days,
     parse_reply_from_date,
+    SETTING_AUTO_CHAT_MAX_AGE_DAYS,
+    wb_ts_within_max_age,
+    ozon_iso_within_max_age,
     wb_ts_ms_after_cutoff,
 )
 from .ozon_actions import auto_remove_from_ozon_auto_actions
@@ -941,16 +945,22 @@ def _buyer_chat_reply_from(db: Database) -> Optional[dt.date]:
     return parse_reply_from_date(db.get_setting(SETTING_REPLY_FROM))
 
 
+def _buyer_chat_auto_max_age_days(db: Database) -> int:
+    return parse_auto_chat_max_age_days(db.get_setting(SETTING_AUTO_CHAT_MAX_AGE_DAYS))
+
+
 def _wb_chat_eligibility(
     db: Database,
     store_id: int,
     chat_id: str,
     lines_ts: List[tuple],
     reply_from: Optional[dt.date],
+    *,
+    max_age_days: Optional[int] = None,
 ) -> Tuple[bool, str, str, int]:
     """
     (eligible, skip_reason, client_message_key, client_ts_ms).
-    skip_reason: last_not_client | no_client | before_cutoff | already_replied | ok
+    skip_reason: last_not_client | no_client | before_cutoff | too_old | already_replied | ok
     """
     if not lines_ts or lines_ts[-1][0] != "client":
         return False, "last_not_client", "", 0
@@ -958,6 +968,8 @@ def _wb_chat_eligibility(
     if not info:
         return False, "no_client", "", 0
     msg_key, ts = info
+    if max_age_days is not None and not wb_ts_within_max_age(ts, max_age_days):
+        return False, "too_old", msg_key, ts
     if not wb_ts_ms_after_cutoff(ts, reply_from):
         return False, "before_cutoff", msg_key, ts
     if db.is_buyer_chat_replied(store_id, "wb", chat_id, msg_key):
@@ -971,6 +983,8 @@ def _ozon_chat_eligibility(
     chat_id: str,
     lines: List[tuple],
     reply_from: Optional[dt.date],
+    *,
+    max_age_days: Optional[int] = None,
 ) -> Tuple[bool, str, str, str]:
     """(eligible, skip_reason, client_message_key, created_at)."""
     if not lines or lines[-1][0] != "client":
@@ -979,6 +993,8 @@ def _ozon_chat_eligibility(
     if not info:
         return False, "no_client", "", ""
     msg_key, created = info
+    if max_age_days is not None and not ozon_iso_within_max_age(created, max_age_days):
+        return False, "too_old", msg_key, created
     if not ozon_iso_after_cutoff(created, reply_from):
         return False, "before_cutoff", msg_key, created
     if db.is_buyer_chat_replied(store_id, "ozon", chat_id, msg_key):
@@ -1027,10 +1043,12 @@ async def wb_buyer_chats_mass_generate_send_for_store(
     max_chats: int = 50,
     model: str = "gpt-5.2",
     pause_between_chats_sec: float = 0.0,
+    max_message_age_days: Optional[int] = None,
 ) -> Dict[str, int]:
     """
     Чаты WB, где в треде последнее сообщение от покупателя: сгенерировать ответ (OpenAI) и сразу отправить в WB.
     Не больше max_chats чатов за вызов. pause_between_chats_sec снижает риск 429 на buyer-chat.
+    max_message_age_days — только для автоответов (None = без лимита по свежести).
     """
     stats: Dict[str, int] = {
         "wb_chat_candidates": 0,
@@ -1041,6 +1059,7 @@ async def wb_buyer_chats_mass_generate_send_for_store(
         "wb_chat_skipped_no_reply_sign": 0,
         "wb_chat_skipped_already_replied": 0,
         "wb_chat_skipped_before_cutoff": 0,
+        "wb_chat_skipped_too_old": 0,
     }
     key = (openai_key or "").strip()
     if not key:
@@ -1056,12 +1075,16 @@ async def wb_buyer_chats_mass_generate_send_for_store(
     candidates: List[str] = []
     for cid, evs in by_chat.items():
         lines_ts = collect_thread_lines(evs, cid)
-        ok, reason, _mk, _ts = _wb_chat_eligibility(db, store.id, cid, lines_ts, reply_from)
+        ok, reason, _mk, _ts = _wb_chat_eligibility(
+            db, store.id, cid, lines_ts, reply_from, max_age_days=max_message_age_days
+        )
         if not ok:
             if reason == "already_replied":
                 stats["wb_chat_skipped_already_replied"] += 1
             elif reason == "before_cutoff":
                 stats["wb_chat_skipped_before_cutoff"] += 1
+            elif reason == "too_old":
+                stats["wb_chat_skipped_too_old"] += 1
             continue
         if cid not in chat_by_id:
             continue
@@ -1076,7 +1099,9 @@ async def wb_buyer_chats_mass_generate_send_for_store(
         evs = by_chat.get(cid) or []
         gc = merge_good_card(row, evs)
         lines_ts = collect_thread_lines(evs, cid)
-        _ok, _reason, client_msg_key, _ts = _wb_chat_eligibility(db, store.id, cid, lines_ts, reply_from)
+        _ok, _reason, client_msg_key, _ts = _wb_chat_eligibility(
+            db, store.id, cid, lines_ts, reply_from, max_age_days=max_message_age_days
+        )
         texts = [t for _, t, __, ___ in lines_ts]
         title = product_title_from_wb_chat(gc, texts)
         excerpt_parts = []
@@ -1164,6 +1189,7 @@ async def auto_process_wb_buyer_chats(
                 max_chats=max_autosend_per_store,
                 model=model,
                 pause_between_chats_sec=0.0,
+                max_message_age_days=_buyer_chat_auto_max_age_days(db),
             )
         except HttpStatusError as e:
             log.warning("wb_chat_auto store=%s: HTTP %s", store.id, e.status)
@@ -1190,6 +1216,7 @@ async def ozon_buyer_chats_mass_generate_send_for_store(
     max_chats: int = 50,
     model: str = "gpt-5.2",
     pause_between_chats_sec: float = 1.0,
+    max_message_age_days: Optional[int] = None,
 ) -> Dict[str, int]:
     stats: Dict[str, int] = {
         "ozon_chat_candidates": 0,
@@ -1201,6 +1228,7 @@ async def ozon_buyer_chats_mass_generate_send_for_store(
         "ozon_chat_skipped_before_cutoff": 0,
         "ozon_chat_skipped_support": 0,
         "ozon_chat_skipped_reply_window": 0,
+        "ozon_chat_skipped_too_old": 0,
     }
     key = (openai_key or "").strip()
     if not key:
@@ -1232,12 +1260,16 @@ async def ozon_buyer_chats_mass_generate_send_for_store(
         if window.get("blocked"):
             stats["ozon_chat_skipped_reply_window"] += 1
             continue
-        ok, reason, msg_key, _created = _ozon_chat_eligibility(db, store.id, chat_id, lines, reply_from)
+        ok, reason, msg_key, _created = _ozon_chat_eligibility(
+            db, store.id, chat_id, lines, reply_from, max_age_days=max_message_age_days
+        )
         if not ok:
             if reason == "already_replied":
                 stats["ozon_chat_skipped_already_replied"] += 1
             elif reason == "before_cutoff":
                 stats["ozon_chat_skipped_before_cutoff"] += 1
+            elif reason == "too_old":
+                stats["ozon_chat_skipped_too_old"] += 1
             continue
         candidates.append((chat_id, row, lines, msg_key))
     stats["ozon_chat_eligible"] = len(candidates)
@@ -1322,6 +1354,7 @@ async def auto_process_ozon_buyer_chats(
                 max_chats=max_autosend_per_store,
                 model=model,
                 pause_between_chats_sec=1.0,
+                max_message_age_days=_buyer_chat_auto_max_age_days(db),
             )
         except HttpStatusError as e:
             log.warning("ozon_chat_auto store=%s: HTTP %s", store.id, e.status)

@@ -411,7 +411,7 @@
           <label class="checkbox-row"><input type="checkbox" id="auto-run-wb-chats"> Чаты WB</label>
           <label class="checkbox-row"><input type="checkbox" id="auto-run-ozon-chats"> Чаты Ozon</label>
           <label class="checkbox-row"><input type="checkbox" id="auto-run-ozon-actions-remove"> Удаление из автоакций Ozon</label>
-          <small class="form-hint" style="display:block;margin-top:6px;">Чаты: автоответ, если последнее сообщение от покупателя (до 5 чатов за слот). Акции: удаление ваших товаров из автоакций Ozon для магазина слота (настройки — вкладка «Акции Ozon»). Нужны Client-Id и Api-Key Ozon; для чатов ещё OpenAI.</small>
+          <small class="form-hint" style="display:block;margin-top:6px;">Чаты: автоответ, если последнее сообщение от покупателя не старше N дней (в «Настройки», по умолчанию 3), до 5 чатов за слот. Акции: удаление из автоакций Ozon. Нужны ключи магазина; для чатов ещё OpenAI.</small>
         </div>
         <div class="form-group" style="margin-top: 12px;">
           <label>Магазины для авто</label>
@@ -454,7 +454,12 @@
             <div class="form-group">
               <label>Отвечать на сообщения с даты</label>
               <input type="date" id="setting-buyer_chat_reply_from_date">
-              <small class="form-hint">Пусто — без ограничения по дате. Применяется к автоответам и массовой обработке WB и Ozon (по времени MSK).</small>
+              <small class="form-hint">Пусто — без ограничения по дате. Применяется к ручной массовой обработке и проверке в UI (MSK).</small>
+            </div>
+            <div class="form-group">
+              <label>Автоответ в чатах: только свежие сообщения (дней)</label>
+              <input type="number" id="setting-buyer_chat_auto_max_age_days" min="1" max="30" step="1" placeholder="3">
+              <small class="form-hint">Только для автозапуска WB/Ozon: последнее сообщение покупателя не старше N дней (по умолчанию 3). Старые чаты пропускаются без генерации и отправки.</small>
             </div>
             <h2 style="margin-top: 22px;">Telegram</h2>
             <div class="form-group">
@@ -627,6 +632,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=10"></script>
+  <script src="/static/app.js?v=11"></script>
 </body>
 </html>

@@ -2009,6 +2009,8 @@
         const el = document.getElementById('setting-' + k);
         if (el) el.value = data[k] || '';
       });
+      const autoAgeEl = document.getElementById('setting-buyer_chat_auto_max_age_days');
+      if (autoAgeEl) autoAgeEl.value = String(data.buyer_chat_auto_max_age_days || '3');
       const tgEnabled = document.getElementById('setting-telegram_enabled');
       if (tgEnabled) tgEnabled.checked = String(data.telegram_enabled || '1') !== '0';
       const prompts = await api('/prompts');
@@ -2156,6 +2158,7 @@
       telegram_chat_id: document.getElementById('setting-telegram_chat_id').value,
       telegram_enabled: document.getElementById('setting-telegram_enabled')?.checked ? '1' : '0',
       buyer_chat_reply_from_date: document.getElementById('setting-buyer_chat_reply_from_date')?.value || '',
+      buyer_chat_auto_max_age_days: String(parseInt(document.getElementById('setting-buyer_chat_auto_max_age_days')?.value || '3', 10) || 3),
     };
     try {
       await api('/settings', { method: 'POST', body: JSON.stringify(body) });
