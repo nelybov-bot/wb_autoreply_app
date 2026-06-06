@@ -27,15 +27,14 @@ ENV/
 *~
 .DS_Store
 
-# Local data and logs (kept out of repo to avoid leaking secrets / user data)
-# NOTE: existing tracked files data/reviews.db and logs/app.log will not be
-# auto-removed by .gitignore. Untrack them explicitly when ready:
-#   git rm --cached data/reviews.db logs/app.log
+# Local data and logs — NEVER commit (API keys, user data). Render uses its own disk.
 data/*.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
+!data/.gitkeep
 logs/
+!logs/.gitkeep
 *.log
 
 # Test / coverage artifacts

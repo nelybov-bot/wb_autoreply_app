@@ -40,14 +40,12 @@ from app.core.wb_buyer_chat import (
     WbBuyerChatClient,
     collect_thread_lines,
     fetch_events_for_chat,
-    last_client_message_info as wb_last_client_info,
     merge_good_card,
     product_title_from_wb_chat,
     wb_chat_error_message,
 )
 from app.core.ozon_buyer_chat import (
     collect_ozon_thread_lines,
-    last_client_message_info as ozon_last_client_info,
     ozon_chat_row_id,
     product_title_from_ozon_chat,
 )

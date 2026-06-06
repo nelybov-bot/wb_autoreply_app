@@ -1230,12 +1230,7 @@ async def ozon_buyer_chats_mass_generate_send_for_store(
     take = candidates[: max(0, int(max_chats))]
     stats["ozon_chat_candidates"] = len(take)
     for i, (chat_id, _row, lines, client_msg_key) in enumerate(take):
-        hist = await client.chat_history(chat_id, limit=50)
-        messages = hist.get("messages") or []
-        if not isinstance(messages, list):
-            messages = []
-        lines = collect_ozon_thread_lines(messages)
-        title = product_title_from_ozon_chat(messages, lines)
+        title = product_title_from_ozon_chat([], lines)
         excerpt_parts = []
         for role, text, _mid, _ca in lines:
             label = "Покупатель" if role == "client" else "Продавец" if role == "seller" else role

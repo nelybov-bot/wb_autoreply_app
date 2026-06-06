@@ -52,30 +52,27 @@
   <main class="main">
     <!-- Сводка -->
     <section id="panel-summary" class="panel active">
+      <p class="form-hint" style="margin:0 0 16px;">Актуальные цифры с сервера: очередь и отправки за сегодня. Исторические «всего за всё время» убраны — они сбивали с толку после деплоя.</p>
       <div class="stats-grid" id="stats-cards">
         <div class="stat-card highlight">
-          <div class="value" id="stat-total">—</div>
-          <div class="label">Всего отвечено</div>
-        </div>
-        <div class="stat-card">
           <div class="value" id="stat-today">—</div>
-          <div class="label">Сегодня</div>
+          <div class="label">Отправлено сегодня</div>
         </div>
         <div class="stat-card">
-          <div class="value" id="stat-reviews">—</div>
-          <div class="label">Отзывов отправлено</div>
+          <div class="value" id="stat-queue-reviews">—</div>
+          <div class="label">Новых отзывов</div>
         </div>
         <div class="stat-card">
-          <div class="value" id="stat-questions">—</div>
-          <div class="label">Вопросов отправлено</div>
+          <div class="value" id="stat-queue-questions">—</div>
+          <div class="label">Новых вопросов</div>
         </div>
         <div class="stat-card">
-          <div class="value" id="stat-wb-chats">—</div>
-          <div class="label">Сообщений в чаты WB</div>
+          <div class="value" id="stat-wb-chats-today">—</div>
+          <div class="label">Чаты WB сегодня</div>
         </div>
         <div class="stat-card">
-          <div class="value" id="stat-ozon-chats">—</div>
-          <div class="label">Сообщений в чаты Ozon</div>
+          <div class="value" id="stat-ozon-chats-today">—</div>
+          <div class="label">Чаты Ozon сегодня</div>
         </div>
       </div>
       <div class="chart-section">
@@ -123,7 +120,7 @@
         <div class="stores-list-wrap">
           <div class="stores-head">
             <h2 class="stores-title">Магазины</h2>
-            <div class="stores-hint">Добавляй ключи и включай/выключай магазины. Данные остаются в базе.</div>
+            <div class="stores-hint">Ключи хранятся только в базе на сервере (не в Git). После деплоя на Render проверьте ключи здесь. Для сохранения между деплоями — Persistent Disk, см. DEPLOY.md.</div>
           </div>
           <div id="stores-list" class="stores-grid"></div>
         </div>
@@ -251,6 +248,10 @@
         <button type="button" class="btn btn-primary" id="btn-wb-chats-refresh">Обновить список чатов</button>
         <button type="button" class="btn btn-secondary" id="btn-wb-chats-mass" title="До 50 чатов за раз: ИИ + сразу отправка в WB">Сгенерировать и отправить ответы по всем подходящим чатам</button>
       </div>
+      <div class="progress-wrap" id="wb-chats-loading" aria-live="polite">
+        <div class="progress-bar indeterminate"><div class="fill"></div></div>
+        <div class="progress-text">Загрузка…</div>
+      </div>
       <div class="wb-chats-layout">
         <div class="wb-chats-list-wrap">
           <h3 class="wb-chats-subtitle">Чаты</h3>
@@ -290,6 +291,10 @@
         <select id="ozon-chats-store" title="Магазин Ozon"></select>
         <button type="button" class="btn btn-primary" id="btn-ozon-chats-refresh">Обновить список чатов</button>
         <button type="button" class="btn btn-secondary" id="btn-ozon-chats-mass" title="До 50 чатов за раз: ИИ + сразу отправка в Ozon">Сгенерировать и отправить ответы по всем подходящим чатам</button>
+      </div>
+      <div class="progress-wrap" id="ozon-chats-loading" aria-live="polite">
+        <div class="progress-bar indeterminate"><div class="fill"></div></div>
+        <div class="progress-text">Загрузка…</div>
       </div>
       <div class="wb-chats-layout">
         <div class="wb-chats-list-wrap">

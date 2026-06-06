@@ -206,15 +206,16 @@
   async function loadStats() {
     try {
       const s = await api('/stats');
-      document.getElementById('stat-total').textContent = s.total_sent ?? 0;
-      document.getElementById('stat-today').textContent = s.sent_today ?? 0;
-      document.getElementById('stat-reviews').textContent = s.by_type?.review ?? 0;
-      document.getElementById('stat-questions').textContent = s.by_type?.question ?? 0;
-      const wbEl = document.getElementById('stat-wb-chats');
-      if (wbEl) wbEl.textContent = s.wb_chat_sent ?? 0;
-      const ozEl = document.getElementById('stat-ozon-chats');
-      if (ozEl) ozEl.textContent = s.ozon_chat_sent ?? 0;
       const q = s.queue || {};
+      const set = (id, v) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = v;
+      };
+      set('stat-today', s.sent_today ?? 0);
+      set('stat-queue-reviews', q.new_reviews ?? 0);
+      set('stat-queue-questions', q.new_questions ?? 0);
+      set('stat-wb-chats-today', s.wb_chat_sent_today ?? 0);
+      set('stat-ozon-chats-today', s.ozon_chat_sent_today ?? 0);
       const storesMeta = s.stores || {};
       let auto = null;
       try { auto = await api('/auto-schedule/status'); } catch (_) {}
@@ -230,17 +231,9 @@
         cancelled: 'остановлено',
         error: 'ошибка',
       };
-      const processed = (q.sent_reviews ?? 0) + (q.sent_questions ?? 0);
       const summary = [
-        { k: 'Новых отзывов', v: String(q.new_reviews ?? 0) },
-        { k: 'Новых вопросов', v: String(q.new_questions ?? 0) },
         { k: 'Сгенерировано (отзывы)', v: String(q.generated_reviews ?? 0) },
         { k: 'Сгенерировано (вопросы)', v: String(q.generated_questions ?? 0) },
-        { k: 'Сообщений в чаты WB (всего)', v: String(s.wb_chat_sent ?? 0) },
-        { k: 'Чаты WB сегодня', v: String(s.wb_chat_sent_today ?? 0) },
-        { k: 'Сообщений в чаты Ozon (всего)', v: String(s.ozon_chat_sent ?? 0) },
-        { k: 'Чаты Ozon сегодня', v: String(s.ozon_chat_sent_today ?? 0) },
-        { k: 'Обработано (отправлено)', v: String(processed) },
         { k: 'Магазины активные', v: `${storesMeta.active ?? 0} / ${storesMeta.total ?? 0}` },
         { k: 'Автозапуск', v: auto ? `${auto.running ? 'идёт' : 'ожидание'} · ${autoPhaseRu[auto.phase] || auto.phase || '—'}` : '—' },
         { k: 'Следующий слот (MSK)', v: auto?.next_slot || '—' },
@@ -257,6 +250,60 @@
 
   // ---- Stores ----
   let stores = [];
+  let storesLoadPromise = null;
+
+  async function ensureStoresLoaded() {
+    if (stores.length) return stores;
+    if (!storesLoadPromise) {
+      storesLoadPromise = api('/stores')
+        .then(list => {
+          stores = Array.isArray(list) ? list : [];
+          return stores;
+        })
+        .catch(err => {
+          storesLoadPromise = null;
+          throw err;
+        });
+    }
+    return storesLoadPromise;
+  }
+
+  function selectFirstStoreOption(sel) {
+    if (!sel || !sel.options || !sel.options.length) return;
+    for (let i = 0; i < sel.options.length; i++) {
+      if (String(sel.options[i].value || '').trim()) {
+        sel.selectedIndex = i;
+        return;
+      }
+    }
+  }
+
+  function setPanelLoading(id, visible, message) {
+    const wrap = document.getElementById(id);
+    if (!wrap) return;
+    wrap.classList.toggle('visible', !!visible);
+    if (message) {
+      const t = wrap.querySelector('.progress-text');
+      if (t) t.textContent = message;
+    }
+  }
+
+  function setChatToolbarBusy(panelPrefix, busy) {
+    const ids = [
+      `btn-${panelPrefix}-refresh`,
+      `btn-${panelPrefix}-mass`,
+      `btn-${panelPrefix}-load-thread`,
+      `btn-${panelPrefix}-generate`,
+      `btn-${panelPrefix}-send`,
+      `btn-${panelPrefix}-more-history`,
+    ];
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = !!busy;
+    });
+    const sel = document.getElementById(`${panelPrefix}-store`);
+    if (sel) sel.disabled = !!busy;
+  }
 
   function marketplaceExtra() {
     const m = document.querySelector('#form-store select[name="marketplace"]').value;
@@ -380,9 +427,15 @@
     }
   }
 
+  function invalidateStoresCache() {
+    stores = [];
+    storesLoadPromise = null;
+  }
+
   async function loadStores() {
     try {
-      stores = await api('/stores');
+      invalidateStoresCache();
+      await ensureStoresLoaded();
       renderStores();
     } catch (err) {
       toast(err.message, 'error');
@@ -391,8 +444,10 @@
 
   function fillStoreSelects() {
     const opts = '<option value="">Все магазины</option>' + stores.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
-    document.getElementById('reviews-store').innerHTML = opts;
-    document.getElementById('questions-store').innerHTML = opts;
+    const rev = document.getElementById('reviews-store');
+    const qu = document.getElementById('questions-store');
+    if (rev) rev.innerHTML = opts;
+    if (qu) qu.innerHTML = opts;
     const wbSel = document.getElementById('wb-chats-store');
     if (wbSel) {
       const wb = stores.filter(s => s.marketplace === 'wb');
@@ -404,6 +459,7 @@
       if (wb.length) {
         const ids = new Set(wb.map(s => String(s.id)));
         if (prev && ids.has(prev)) wbSel.value = prev;
+        else selectFirstStoreOption(wbSel);
       }
       setTimeout(() => { wbChatsSuppressSelectChange = false; }, 0);
     }
@@ -414,10 +470,11 @@
       ozChatsSuppressSelectChange = true;
       ozSel.innerHTML = oz.length
         ? oz.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')
-        : '<option value="">Нет магазинов Ozon</option>';
+        : '<option value="">Нет магазинов Ozon — добавьте во вкладке «Магазины»</option>';
       if (oz.length) {
         const ids = new Set(oz.map(s => String(s.id)));
         if (prevOz && ids.has(prevOz)) ozSel.value = prevOz;
+        else selectFirstStoreOption(ozSel);
       }
       setTimeout(() => { ozChatsSuppressSelectChange = false; }, 0);
     }
@@ -595,6 +652,8 @@
     const q = forceRefresh ? '?refresh=1' : '';
     const wrap = document.getElementById('wb-chats-list');
     if (wrap) wrap.innerHTML = '<div class="form-hint">Загрузка списка…</div>';
+    setPanelLoading('wb-chats-loading', true, 'Загружаю список чатов WB… (до 30–60 с при первом запросе)');
+    setChatToolbarBusy('wb-chats', true);
     try {
       const data = await api(`/wb/buyer-chats/${sid}${q}`);
       if (gen !== wbChatsListFetchGen) return;
@@ -619,6 +678,11 @@
       wbChatReplySign = '';
       renderWbChatsList();
       toast(err.message, 'error');
+    } finally {
+      if (gen === wbChatsListFetchGen) {
+        setPanelLoading('wb-chats-loading', false);
+        setChatToolbarBusy('wb-chats', false);
+      }
     }
   }
 
@@ -626,6 +690,8 @@
     const sid = getWbChatsStoreId();
     if (!sid || !chatId) return;
     const gen = ++wbChatThreadFetchGen;
+    setPanelLoading('wb-chats-loading', true, 'Загружаю переписку…');
+    setChatToolbarBusy('wb-chats', true);
     try {
       const pages = Math.max(1, Math.min(8, wbChatThreadPages || 2));
       const path = `/wb/buyer-chats/${sid}/${encodeURIComponent(chatId)}/thread?pages=${pages}`;
@@ -681,14 +747,19 @@
       if (body) body.style.display = '';
       const hint = document.getElementById('wb-chats-hint');
       if (hint) hint.style.display = 'none';
+    } finally {
+      if (gen === wbChatThreadFetchGen) {
+        setPanelLoading('wb-chats-loading', false);
+        setChatToolbarBusy('wb-chats', false);
+      }
     }
   }
 
   async function loadWbChatsPanel() {
     const gen = ++wbChatsPanelGen;
-    if (!stores.length) {
-      try { await loadStores(); } catch (_) {}
-    }
+    try {
+      await ensureStoresLoaded();
+    } catch (_) {}
     if (gen !== wbChatsPanelGen) return;
     fillStoreSelects();
     if (gen !== wbChatsPanelGen) return;
@@ -906,13 +977,15 @@
   async function refreshOzonChatsList(forceRefresh = true) {
     const sid = getOzonChatsStoreId();
     if (!sid) {
-      toast('Выберите магазин Ozon', 'error');
+      toast('Выберите магазин Ozon или добавьте его во вкладке «Магазины»', 'error');
       return;
     }
     const gen = ++ozonChatsListFetchGen;
     const q = forceRefresh ? '?refresh=1' : '';
     const wrap = document.getElementById('ozon-chats-list');
     if (wrap) wrap.innerHTML = '<div class="form-hint">Загрузка списка…</div>';
+    setPanelLoading('ozon-chats-loading', true, 'Загружаю чаты Ozon… (1 запрос/с, может занять минуту)');
+    setChatToolbarBusy('ozon-chats', true);
     try {
       const data = await api(`/ozon/buyer-chats/${sid}${q}`);
       if (gen !== ozonChatsListFetchGen) return;
@@ -932,6 +1005,11 @@
       ozonChatsRaw = [];
       renderOzonChatsList();
       toast(err.message, 'error');
+    } finally {
+      if (gen === ozonChatsListFetchGen) {
+        setPanelLoading('ozon-chats-loading', false);
+        setChatToolbarBusy('ozon-chats', false);
+      }
     }
   }
 
@@ -939,6 +1017,8 @@
     const sid = getOzonChatsStoreId();
     if (!sid || !chatId) return;
     const gen = ++ozonChatThreadFetchGen;
+    setPanelLoading('ozon-chats-loading', true, 'Загружаю переписку…');
+    setChatToolbarBusy('ozon-chats', true);
     try {
       const t = await api(`/ozon/buyer-chats/${sid}/${encodeURIComponent(chatId)}/thread`);
       if (gen !== ozonChatThreadFetchGen) return;
@@ -974,14 +1054,19 @@
     } catch (err) {
       if (gen !== ozonChatThreadFetchGen) return;
       toast(err.message, 'error');
+    } finally {
+      if (gen === ozonChatThreadFetchGen) {
+        setPanelLoading('ozon-chats-loading', false);
+        setChatToolbarBusy('ozon-chats', false);
+      }
     }
   }
 
   async function loadOzonChatsPanel() {
     const gen = ++ozonChatsPanelGen;
-    if (!stores.length) {
-      try { await loadStores(); } catch (_) {}
-    }
+    try {
+      await ensureStoresLoaded();
+    } catch (_) {}
     if (gen !== ozonChatsPanelGen) return;
     fillStoreSelects();
     const sid = getOzonChatsStoreId();
@@ -1482,7 +1567,7 @@
 
   async function loadAutoSchedulePanel() {
     try {
-      if (!stores.length) stores = await api('/stores');
+      await ensureStoresLoaded();
       const autoCfg = await api('/auto-schedule');
       const autoEnabled = document.getElementById('auto-enabled');
       const autoSlots = document.getElementById('auto-slots');
@@ -1881,12 +1966,12 @@
       return;
     }
     loadStats();
-    loadStores().then(() => {
+    ensureStoresLoaded().then(() => {
       fillStoreSelects();
       wireWbChatsPanel();
       wireOzonChatsPanel();
       loadReviews();
       loadQuestions();
-    });
+    }).catch(() => {});
   });
 })();
