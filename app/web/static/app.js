@@ -924,6 +924,8 @@
   }
 
   function wireWbChatsPanel() {
+    if (wireWbChatsPanel._done) return;
+    wireWbChatsPanel._done = true;
     const sel = document.getElementById('wb-chats-store');
     if (sel) {
       sel.addEventListener('change', () => {
@@ -932,11 +934,17 @@
         wbChatsListStoreId = null;
         wbChatSelectedId = null;
         wbChatReplySign = '';
-        void refreshWbChatsList();
+        void refreshWbChatsList(true);
       });
     }
     const b1 = document.getElementById('btn-wb-chats-refresh');
-    if (b1) b1.addEventListener('click', () => { void refreshWbChatsList(); });
+    if (b1) {
+      b1.addEventListener('click', () => {
+        setChatStatusBar('wb-chats-status-bar', 'loading', 'Запрос к WB… подождите, первый ответ может занять до 1–2 минут.');
+        setPanelLoading('wb-chats-loading', true, 'Запрос к WB…');
+        void refreshWbChatsList(true);
+      });
+    }
     const bMass = document.getElementById('btn-wb-chats-mass');
     if (bMass) bMass.addEventListener('click', () => { void wbChatsMassGenerateSend(); });
     const b2 = document.getElementById('btn-wb-chats-load-thread');
@@ -1199,6 +1207,8 @@
   }
 
   function wireOzonChatsPanel() {
+    if (wireOzonChatsPanel._done) return;
+    wireOzonChatsPanel._done = true;
     const sel = document.getElementById('ozon-chats-store');
     if (sel) {
       sel.addEventListener('change', () => {
@@ -1209,7 +1219,11 @@
         void refreshOzonChatsList();
       });
     }
-    document.getElementById('btn-ozon-chats-refresh')?.addEventListener('click', () => { void refreshOzonChatsList(); });
+    document.getElementById('btn-ozon-chats-refresh')?.addEventListener('click', () => {
+      setChatStatusBar('ozon-chats-status-bar', 'loading', 'Запрос к Ozon…');
+      setPanelLoading('ozon-chats-loading', true, 'Запрос к Ozon…');
+      void refreshOzonChatsList();
+    });
     document.getElementById('btn-ozon-chats-mass')?.addEventListener('click', () => { void ozonChatsMassGenerateSend(); });
     document.getElementById('btn-ozon-chats-load-thread')?.addEventListener('click', () => {
       if (ozonChatSelectedId) void loadOzonChatThread(ozonChatSelectedId);
@@ -2010,12 +2024,15 @@
       return;
     }
     loadStats();
+    wireWbChatsPanel();
+    wireOzonChatsPanel();
     ensureStoresLoaded().then(() => {
       fillStoreSelects();
-      wireWbChatsPanel();
-      wireOzonChatsPanel();
       loadReviews();
       loadQuestions();
-    }).catch(() => {});
+    }).catch((err) => {
+      console.error('stores load failed', err);
+      fillStoreSelects();
+    });
   });
 })();

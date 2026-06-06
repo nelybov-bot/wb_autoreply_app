@@ -1900,6 +1900,15 @@ async def _shutdown_scheduler():
 
 # ---------- Static SPA & PWA ----------
 if STATIC_DIR.exists():
+
+    @app.get("/static/app.js")
+    def app_js():
+        return FileResponse(
+            STATIC_DIR / "app.js",
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-cache, must-revalidate"},
+        )
+
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     @app.get("/login")
@@ -1924,11 +1933,18 @@ if STATIC_DIR.exists():
         _bootstrap_admin_if_needed(db)
         if not _get_current_user(request, db):
             return RedirectResponse(url="/login")
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(
+            STATIC_DIR / "index.html",
+            headers={"Cache-Control": "no-cache, must-revalidate"},
+        )
 
     @app.get("/sw.js")
     def sw():
-        return FileResponse(STATIC_DIR / "sw.js", media_type="application/javascript")
+        return FileResponse(
+            STATIC_DIR / "sw.js",
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-cache, must-revalidate"},
+        )
 else:
     @app.get("/")
     def index():
