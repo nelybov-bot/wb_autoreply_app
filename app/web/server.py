@@ -406,8 +406,6 @@ class OzonActionsRemoveBody(BaseModel):
 OZON_ACTIONS_SETTINGS_KEY = "ozon_actions_settings_json"
 AUTO_SCHEDULE_KEY = "auto_schedule_json"
 AUTO_LAST_RUN_KEY = "auto_schedule_last_run_at"
-# Индекс слота автозапуска: за один проход — один магазин (карусель по активным из настроек).
-AUTO_RR_STORE_INDEX_KEY = "auto_rr_store_index"
 _WB_CHAT_LIST_TTL_S = 55.0
 _OZON_CHAT_LIST_TTL_S = 55.0
 _wb_chat_list_cache: dict[int, tuple[float, list]] = {}
@@ -415,10 +413,14 @@ _ozon_chat_list_cache: dict[int, tuple[float, list, Optional[str]]] = {}
 _scheduler_task: Optional[asyncio.Task] = None
 _scheduler_seen: set[str] = set()
 _auto_run_task: Optional[asyncio.Task] = None
+_interval_skip_logged: bool = False
 _auto_state: dict = {
     "running": False,
     "slot": "",
     "phase": "idle",
+    "current_store_id": None,
+    "store_index": 0,
+    "store_count": 0,
     "last_started_at": "",
     "last_finished_at": "",
     "last_error": "",
@@ -561,6 +563,115 @@ def _collect_pending_item_ids(db: Database, store_ids: list[int], *, item_types:
         out.append(i)
     return out
 
+async def _process_auto_store(
+    db: Database,
+    store: Store,
+    *,
+    item_types: list[str],
+    run_wb_chats: bool,
+    run_ozon_chats: bool,
+    run_ozon_actions_remove: bool,
+    openai_key: str,
+    ozon_actions_cfg: dict,
+) -> dict:
+    """Полный цикл автозапуска для одного магазина."""
+    key = (openai_key or "").strip()
+    result: dict = {
+        "store_id": store.id,
+        "marketplace": store.marketplace,
+        "deleted_before_load": 0,
+        "added": 0,
+        "candidates": 0,
+        "gen_ok": 0,
+        "gen_failed": 0,
+        "sent_ok": 0,
+        "sent_skipped": 0,
+        "sent_failed": 0,
+    }
+    reviews_phase_error = ""
+    if item_types:
+        try:
+            _auto_state["phase"] = "load_new"
+            result["deleted_before_load"] = db.clear_items([store.id], item_types=item_types)
+            result["added"] = await load_new_all(db, [store])
+            _auto_state["phase"] = "generate"
+            item_ids = _collect_pending_item_ids(db, [store.id], item_types=item_types)
+            result["candidates"] = len(item_ids)
+            if item_ids and key:
+                gen_ok, gen_failed = await generate_mass(db, item_ids, key, model="gpt-5.2")
+                result["gen_ok"] = gen_ok
+                result["gen_failed"] = gen_failed
+                _auto_state["phase"] = "send"
+                sent_ok, sent_skipped, sent_failed = await send_mass_all(db, item_ids)
+                result["sent_ok"] = sent_ok
+                result["sent_skipped"] = sent_skipped
+                result["sent_failed"] = sent_failed
+        except (asyncio.CancelledError, GeneratorExit):
+            raise
+        except Exception as e:
+            reviews_phase_error = str(e)[:800]
+            log.exception(
+                "auto_run store_id=%s: этап отзывы/вопросы прерван; чаты/акции (если включены) выполняются отдельно",
+                store.id,
+            )
+    if reviews_phase_error:
+        result["reviews_phase_error"] = reviews_phase_error
+
+    if run_wb_chats:
+        _auto_state["phase"] = "wb_chats"
+        if key:
+            if store.marketplace == "wb" and (store.api_key or "").strip():
+                result["wb_chats"] = await auto_process_wb_buyer_chats(db, [store], openai_key=key)
+            else:
+                result["wb_chats"] = {
+                    "wb_chat_skipped": 1,
+                    "reason": "not_wb_or_no_key",
+                }
+        else:
+            result["wb_chats"] = {"wb_chat_skipped": 1, "reason": "no_openai_key"}
+
+    if run_ozon_chats:
+        _auto_state["phase"] = "ozon_chats"
+        if key:
+            if (
+                store.marketplace == "ozon"
+                and (store.client_id or "").strip()
+                and (store.api_key or "").strip()
+            ):
+                result["ozon_chats"] = await auto_process_ozon_buyer_chats(db, [store], openai_key=key)
+            else:
+                result["ozon_chats"] = {
+                    "ozon_chat_skipped": 1,
+                    "reason": "not_ozon_or_no_keys",
+                }
+        else:
+            result["ozon_chats"] = {"ozon_chat_skipped": 1, "reason": "no_openai_key"}
+
+    if run_ozon_actions_remove:
+        _auto_state["phase"] = "ozon_actions"
+        if (
+            store.marketplace == "ozon"
+            and (store.client_id or "").strip()
+            and (store.api_key or "").strip()
+        ):
+            watched = _store_watched_action_ids(ozon_actions_cfg, store.id)
+            result["ozon_actions"] = await ozon_actions_auto_remove_for_store(
+                store,
+                only_auto_add=bool(ozon_actions_cfg.get("only_auto_add", True)),
+                action_ids=watched if watched else None,
+            )
+        else:
+            result["ozon_actions"] = {
+                "skipped": 1,
+                "reason": "not_ozon_or_no_keys",
+            }
+    return result
+
+
+def _sum_store_results(stores_results: list[dict], key: str) -> int:
+    return sum(int(r.get(key) or 0) for r in stores_results)
+
+
 async def _run_auto_slot(slot: str) -> None:
     global _auto_state
     db = get_db()
@@ -577,18 +688,16 @@ async def _run_auto_slot(slot: str) -> None:
         )
         return
     sorted_stores = sorted(stores, key=lambda s: s.id)
-    n_slot_stores = len(sorted_stores)
-    try:
-        rr_abs = int((db.get_setting(AUTO_RR_STORE_INDEX_KEY) or "0").strip() or "0")
-    except ValueError:
-        rr_abs = 0
-    slot_store = sorted_stores[rr_abs % n_slot_stores]
+    n_stores = len(sorted_stores)
     started_dt = dt.datetime.now(MSK_TZ)
     started = started_dt.isoformat(timespec="seconds")
     _auto_state.update({
         "running": True,
         "slot": slot,
         "phase": "load_new",
+        "current_store_id": sorted_stores[0].id,
+        "store_index": 0,
+        "store_count": n_stores,
         "last_started_at": started,
         "last_error": "",
     })
@@ -598,122 +707,69 @@ async def _run_auto_slot(slot: str) -> None:
         run_wb_chats = bool(cfg.get("run_wb_chats", False))
         run_ozon_chats = bool(cfg.get("run_ozon_chats", False))
         run_ozon_actions_remove = bool(cfg.get("run_ozon_actions_remove", False))
+        item_types: list[str] = []
+        if run_reviews:
+            item_types.append("review")
+        if run_questions:
+            item_types.append("question")
+        key = (db.get_setting("openai_key") or "").strip()
+        ozon_actions_cfg = _get_ozon_actions_settings(db)
         log.info(
-            "auto_run start slot=%s stores_all=%s slot_store_id=%s reviews=%s questions=%s wb_chats=%s ozon_chats=%s ozon_actions=%s",
+            "auto_run start slot=%s stores=%s reviews=%s questions=%s wb_chats=%s ozon_chats=%s ozon_actions=%s",
             slot,
-            [s.id for s in stores],
-            slot_store.id,
+            [s.id for s in sorted_stores],
             run_reviews,
             run_questions,
             run_wb_chats,
             run_ozon_chats,
             run_ozon_actions_remove,
         )
-        item_types: list[str] = []
-        if run_reviews:
-            item_types.append("review")
-        if run_questions:
-            item_types.append("question")
-        deleted = 0
-        added = 0
-        item_ids: list[int] = []
-        gen_ok = gen_failed = 0
-        sent_ok = sent_skipped = sent_failed = 0
-        key = (db.get_setting("openai_key") or "").strip()
-        reviews_phase_error = ""
-        if item_types:
-            try:
-                deleted = db.clear_items([slot_store.id], item_types=item_types)
-                added = await load_new_all(db, [slot_store])
-                _auto_state["phase"] = "generate"
-                item_ids = _collect_pending_item_ids(db, [slot_store.id], item_types=item_types)
-                if item_ids and key:
-                    gen_ok, gen_failed = await generate_mass(db, item_ids, key, model="gpt-5.2")
-                    _auto_state["phase"] = "send"
-                    sent_ok, sent_skipped, sent_failed = await send_mass_all(db, item_ids)
-            except (asyncio.CancelledError, GeneratorExit):
-                raise
-            except Exception as e:
-                reviews_phase_error = str(e)[:800]
-                log.exception(
-                    "auto_run: этап отзывы/вопросы прерван; фаза чатов WB (если включена) выполняется отдельно",
-                )
-        wb_stats: dict = {}
-        if run_wb_chats:
-            _auto_state["phase"] = "wb_chats"
-            if key:
-                if slot_store.marketplace == "wb" and (slot_store.api_key or "").strip():
-                    wb_stats = await auto_process_wb_buyer_chats(db, [slot_store], openai_key=key)
-                else:
-                    wb_stats = {
-                        "wb_chat_skipped": 1,
-                        "reason": "slot_store_not_wb_or_no_key",
-                        "slot_store_id": slot_store.id,
-                    }
-            else:
-                wb_stats = {"wb_chat_skipped": 1, "reason": "no_openai_key"}
-        ozon_stats: dict = {}
-        if run_ozon_chats:
-            _auto_state["phase"] = "ozon_chats"
-            if key:
-                if (
-                    slot_store.marketplace == "ozon"
-                    and (slot_store.client_id or "").strip()
-                    and (slot_store.api_key or "").strip()
-                ):
-                    ozon_stats = await auto_process_ozon_buyer_chats(db, [slot_store], openai_key=key)
-                else:
-                    ozon_stats = {
-                        "ozon_chat_skipped": 1,
-                        "reason": "slot_store_not_ozon_or_no_keys",
-                        "slot_store_id": slot_store.id,
-                    }
-            else:
-                ozon_stats = {"ozon_chat_skipped": 1, "reason": "no_openai_key"}
-        ozon_action_stats: dict = {}
-        if run_ozon_actions_remove:
-            _auto_state["phase"] = "ozon_actions"
-            if (
-                slot_store.marketplace == "ozon"
-                and (slot_store.client_id or "").strip()
-                and (slot_store.api_key or "").strip()
-            ):
-                ocfg = _get_ozon_actions_settings(db)
-                watched = _store_watched_action_ids(ocfg, slot_store.id)
-                ozon_action_stats = await ozon_actions_auto_remove_for_store(
-                    slot_store,
-                    only_auto_add=bool(ocfg.get("only_auto_add", True)),
-                    action_ids=watched if watched else None,
-                )
-            else:
-                ozon_action_stats = {
-                    "skipped": 1,
-                    "reason": "slot_store_not_ozon_or_no_keys",
-                    "slot_store_id": slot_store.id,
-                }
+        stores_results: list[dict] = []
+        for idx, slot_store in enumerate(sorted_stores):
+            _auto_state["store_index"] = idx + 1
+            _auto_state["current_store_id"] = slot_store.id
+            log.info(
+                "auto_run store %s/%s id=%s marketplace=%s",
+                idx + 1,
+                n_stores,
+                slot_store.id,
+                slot_store.marketplace,
+            )
+            store_meta = await _process_auto_store(
+                db,
+                slot_store,
+                item_types=item_types,
+                run_wb_chats=run_wb_chats,
+                run_ozon_chats=run_ozon_chats,
+                run_ozon_actions_remove=run_ozon_actions_remove,
+                openai_key=key,
+                ozon_actions_cfg=ozon_actions_cfg,
+            )
+            stores_results.append(store_meta)
         meta_run = {
             "slot": slot,
-            "store_ids": [s.id for s in stores],
-            "slot_store_id": slot_store.id,
-            "rr_abs": rr_abs,
+            "store_ids": [s.id for s in sorted_stores],
+            "stores_processed": n_stores,
+            "stores_results": stores_results,
             "item_types": item_types,
-            "deleted_before_load": deleted,
-            "added": added,
-            "candidates": len(item_ids),
-            "gen_ok": gen_ok,
-            "gen_failed": gen_failed,
-            "sent_ok": sent_ok,
-            "sent_skipped": sent_skipped,
-            "sent_failed": sent_failed,
+            "deleted_before_load": _sum_store_results(stores_results, "deleted_before_load"),
+            "added": _sum_store_results(stores_results, "added"),
+            "candidates": _sum_store_results(stores_results, "candidates"),
+            "gen_ok": _sum_store_results(stores_results, "gen_ok"),
+            "gen_failed": _sum_store_results(stores_results, "gen_failed"),
+            "sent_ok": _sum_store_results(stores_results, "sent_ok"),
+            "sent_skipped": _sum_store_results(stores_results, "sent_skipped"),
+            "sent_failed": _sum_store_results(stores_results, "sent_failed"),
             "run_wb_chats": run_wb_chats,
             "run_ozon_chats": run_ozon_chats,
             "run_ozon_actions_remove": run_ozon_actions_remove,
-            **wb_stats,
-            **ozon_stats,
-            **({"ozon_actions": ozon_action_stats} if ozon_action_stats else {}),
+            "wb_chat_sent": sum(
+                int((r.get("wb_chats") or {}).get("wb_chat_sent") or 0) for r in stores_results
+            ),
+            "ozon_chat_sent": sum(
+                int((r.get("ozon_chats") or {}).get("ozon_chat_sent") or 0) for r in stores_results
+            ),
         }
-        if reviews_phase_error:
-            meta_run["reviews_phase_error"] = reviews_phase_error
         db.add_audit_event(
             actor="system",
             action="auto_run",
@@ -722,10 +778,8 @@ async def _run_auto_slot(slot: str) -> None:
             meta=meta_run,
         )
         _auto_state["phase"] = "done"
-        try:
-            db.set_setting(AUTO_RR_STORE_INDEX_KEY, str(rr_abs + 1))
-        except Exception:
-            pass
+        _auto_state["current_store_id"] = None
+        _auto_state["store_index"] = 0
     except asyncio.CancelledError:
         _auto_state["phase"] = "cancelled"
         raise
@@ -743,7 +797,7 @@ async def _run_auto_slot(slot: str) -> None:
             pass
 
 async def _auto_scheduler_loop() -> None:
-    global _scheduler_seen, _auto_run_task
+    global _scheduler_seen, _auto_run_task, _interval_skip_logged
     while True:
         try:
             db = get_db()
@@ -751,9 +805,31 @@ async def _auto_scheduler_loop() -> None:
             now = dt.datetime.now(MSK_TZ)
             day = now.strftime("%Y-%m-%d")
             hm = now.strftime("%H:%M")
-            # чистим ключи прошлых дней
             _scheduler_seen = {k for k in _scheduler_seen if k.startswith(day + "|")}
-            if cfg.get("enabled") and (_auto_run_task is None or _auto_run_task.done()):
+
+            if _auto_run_task is not None and _auto_run_task.done():
+                try:
+                    _auto_run_task.result()
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    log.exception("auto_run task failed: %s", e)
+                    try:
+                        db.add_audit_event(
+                            actor="system",
+                            action="auto_run",
+                            item_type="mixed",
+                            result="error",
+                            meta={"error": str(e)[:800]},
+                        )
+                    except Exception:
+                        pass
+                _auto_run_task = None
+                _interval_skip_logged = False
+
+            busy = _auto_run_task is not None and not _auto_run_task.done()
+
+            if cfg.get("enabled"):
                 mode = str(cfg.get("schedule_mode") or "slots")
                 run_reason = ""
                 if mode == "interval":
@@ -771,31 +847,53 @@ async def _auto_scheduler_loop() -> None:
                         except Exception:
                             due = True
                     if due:
-                        run_reason = f"interval:{interval_h}h"
+                        if busy:
+                            if not _interval_skip_logged:
+                                log.info(
+                                    "auto_run: интервал %sh пропущен — предыдущий цикл ещё выполняется (магазин %s/%s)",
+                                    interval_h,
+                                    _auto_state.get("store_index") or "?",
+                                    _auto_state.get("store_count") or "?",
+                                )
+                                _interval_skip_logged = True
+                        else:
+                            run_reason = f"interval:{interval_h}h"
+                            _interval_skip_logged = False
                 else:
                     for slot in (cfg.get("slots") or []):
                         key = f"{day}|{slot}"
                         if hm == slot and key not in _scheduler_seen:
                             _scheduler_seen.add(key)
-                            run_reason = slot
+                            if busy:
+                                log.info(
+                                    "auto_run: слот %s пропущен — предыдущий цикл ещё выполняется (магазин %s/%s)",
+                                    slot,
+                                    _auto_state.get("store_index") or "?",
+                                    _auto_state.get("store_count") or "?",
+                                )
+                                try:
+                                    db.add_audit_event(
+                                        actor="system",
+                                        action="auto_run_skipped",
+                                        item_type="mixed",
+                                        result="skipped",
+                                        meta={
+                                            "slot": slot,
+                                            "reason": "previous_run_still_running",
+                                            "store_index": _auto_state.get("store_index"),
+                                            "store_count": _auto_state.get("store_count"),
+                                            "current_store_id": _auto_state.get("current_store_id"),
+                                            "phase": _auto_state.get("phase"),
+                                        },
+                                    )
+                                except Exception:
+                                    pass
+                            else:
+                                run_reason = slot
                             break
-                if run_reason:
-                    try:
-                        _auto_run_task = asyncio.create_task(_run_auto_slot(run_reason))
-                        await _auto_run_task
-                    except Exception as e:
-                        try:
-                            db.add_audit_event(
-                                actor="system",
-                                action="auto_run",
-                                item_type="mixed",
-                                result="error",
-                                meta={"slot": run_reason, "error": str(e)},
-                            )
-                        except Exception:
-                            pass
-                    finally:
-                        _auto_run_task = None
+                if run_reason and not busy:
+                    _auto_run_task = asyncio.create_task(_run_auto_slot(run_reason))
+
             await asyncio.sleep(15)
         except asyncio.CancelledError:
             raise
@@ -1182,6 +1280,7 @@ async def api_auto_schedule_stop(db: Database = Depends(get_db), _: UserRow = De
         except Exception:
             pass
         _auto_run_task = None
+        _interval_skip_logged = False
         _auto_state["running"] = False
         _auto_state["phase"] = "cancelled"
         _auto_state["last_finished_at"] = dt.datetime.now(MSK_TZ).isoformat(timespec="seconds")

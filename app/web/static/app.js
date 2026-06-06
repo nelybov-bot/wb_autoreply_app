@@ -735,10 +735,13 @@
       const phase = phaseMap[s.phase] || (s.phase || '—');
       const run = s.running ? 'Выполняется' : 'Не выполняется';
       const slot = s.slot ? `слот ${s.slot}` : '—';
+      const storeProg = (s.running && s.store_count)
+        ? ` · магазин ${s.store_index || '?'}/${s.store_count}${s.current_store_id ? ` (id ${s.current_store_id})` : ''}`
+        : '';
       const next = s.next_slot ? `следующий ${s.next_slot}` : 'нет слотов';
       const err = s.last_error ? ` · ошибка: ${s.last_error}` : '';
       const hint = s.schedule_hint ? `\n${s.schedule_hint}` : '';
-      el.textContent = `${run} · этап: ${phase} · текущий: ${slot} · ${next}${err}${hint}`;
+      el.textContent = `${run} · этап: ${phase}${storeProg} · ${slot} · ${next}${err}${hint}`;
       const stopBtn = document.getElementById('btn-stop-auto');
       if (stopBtn) stopBtn.disabled = !s.running;
     } catch (e) {
