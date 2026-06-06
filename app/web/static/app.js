@@ -1468,12 +1468,12 @@
       const cnt = `${a.participating_products_count || 0} / ${a.potential_products_count || 0}`;
       return `<tr data-action-id="${a.id}">
         <td class="col-check"><input type="checkbox" class="ozon-action-check" value="${a.id}" ${a.participating_products_count > 0 ? '' : 'disabled'}></td>
-        <td>${a.id ?? '—'}</td>
-        <td>${escapeHtml(a.title || '')}${badges.length ? ' ' + badges.join(' ') : ''}</td>
-        <td>${escapeHtml(a.action_type || '—')}</td>
-        <td>${escapeHtml(formatOzonActionPeriod(a))}</td>
-        <td>${cnt}</td>
-        <td>${part}</td>
+        <td class="col-id">${a.id ?? '—'}</td>
+        <td class="col-title">${escapeHtml(a.title || '')}${badges.length ? ' ' + badges.join(' ') : ''}</td>
+        <td class="col-type">${escapeHtml(a.action_type || '—')}</td>
+        <td class="col-period">${escapeHtml(formatOzonActionPeriod(a))}</td>
+        <td class="col-count">${cnt}</td>
+        <td class="col-part">${part}</td>
       </tr>`;
     }).join('');
     const all = document.getElementById('ozon-actions-check-all');

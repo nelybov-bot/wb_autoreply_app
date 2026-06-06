@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
-  <link rel="stylesheet" href="/static/styles.css?v=4">
+  <link rel="stylesheet" href="/static/styles.css?v=5">
 </head>
 <body>
   <div class="bg-noise" aria-hidden="true"></div>
@@ -37,17 +37,30 @@
     </div>
   </header>
 
-  <nav class="tabs">
-    <button type="button" class="tab active" data-tab="summary">Сводка</button>
-    <button type="button" class="tab" data-tab="stores">Магазины</button>
-    <button type="button" class="tab" data-tab="reviews">Отзывы</button>
-    <button type="button" class="tab" data-tab="questions">Вопросы</button>
-    <button type="button" class="tab" data-tab="wb-chats">Чаты WB</button>
-    <button type="button" class="tab" data-tab="ozon-chats">Чаты Ozon</button>
-    <button type="button" class="tab" data-tab="ozon-actions">Акции Ozon</button>
-    <button type="button" class="tab" data-tab="auto">Автозапуск</button>
-    <button type="button" class="tab" data-tab="settings">Настройки</button>
-    <button type="button" class="tab" data-tab="log">Лог</button>
+  <nav class="tabs" aria-label="Разделы приложения">
+    <div class="tabs-scroll">
+      <div class="tab-group">
+        <button type="button" class="tab active" data-tab="summary">Сводка</button>
+        <button type="button" class="tab" data-tab="stores">Магазины</button>
+      </div>
+      <span class="tab-divider" aria-hidden="true"></span>
+      <div class="tab-group">
+        <button type="button" class="tab" data-tab="reviews">Отзывы</button>
+        <button type="button" class="tab" data-tab="questions">Вопросы</button>
+      </div>
+      <span class="tab-divider" aria-hidden="true"></span>
+      <div class="tab-group tab-group-mp">
+        <button type="button" class="tab tab-wb" data-tab="wb-chats">Чаты WB</button>
+        <button type="button" class="tab tab-ozon" data-tab="ozon-chats">Чаты Ozon</button>
+        <button type="button" class="tab tab-ozon" data-tab="ozon-actions">Акции Ozon</button>
+      </div>
+      <span class="tab-divider" aria-hidden="true"></span>
+      <div class="tab-group">
+        <button type="button" class="tab" data-tab="auto">Автозапуск</button>
+        <button type="button" class="tab" data-tab="settings">Настройки</button>
+        <button type="button" class="tab" data-tab="log">Лог</button>
+      </div>
+    </div>
   </nav>
 
   <main class="main">
@@ -332,7 +345,7 @@
 
     <!-- Акции Ozon -->
     <section id="panel-ozon-actions" class="panel">
-      <div class="form-card">
+      <div class="form-card form-card-wide">
         <h2>Акции Ozon</h2>
         <p class="form-hint" style="margin-top:0;">Ozon сам добавляет товары в часть акций (автоакции — в API это поле <code>auto_add_dates</code>). Здесь можно посмотреть акции и удалить ваши товары из выбранных или из всех автоакций с участием.</p>
         <div class="toolbar" style="margin:12px 0; flex-wrap:wrap; gap:8px;">
@@ -353,17 +366,17 @@
           <div class="progress-bar" role="progressbar"></div>
           <span class="progress-label">Загрузка…</span>
         </div>
-        <div class="items-table-wrap" style="margin-top:12px;">
-          <table class="items-table" id="ozon-actions-table">
+        <div class="items-table-wrap ozon-actions-table-wrap" style="margin-top:12px;">
+          <table class="items-table ozon-actions-table" id="ozon-actions-table">
             <thead>
               <tr>
                 <th class="col-check"><input type="checkbox" id="ozon-actions-check-all" title="Выбрать все"></th>
-                <th>ID</th>
-                <th>Название</th>
-                <th>Тип</th>
-                <th>Период</th>
-                <th>Товаров</th>
-                <th>Участие</th>
+                <th class="col-id">ID</th>
+                <th class="col-title">Название</th>
+                <th class="col-type">Тип</th>
+                <th class="col-period">Период</th>
+                <th class="col-count">Товаров</th>
+                <th class="col-part">Участие</th>
               </tr>
             </thead>
             <tbody id="ozon-actions-tbody"></tbody>
@@ -374,7 +387,7 @@
 
     <!-- Автозапуск -->
     <section id="panel-auto" class="panel">
-      <div class="form-card auto-card">
+      <div class="form-card form-card-wide auto-card">
         <h2>Автозапуск</h2>
         <div class="form-group">
           <label class="checkbox-row"><input type="checkbox" id="auto-enabled"> Включить автозапуск</label>
@@ -632,6 +645,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=11"></script>
+  <script src="/static/app.js?v=12"></script>
 </body>
 </html>
