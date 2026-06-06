@@ -195,6 +195,7 @@
       if (id === 'reviews') { loadReviews(); resumePanelTask('reviews'); }
       if (id === 'questions') { loadQuestions(); resumePanelTask('questions'); }
       if (id === 'wb-chats') { loadWbChatsPanel(); }
+      if (id === 'ozon-chats') { loadOzonChatsPanel(); }
       if (id === 'auto') loadAutoSchedulePanel();
       if (id === 'settings') loadSettings();
       if (id === 'log') loadLog();
@@ -211,6 +212,8 @@
       document.getElementById('stat-questions').textContent = s.by_type?.question ?? 0;
       const wbEl = document.getElementById('stat-wb-chats');
       if (wbEl) wbEl.textContent = s.wb_chat_sent ?? 0;
+      const ozEl = document.getElementById('stat-ozon-chats');
+      if (ozEl) ozEl.textContent = s.ozon_chat_sent ?? 0;
       const q = s.queue || {};
       const storesMeta = s.stores || {};
       let auto = null;
@@ -221,6 +224,7 @@
         generate: 'генерация',
         send: 'отправка',
         wb_chats: 'чаты WB',
+        ozon_chats: 'чаты Ozon',
         idle_items: 'без отзывов/вопросов',
         done: 'завершено',
         cancelled: 'остановлено',
@@ -234,6 +238,8 @@
         { k: 'Сгенерировано (вопросы)', v: String(q.generated_questions ?? 0) },
         { k: 'Сообщений в чаты WB (всего)', v: String(s.wb_chat_sent ?? 0) },
         { k: 'Чаты WB сегодня', v: String(s.wb_chat_sent_today ?? 0) },
+        { k: 'Сообщений в чаты Ozon (всего)', v: String(s.ozon_chat_sent ?? 0) },
+        { k: 'Чаты Ozon сегодня', v: String(s.ozon_chat_sent_today ?? 0) },
         { k: 'Обработано (отправлено)', v: String(processed) },
         { k: 'Магазины активные', v: `${storesMeta.active ?? 0} / ${storesMeta.total ?? 0}` },
         { k: 'Автозапуск', v: auto ? `${auto.running ? 'идёт' : 'ожидание'} · ${autoPhaseRu[auto.phase] || auto.phase || '—'}` : '—' },
@@ -401,6 +407,20 @@
       }
       setTimeout(() => { wbChatsSuppressSelectChange = false; }, 0);
     }
+    const ozSel = document.getElementById('ozon-chats-store');
+    if (ozSel) {
+      const oz = stores.filter(s => s.marketplace === 'ozon');
+      const prevOz = String(ozSel.value || '').trim();
+      ozChatsSuppressSelectChange = true;
+      ozSel.innerHTML = oz.length
+        ? oz.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')
+        : '<option value="">Нет магазинов Ozon</option>';
+      if (oz.length) {
+        const ids = new Set(oz.map(s => String(s.id)));
+        if (prevOz && ids.has(prevOz)) ozSel.value = prevOz;
+      }
+      setTimeout(() => { ozChatsSuppressSelectChange = false; }, 0);
+    }
   }
 
   function renderAutoStoreList(selectedIds) {
@@ -437,6 +457,7 @@
         generate: 'генерация',
         send: 'отправка',
         wb_chats: 'чаты WB',
+        ozon_chats: 'чаты Ozon',
         idle_items: 'без отзывов/вопросов',
         done: 'завершено',
         cancelled: 'остановлено',
@@ -474,7 +495,12 @@
   let wbChatsSuppressSelectChange = false;
   let wbChatSelectedId = null;
   let wbChatReplySign = '';
+  let wbChatClientMessageKey = '';
   let wbChatThreadPages = 2;
+  /** защита от гонок: быстрая смена вкладки / чата / магазина */
+  let wbChatsPanelGen = 0;
+  let wbChatsListFetchGen = 0;
+  let wbChatThreadFetchGen = 0;
 
   function getWbChatsStoreId() {
     const el = document.getElementById('wb-chats-store');
@@ -503,6 +529,7 @@
     if (hint) hint.style.display = 'none';
     if (body) body.style.display = '';
     wbChatReplySign = (row && row.replySign) ? String(row.replySign).trim() : '';
+    wbChatClientMessageKey = '';
     const titleEl = document.getElementById('wb-chats-product-title');
     if (titleEl) titleEl.textContent = wbGuessProductTitleFromRow(row);
     const threadEl = document.getElementById('wb-chats-thread');
@@ -558,16 +585,20 @@
     });
   }
 
-  async function refreshWbChatsList() {
+  async function refreshWbChatsList(forceRefresh = true) {
     const sid = getWbChatsStoreId();
     if (!sid) {
       toast('Выберите магазин WB', 'error');
       return;
     }
+    const gen = ++wbChatsListFetchGen;
+    const q = forceRefresh ? '?refresh=1' : '';
     const wrap = document.getElementById('wb-chats-list');
     if (wrap) wrap.innerHTML = '<div class="form-hint">Загрузка списка…</div>';
     try {
-      const data = await api(`/wb/buyer-chats/${sid}?refresh=1`);
+      const data = await api(`/wb/buyer-chats/${sid}${q}`);
+      if (gen !== wbChatsListFetchGen) return;
+      if (Number(getWbChatsStoreId()) !== Number(sid)) return;
       wbChatsRaw = data.chats || [];
       wbChatsListStoreId = sid;
       wbChatSelectedId = null;
@@ -581,6 +612,7 @@
       }
       if (body) body.style.display = 'none';
     } catch (err) {
+      if (gen !== wbChatsListFetchGen) return;
       wbChatsRaw = [];
       wbChatsListStoreId = null;
       wbChatSelectedId = null;
@@ -593,11 +625,31 @@
   async function loadWbChatThread(chatId) {
     const sid = getWbChatsStoreId();
     if (!sid || !chatId) return;
+    const gen = ++wbChatThreadFetchGen;
     try {
       const pages = Math.max(1, Math.min(8, wbChatThreadPages || 2));
       const path = `/wb/buyer-chats/${sid}/${encodeURIComponent(chatId)}/thread?pages=${pages}`;
       const t = await api(path);
+      if (gen !== wbChatThreadFetchGen) return;
+      if (Number(getWbChatsStoreId()) !== Number(sid)) return;
+      if (String(wbChatSelectedId || '') !== String(chatId)) return;
       wbChatReplySign = (t.reply_sign || '').trim();
+      wbChatClientMessageKey = (t.client_message_key || '').trim();
+      const statusHint = document.getElementById('wb-chats-status-hint');
+      if (statusHint) {
+        if (t.already_replied) {
+          statusHint.textContent = 'На последнее сообщение покупателя уже отвечали.';
+          statusHint.style.color = '#b45309';
+        } else if (t.skip_reason === 'before_cutoff') {
+          statusHint.textContent = 'Сообщение раньше даты «отвечать с» из настроек.';
+          statusHint.style.color = '#b45309';
+        } else if (t.skip_reason === 'last_not_client') {
+          statusHint.textContent = 'Последнее сообщение не от покупателя — автоответ не нужен.';
+          statusHint.style.color = '';
+        } else {
+          statusHint.textContent = '';
+        }
+      }
       const titleEl = document.getElementById('wb-chats-product-title');
       if (titleEl) titleEl.textContent = t.product_title || '—';
       const threadEl = document.getElementById('wb-chats-thread');
@@ -617,6 +669,8 @@
       const ta = document.getElementById('wb-chats-draft');
       if (ta) ta.value = '';
     } catch (err) {
+      if (gen !== wbChatThreadFetchGen) return;
+      if (String(wbChatSelectedId || '') !== String(chatId)) return;
       toast(err.message, 'error');
       const threadEl = document.getElementById('wb-chats-thread');
       if (threadEl) {
@@ -631,28 +685,36 @@
   }
 
   async function loadWbChatsPanel() {
+    const gen = ++wbChatsPanelGen;
     if (!stores.length) {
       try { await loadStores(); } catch (_) {}
     }
+    if (gen !== wbChatsPanelGen) return;
     fillStoreSelects();
+    if (gen !== wbChatsPanelGen) return;
     const sid = getWbChatsStoreId();
     const listMatches = sid != null && wbChatsListStoreId != null && Number(sid) === Number(wbChatsListStoreId);
-    if (!listMatches) {
-      wbChatsRaw = [];
-      wbChatsListStoreId = null;
-      wbChatSelectedId = null;
-      wbChatReplySign = '';
+    if (listMatches) {
       renderWbChatsList();
-      const hint = document.getElementById('wb-chats-hint');
-      const body = document.getElementById('wb-chats-detail-body');
-      if (hint) {
-        hint.style.display = '';
-        hint.textContent = sid
-          ? 'Список не загружен для этого магазина. Нажмите «Обновить список чатов».'
-          : 'Выберите магазин WB в списке выше.';
-      }
-      if (body) body.style.display = 'none';
+      return;
     }
+    if (sid) {
+      // При первом заходе на вкладку сразу тянем список (без ?refresh=1 — серверный кэш ~55 с, меньше 429)
+      await refreshWbChatsList(false);
+      return;
+    }
+    wbChatsRaw = [];
+    wbChatsListStoreId = null;
+    wbChatSelectedId = null;
+    wbChatReplySign = '';
+    renderWbChatsList();
+    const hint = document.getElementById('wb-chats-hint');
+    const body = document.getElementById('wb-chats-detail-body');
+    if (hint) {
+      hint.style.display = '';
+      hint.textContent = 'Выберите магазин WB в списке выше.';
+    }
+    if (body) body.style.display = 'none';
   }
 
   async function wbChatsGenerateDraft() {
@@ -676,6 +738,43 @@
     }
   }
 
+  async function wbChatsMassGenerateSend() {
+    const sid = getWbChatsStoreId();
+    if (!sid) {
+      toast('Выберите магазин WB', 'error');
+      return;
+    }
+    const msg =
+      'Обработаются только чаты, где последнее в переписке — сообщение покупателя.\n' +
+      'Для каждого: ответ сгенерирует ИИ и сразу отправится в Wildberries (не больше 50 чатов за один запуск, пауза ~1 с между чатами).\n' +
+      'Продолжить?';
+    if (!confirm(msg)) return;
+    const btn = document.getElementById('btn-wb-chats-mass');
+    if (btn) btn.disabled = true;
+    try {
+      const r = await api(`/wb/buyer-chats/${sid}/mass-generate-send`, {
+        method: 'POST',
+        body: JSON.stringify({ max_chats: 50, event_pages: 6 }),
+      });
+      const sent = r.wb_chat_sent ?? 0;
+      const genF = r.wb_chat_gen_failed ?? 0;
+      const sendF = r.wb_chat_send_failed ?? 0;
+      const skip = r.wb_chat_skipped_no_reply_sign ?? 0;
+      const dup = r.wb_chat_skipped_already_replied ?? 0;
+      const cutoff = r.wb_chat_skipped_before_cutoff ?? 0;
+      const elig = r.wb_chat_eligible ?? 0;
+      const cand = r.wb_chat_candidates ?? 0;
+      toast(
+        `Отправлено: ${sent}. В партии: ${cand} из ${elig}. Уже отвечено: ${dup}, раньше даты: ${cutoff}. Ошибки ИИ: ${genF}, отправки: ${sendF}, без reply_sign: ${skip}.`,
+      );
+      await refreshWbChatsList(true);
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   async function wbChatsSendMessage() {
     const sid = getWbChatsStoreId();
     if (!sid) {
@@ -695,7 +794,12 @@
     try {
       await api(`/wb/buyer-chats/${sid}/send`, {
         method: 'POST',
-        body: JSON.stringify({ reply_sign: wbChatReplySign, message: msg }),
+        body: JSON.stringify({
+          reply_sign: wbChatReplySign,
+          message: msg,
+          chat_id: wbChatSelectedId || '',
+          client_message_key: wbChatClientMessageKey || '',
+        }),
       });
       toast('Сообщение отправлено');
       if (wbChatSelectedId) await loadWbChatThread(wbChatSelectedId);
@@ -718,6 +822,8 @@
     }
     const b1 = document.getElementById('btn-wb-chats-refresh');
     if (b1) b1.addEventListener('click', () => { void refreshWbChatsList(); });
+    const bMass = document.getElementById('btn-wb-chats-mass');
+    if (bMass) bMass.addEventListener('click', () => { void wbChatsMassGenerateSend(); });
     const b2 = document.getElementById('btn-wb-chats-load-thread');
     if (b2) b2.addEventListener('click', () => {
       if (!wbChatSelectedId) {
@@ -740,6 +846,247 @@
     if (b3) b3.addEventListener('click', () => { void wbChatsGenerateDraft(); });
     const b4 = document.getElementById('btn-wb-chats-send');
     if (b4) b4.addEventListener('click', () => { void wbChatsSendMessage(); });
+  }
+
+  // ---- Ozon buyer chats ----
+  let ozonChatsRaw = [];
+  let ozonChatsListStoreId = null;
+  let ozonChatsSuppressSelectChange = false;
+  let ozonChatSelectedId = null;
+  let ozonChatClientMessageKey = '';
+  let ozonChatsPanelGen = 0;
+  let ozonChatsListFetchGen = 0;
+  let ozonChatThreadFetchGen = 0;
+
+  function getOzonChatsStoreId() {
+    const el = document.getElementById('ozon-chats-store');
+    const v = el && el.value ? String(el.value).trim() : '';
+    return v ? Number(v) : null;
+  }
+
+  function renderOzonChatsList() {
+    const wrap = document.getElementById('ozon-chats-list');
+    if (!wrap) return;
+    if (!ozonChatsRaw.length) {
+      wrap.innerHTML = '<div class="form-hint">Нет чатов. Нажмите «Обновить список чатов».</div>';
+      return;
+    }
+    wrap.innerHTML = ozonChatsRaw.map(c => {
+      const id = String(c.chat_id || '');
+      const enc = encodeURIComponent(id);
+      const active = ozonChatSelectedId === id ? 'wb-chat-item active' : 'wb-chat-item';
+      const preview = escapeHtml(c.preview || '—');
+      return `<button type="button" class="${active}" data-chat-id="${enc}"><div class="wb-chat-item-name">Чат ${escapeHtml(id.slice(0, 8))}…</div><div class="wb-chat-item-preview">${preview}</div></button>`;
+    }).join('');
+    wrap.querySelectorAll('.wb-chat-item').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const chatId = decodeURIComponent(btn.getAttribute('data-chat-id') || '');
+        ozonChatSelectedId = chatId;
+        renderOzonChatsList();
+        ozonChatShowDetailShell();
+        void loadOzonChatThread(chatId);
+      });
+    });
+  }
+
+  function ozonChatShowDetailShell() {
+    const hint = document.getElementById('ozon-chats-hint');
+    const body = document.getElementById('ozon-chats-detail-body');
+    if (hint) hint.style.display = 'none';
+    if (body) body.style.display = '';
+    ozonChatClientMessageKey = '';
+    const threadEl = document.getElementById('ozon-chats-thread');
+    if (threadEl) threadEl.innerHTML = '<div class="form-hint">Подгружаю переписку…</div>';
+    const ta = document.getElementById('ozon-chats-draft');
+    if (ta) ta.value = '';
+    const statusHint = document.getElementById('ozon-chats-status-hint');
+    if (statusHint) statusHint.textContent = '';
+  }
+
+  async function refreshOzonChatsList(forceRefresh = true) {
+    const sid = getOzonChatsStoreId();
+    if (!sid) {
+      toast('Выберите магазин Ozon', 'error');
+      return;
+    }
+    const gen = ++ozonChatsListFetchGen;
+    const q = forceRefresh ? '?refresh=1' : '';
+    const wrap = document.getElementById('ozon-chats-list');
+    if (wrap) wrap.innerHTML = '<div class="form-hint">Загрузка списка…</div>';
+    try {
+      const data = await api(`/ozon/buyer-chats/${sid}${q}`);
+      if (gen !== ozonChatsListFetchGen) return;
+      ozonChatsRaw = data.chats || [];
+      ozonChatsListStoreId = sid;
+      ozonChatSelectedId = null;
+      renderOzonChatsList();
+      const hint = document.getElementById('ozon-chats-hint');
+      const body = document.getElementById('ozon-chats-detail-body');
+      if (hint) {
+        hint.style.display = '';
+        hint.textContent = 'Выберите чат слева.';
+      }
+      if (body) body.style.display = 'none';
+    } catch (err) {
+      if (gen !== ozonChatsListFetchGen) return;
+      ozonChatsRaw = [];
+      renderOzonChatsList();
+      toast(err.message, 'error');
+    }
+  }
+
+  async function loadOzonChatThread(chatId) {
+    const sid = getOzonChatsStoreId();
+    if (!sid || !chatId) return;
+    const gen = ++ozonChatThreadFetchGen;
+    try {
+      const t = await api(`/ozon/buyer-chats/${sid}/${encodeURIComponent(chatId)}/thread`);
+      if (gen !== ozonChatThreadFetchGen) return;
+      if (String(ozonChatSelectedId || '') !== String(chatId)) return;
+      ozonChatClientMessageKey = (t.client_message_key || '').trim();
+      const titleEl = document.getElementById('ozon-chats-product-title');
+      if (titleEl) titleEl.textContent = t.product_title || '—';
+      const threadEl = document.getElementById('ozon-chats-thread');
+      const lines = t.lines || [];
+      if (threadEl) {
+        threadEl.innerHTML = lines.length
+          ? lines.map(l => {
+            const lab = l.role === 'client' ? 'Покупатель' : l.role === 'seller' ? 'Вы' : escapeHtml(l.role || '');
+            return `<div class="wb-chat-line"><span class="wb-chat-role">${lab}</span><span class="wb-chat-text">${escapeHtml(l.text)}</span></div>`;
+          }).join('')
+          : '<div class="form-hint">Нет текста сообщений.</div>';
+      }
+      const statusHint = document.getElementById('ozon-chats-status-hint');
+      if (statusHint) {
+        if (t.already_replied) {
+          statusHint.textContent = 'На последнее сообщение покупателя уже отвечали.';
+          statusHint.style.color = '#b45309';
+        } else if (t.skip_reason === 'before_cutoff') {
+          statusHint.textContent = 'Сообщение раньше даты «отвечать с» из настроек.';
+          statusHint.style.color = '#b45309';
+        } else if (t.skip_reason === 'last_not_client') {
+          statusHint.textContent = 'Последнее сообщение не от покупателя.';
+          statusHint.style.color = '';
+        } else {
+          statusHint.textContent = '';
+        }
+      }
+    } catch (err) {
+      if (gen !== ozonChatThreadFetchGen) return;
+      toast(err.message, 'error');
+    }
+  }
+
+  async function loadOzonChatsPanel() {
+    const gen = ++ozonChatsPanelGen;
+    if (!stores.length) {
+      try { await loadStores(); } catch (_) {}
+    }
+    if (gen !== ozonChatsPanelGen) return;
+    fillStoreSelects();
+    const sid = getOzonChatsStoreId();
+    if (sid != null && ozonChatsListStoreId != null && Number(sid) === Number(ozonChatsListStoreId)) {
+      renderOzonChatsList();
+      return;
+    }
+    if (sid) {
+      await refreshOzonChatsList(false);
+      return;
+    }
+    ozonChatsRaw = [];
+    renderOzonChatsList();
+  }
+
+  async function ozonChatsGenerateDraft() {
+    const sid = getOzonChatsStoreId();
+    if (!sid || !ozonChatSelectedId) {
+      toast('Выберите чат слева', 'error');
+      return;
+    }
+    try {
+      const r = await api(`/ozon/buyer-chats/${sid}/generate-draft`, {
+        method: 'POST',
+        body: JSON.stringify({ chat_id: ozonChatSelectedId }),
+      });
+      const ta = document.getElementById('ozon-chats-draft');
+      if (ta) ta.value = (r.draft || '').trim();
+      toast('Черновик сгенерирован');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  async function ozonChatsMassGenerateSend() {
+    const sid = getOzonChatsStoreId();
+    if (!sid) {
+      toast('Выберите магазин Ozon', 'error');
+      return;
+    }
+    if (!confirm('Обработаются чаты, где последнее сообщение от покупателя (с учётом даты и без повторов). Продолжить?')) return;
+    const btn = document.getElementById('btn-ozon-chats-mass');
+    if (btn) btn.disabled = true;
+    try {
+      const r = await api(`/ozon/buyer-chats/${sid}/mass-generate-send`, {
+        method: 'POST',
+        body: JSON.stringify({ max_chats: 50 }),
+      });
+      toast(
+        `Ozon: отправлено ${r.ozon_chat_sent ?? 0}, уже отвечено ${r.ozon_chat_skipped_already_replied ?? 0}, раньше даты ${r.ozon_chat_skipped_before_cutoff ?? 0}.`,
+      );
+      await refreshOzonChatsList(true);
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function ozonChatsSendMessage() {
+    const sid = getOzonChatsStoreId();
+    if (!sid || !ozonChatSelectedId) {
+      toast('Выберите чат', 'error');
+      return;
+    }
+    const ta = document.getElementById('ozon-chats-draft');
+    const msg = (ta && ta.value ? ta.value : '').trim();
+    if (!msg) {
+      toast('Введите текст ответа', 'error');
+      return;
+    }
+    try {
+      await api(`/ozon/buyer-chats/${sid}/send`, {
+        method: 'POST',
+        body: JSON.stringify({
+          chat_id: ozonChatSelectedId,
+          message: msg,
+          client_message_key: ozonChatClientMessageKey || '',
+        }),
+      });
+      toast('Сообщение отправлено');
+      await loadOzonChatThread(ozonChatSelectedId);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  function wireOzonChatsPanel() {
+    const sel = document.getElementById('ozon-chats-store');
+    if (sel) {
+      sel.addEventListener('change', () => {
+        if (ozonChatsSuppressSelectChange) return;
+        ozonChatsRaw = [];
+        ozonChatsListStoreId = null;
+        ozonChatSelectedId = null;
+        void refreshOzonChatsList();
+      });
+    }
+    document.getElementById('btn-ozon-chats-refresh')?.addEventListener('click', () => { void refreshOzonChatsList(); });
+    document.getElementById('btn-ozon-chats-mass')?.addEventListener('click', () => { void ozonChatsMassGenerateSend(); });
+    document.getElementById('btn-ozon-chats-load-thread')?.addEventListener('click', () => {
+      if (ozonChatSelectedId) void loadOzonChatThread(ozonChatSelectedId);
+    });
+    document.getElementById('btn-ozon-chats-generate')?.addEventListener('click', () => { void ozonChatsGenerateDraft(); });
+    document.getElementById('btn-ozon-chats-send')?.addEventListener('click', () => { void ozonChatsSendMessage(); });
   }
 
   // ---- Items (reviews / questions) ----
@@ -943,8 +1290,19 @@
   });
 
   async function runLoadNew(panelPrefix) {
+    const storeSelId = panelPrefix === 'reviews' ? 'reviews-store' : 'questions-store';
+    const storeIdRaw = (document.getElementById(storeSelId)?.value || '').trim();
+    if (!storeIdRaw) {
+      toast('Выберите магазин в фильтре (не «Все магазины») — загрузка только для выбранного магазина.', 'error');
+      return;
+    }
+    const sid = Number(storeIdRaw);
+    if (!Number.isFinite(sid) || sid <= 0) {
+      toast('Некорректный магазин в фильтре', 'error');
+      return;
+    }
     try {
-      const res = await api('/load-new', { method: 'POST', body: JSON.stringify({ store_ids: null }) });
+      const res = await api('/load-new', { method: 'POST', body: JSON.stringify({ store_ids: [sid] }) });
       pollTask(res.task_id, 'progress-' + panelPrefix, 'progress-' + panelPrefix + '-fill', 'progress-' + panelPrefix + '-text', (result) => {
         toast('Загружено записей: ' + (result ?? 0));
         loadReviews();
@@ -1089,7 +1447,7 @@
     try {
       await loadMe(true);
       const data = await api('/settings');
-      ['openai_key', 'telegram_bot_token', 'telegram_chat_id'].forEach(k => {
+      ['openai_key', 'telegram_bot_token', 'telegram_chat_id', 'buyer_chat_reply_from_date'].forEach(k => {
         const el = document.getElementById('setting-' + k);
         if (el) el.value = data[k] || '';
       });
@@ -1140,6 +1498,8 @@
       if (autoRunReviews) autoRunReviews.checked = !!autoCfg.run_reviews;
       if (autoRunQuestions) autoRunQuestions.checked = !!autoCfg.run_questions;
       if (autoRunWbChats) autoRunWbChats.checked = !!autoCfg.run_wb_chats;
+      const autoRunOzonChats = document.getElementById('auto-run-ozon-chats');
+      if (autoRunOzonChats) autoRunOzonChats.checked = !!autoCfg.run_ozon_chats;
       syncAutoScheduleModeUi();
       renderAutoStoreList(autoCfg.store_ids || []);
       await refreshAutoStatus();
@@ -1192,17 +1552,18 @@
       const run_reviews = !!document.getElementById('auto-run-reviews')?.checked;
       const run_questions = !!document.getElementById('auto-run-questions')?.checked;
       const run_wb_chats = !!document.getElementById('auto-run-wb-chats')?.checked;
+      const run_ozon_chats = !!document.getElementById('auto-run-ozon-chats')?.checked;
       const store_ids = getAutoSelectedStoreIds();
       if (!store_ids.length) {
         toast('Выбери хотя бы один магазин для автозапуска', 'error');
         return;
       }
-      if (!run_reviews && !run_questions && !run_wb_chats) {
-        toast('Выбери хотя бы один тип: отзывы, вопросы или чаты WB', 'error');
+      if (!run_reviews && !run_questions && !run_wb_chats && !run_ozon_chats) {
+        toast('Выбери хотя бы один тип: отзывы, вопросы или чаты', 'error');
         return;
       }
       try {
-        await api('/auto-schedule', { method: 'POST', body: JSON.stringify({ enabled, slots, store_ids, schedule_mode, interval_hours, run_reviews, run_questions, run_wb_chats }) });
+        await api('/auto-schedule', { method: 'POST', body: JSON.stringify({ enabled, slots, store_ids, schedule_mode, interval_hours, run_reviews, run_questions, run_wb_chats, run_ozon_chats }) });
         toast('Автозапуск сохранён');
         await loadAutoSchedulePanel();
       } catch (err) {
@@ -1233,6 +1594,7 @@
       telegram_bot_token: document.getElementById('setting-telegram_bot_token').value,
       telegram_chat_id: document.getElementById('setting-telegram_chat_id').value,
       telegram_enabled: document.getElementById('setting-telegram_enabled')?.checked ? '1' : '0',
+      buyer_chat_reply_from_date: document.getElementById('setting-buyer_chat_reply_from_date')?.value || '',
     };
     try {
       await api('/settings', { method: 'POST', body: JSON.stringify(body) });
@@ -1254,6 +1616,12 @@
       send: 'Отправка',
       template_apply: 'Шаблон',
       auto_run: 'Автозапуск',
+      wb_buyer_chat_generate: 'Чат WB: генерация',
+      wb_buyer_chat_send: 'Чат WB: отправка',
+      wb_buyer_chat_mass_send: 'Чат WB: массово ИИ+отправка',
+      ozon_buyer_chat_generate: 'Чат Ozon: генерация',
+      ozon_buyer_chat_send: 'Чат Ozon: отправка',
+      ozon_buyer_chat_mass_send: 'Чат Ozon: массово ИИ+отправка',
     };
     return m[a] || a || '—';
   }
@@ -1516,6 +1884,7 @@
     loadStores().then(() => {
       fillStoreSelects();
       wireWbChatsPanel();
+      wireOzonChatsPanel();
       loadReviews();
       loadQuestions();
     });

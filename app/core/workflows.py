@@ -19,10 +19,23 @@ from .yam_client import YamClient
 from .ozon_client import OzonClient
 from .openai_client import OpenAIClient
 from .telegram_notify import send_review_to_chat
+from .chat_common import (
+    SETTING_REPLY_FROM,
+    ozon_iso_after_cutoff,
+    parse_reply_from_date,
+    wb_ts_ms_after_cutoff,
+)
+from .ozon_buyer_chat import (
+    collect_ozon_thread_lines,
+    last_client_message_info as ozon_last_client_info,
+    ozon_chat_row_id,
+    product_title_from_ozon_chat,
+)
 from .wb_buyer_chat import (
     WbBuyerChatClient,
     collect_global_events_by_chat,
     collect_thread_lines,
+    last_client_message_info as wb_last_client_info,
     merge_good_card,
     product_title_from_wb_chat,
 )
@@ -661,12 +674,7 @@ async def _generate_one(
             raise
         except Exception as e:
             if isinstance(e, HttpStatusError):
-                log.error(
-                    "Generate failed item=%s: HTTP %s — %s",
-                    item_id,
-                    e.status,
-                    (e.body or "")[:500],
-                )
+                log.warning("Generate item=%s: %s", item_id, e)
             else:
                 log.exception("Generate failed item=%s: %s", item_id, e)
             return False
@@ -725,6 +733,11 @@ async def generate_mass(
             failed += 1
             if isinstance(r, (asyncio.CancelledError, GeneratorExit)):
                 raise r
+    if client._quota_exhausted.is_set():
+        log.warning(
+            "generate_mass: OpenAI insufficient_quota — после первого отказа по биллингу остальные items "
+            "частично пропущены без лишних запросов; проверьте https://platform.openai.com/account/billing"
+        )
     return ok, failed
 
 async def send_mass(
@@ -892,11 +905,13 @@ async def generate_wb_buyer_chat_reply(
     product_title: str,
     conversation_excerpt: str,
     model: str = "gpt-5.2",
+    openai_client: Optional[OpenAIClient] = None,
 ) -> str:
     """
     Черновик ответа продавца в чате WB: тот же JSON-формат, что и для вопросов/отзывов.
+    openai_client: общий экземпляр (например массовая обработка чатов) — один circuit insufficient_quota.
     """
-    client = OpenAIClient(openai_key, model=model)
+    client = openai_client or OpenAIClient(openai_key, model=model)
     system = (
         "Ты — официальный представитель магазина на Wildberries в переписке с покупателем. "
         "Отвечай строго вежливо, кратко и по делу. Без эмодзи. Без фамильярности. "
@@ -917,6 +932,197 @@ async def generate_wb_buyer_chat_reply(
     if not reply:
         raise ValueError("В ответе модели нет поля reply")
     return reply
+
+
+def _buyer_chat_reply_from(db: Database) -> Optional[dt.date]:
+    return parse_reply_from_date(db.get_setting(SETTING_REPLY_FROM))
+
+
+def _wb_chat_eligibility(
+    db: Database,
+    store_id: int,
+    chat_id: str,
+    lines_ts: List[tuple],
+    reply_from: Optional[dt.date],
+) -> Tuple[bool, str, str, int]:
+    """
+    (eligible, skip_reason, client_message_key, client_ts_ms).
+    skip_reason: last_not_client | no_client | before_cutoff | already_replied | ok
+    """
+    if not lines_ts or lines_ts[-1][0] != "client":
+        return False, "last_not_client", "", 0
+    info = wb_last_client_info(lines_ts)
+    if not info:
+        return False, "no_client", "", 0
+    msg_key, ts = info
+    if not wb_ts_ms_after_cutoff(ts, reply_from):
+        return False, "before_cutoff", msg_key, ts
+    if db.is_buyer_chat_replied(store_id, "wb", chat_id, msg_key):
+        return False, "already_replied", msg_key, ts
+    return True, "ok", msg_key, ts
+
+
+def _ozon_chat_eligibility(
+    db: Database,
+    store_id: int,
+    chat_id: str,
+    lines: List[tuple],
+    reply_from: Optional[dt.date],
+) -> Tuple[bool, str, str, str]:
+    """(eligible, skip_reason, client_message_key, created_at)."""
+    if not lines or lines[-1][0] != "client":
+        return False, "last_not_client", "", ""
+    info = ozon_last_client_info(lines)
+    if not info:
+        return False, "no_client", "", ""
+    msg_key, created = info
+    if not ozon_iso_after_cutoff(created, reply_from):
+        return False, "before_cutoff", msg_key, created
+    if db.is_buyer_chat_replied(store_id, "ozon", chat_id, msg_key):
+        return False, "already_replied", msg_key, created
+    return True, "ok", msg_key, created
+
+
+async def generate_ozon_buyer_chat_reply(
+    db: Database,
+    openai_key: str,
+    *,
+    product_title: str,
+    conversation_excerpt: str,
+    model: str = "gpt-5.2",
+    openai_client: Optional[OpenAIClient] = None,
+) -> str:
+    client = openai_client or OpenAIClient(openai_key, model=model)
+    system = (
+        "Ты — официальный представитель магазина на Ozon в переписке с покупателем. "
+        "Отвечай строго вежливо, кратко и по делу. Без эмодзи. Без фамильярности. "
+        "Без предложений компенсаций или обращений в поддержку. Не задавай вопросов покупателю. "
+        "Не выдумывай факты. 2–4 коротких предложения. Не повторяй полное название товара в ответе."
+    )
+    p = db.get_prompt("question", "general")
+    user = (
+        f"{p}\n\nТовар: {product_title}\nПереписка (покупатель / продавец):\n{conversation_excerpt}\n\n"
+        f"Сформируй ответ продавца на последние сообщения покупателя.{_JSON_FORMAT_INSTRUCTION}"
+    )
+    txt = await client.generate(system, user)
+    txt = (txt or "").strip()
+    if not txt:
+        raise ValueError("Пустой ответ модели")
+    obj = json.loads(txt)
+    reply = (obj.get("reply") or "").strip()
+    if not reply:
+        raise ValueError("В ответе модели нет поля reply")
+    return reply
+
+
+async def wb_buyer_chats_mass_generate_send_for_store(
+    db: Database,
+    store: Store,
+    *,
+    openai_key: str,
+    event_pages: int = 6,
+    max_chats: int = 50,
+    model: str = "gpt-5.2",
+    pause_between_chats_sec: float = 0.0,
+) -> Dict[str, int]:
+    """
+    Чаты WB, где в треде последнее сообщение от покупателя: сгенерировать ответ (OpenAI) и сразу отправить в WB.
+    Не больше max_chats чатов за вызов. pause_between_chats_sec снижает риск 429 на buyer-chat.
+    """
+    stats: Dict[str, int] = {
+        "wb_chat_candidates": 0,
+        "wb_chat_eligible": 0,
+        "wb_chat_sent": 0,
+        "wb_chat_gen_failed": 0,
+        "wb_chat_send_failed": 0,
+        "wb_chat_skipped_no_reply_sign": 0,
+        "wb_chat_skipped_already_replied": 0,
+        "wb_chat_skipped_before_cutoff": 0,
+    }
+    key = (openai_key or "").strip()
+    if not key:
+        return stats
+    if store.marketplace != "wb" or not (store.api_key or "").strip():
+        return stats
+    reply_from = _buyer_chat_reply_from(db)
+    oai = OpenAIClient(openai_key, model=model)
+    client = WbBuyerChatClient(store.api_key)
+    chats = await client.list_chats()
+    by_chat = await collect_global_events_by_chat(client, max_pages=event_pages)
+    chat_by_id = {str(c.get("chatID") or ""): c for c in chats if c.get("chatID")}
+    candidates: List[str] = []
+    for cid, evs in by_chat.items():
+        lines_ts = collect_thread_lines(evs, cid)
+        ok, reason, _mk, _ts = _wb_chat_eligibility(db, store.id, cid, lines_ts, reply_from)
+        if not ok:
+            if reason == "already_replied":
+                stats["wb_chat_skipped_already_replied"] += 1
+            elif reason == "before_cutoff":
+                stats["wb_chat_skipped_before_cutoff"] += 1
+            continue
+        if cid not in chat_by_id:
+            continue
+        candidates.append(cid)
+    stats["wb_chat_eligible"] = len(candidates)
+    take = candidates[: max(0, int(max_chats))]
+    stats["wb_chat_candidates"] = len(take)
+    for i, cid in enumerate(take):
+        row = chat_by_id.get(cid)
+        if not row or not isinstance(row, dict):
+            continue
+        evs = by_chat.get(cid) or []
+        gc = merge_good_card(row, evs)
+        lines_ts = collect_thread_lines(evs, cid)
+        _ok, _reason, client_msg_key, _ts = _wb_chat_eligibility(db, store.id, cid, lines_ts, reply_from)
+        texts = [t for _, t, __, ___ in lines_ts]
+        title = product_title_from_wb_chat(gc, texts)
+        excerpt_parts = []
+        for role, text, _, __ in lines_ts:
+            label = "Покупатель" if role == "client" else "Продавец" if role == "seller" else role
+            excerpt_parts.append(f"{label}: {text}")
+        conversation = "\n".join(excerpt_parts)
+        reply_sign = str(row.get("replySign") or "").strip()
+        if not reply_sign:
+            stats["wb_chat_skipped_no_reply_sign"] += 1
+            continue
+        try:
+            draft = await generate_wb_buyer_chat_reply(
+                db,
+                key,
+                product_title=title,
+                conversation_excerpt=conversation,
+                model=model,
+                openai_client=oai,
+            )
+        except (asyncio.CancelledError, GeneratorExit):
+            raise
+        except HttpStatusError as e:
+            log.warning("wb_chat_mass generate store=%s chat=%s: %s", store.id, cid, e)
+            stats["wb_chat_gen_failed"] += 1
+            if pause_between_chats_sec > 0 and i + 1 < len(take):
+                await asyncio.sleep(pause_between_chats_sec)
+            continue
+        except Exception:
+            log.exception("wb_chat_mass generate store=%s chat=%s", store.id, cid)
+            stats["wb_chat_gen_failed"] += 1
+            if pause_between_chats_sec > 0 and i + 1 < len(take):
+                await asyncio.sleep(pause_between_chats_sec)
+            continue
+        try:
+            await client.send_message(reply_sign, draft)
+            db.mark_buyer_chat_replied(store.id, "wb", cid, client_msg_key)
+            stats["wb_chat_sent"] += 1
+        except HttpStatusError:
+            log.warning("wb_chat_mass send HTTP store=%s chat=%s", store.id, cid)
+            stats["wb_chat_send_failed"] += 1
+        except (asyncio.CancelledError, GeneratorExit):
+            raise
+        except Exception:
+            log.exception("wb_chat_mass send store=%s chat=%s", store.id, cid)
+            stats["wb_chat_send_failed"] += 1
+        if pause_between_chats_sec > 0 and i + 1 < len(take):
+            await asyncio.sleep(pause_between_chats_sec)
+    return stats
 
 
 async def auto_process_wb_buyer_chats(
@@ -946,10 +1152,16 @@ async def auto_process_wb_buyer_chats(
         if store.marketplace != "wb" or not (store.api_key or "").strip():
             continue
         stats["wb_chat_stores"] += 1
-        client = WbBuyerChatClient(store.api_key)
         try:
-            chats = await client.list_chats()
-            by_chat = await collect_global_events_by_chat(client, max_pages=event_pages)
+            part = await wb_buyer_chats_mass_generate_send_for_store(
+                db,
+                store,
+                openai_key=key,
+                event_pages=event_pages,
+                max_chats=max_autosend_per_store,
+                model=model,
+                pause_between_chats_sec=0.0,
+            )
         except HttpStatusError as e:
             log.warning("wb_chat_auto store=%s: HTTP %s", store.id, e.status)
             continue
@@ -958,53 +1170,160 @@ async def auto_process_wb_buyer_chats(
         except Exception:
             log.exception("wb_chat_auto store=%s: list/events failed", store.id)
             continue
-        chat_by_id = {str(c.get("chatID") or ""): c for c in chats if c.get("chatID")}
-        candidates: List[str] = []
-        for cid, evs in by_chat.items():
-            lines_ts = collect_thread_lines(evs, cid)
-            if not lines_ts or lines_ts[-1][0] != "client":
-                continue
-            if cid not in chat_by_id:
-                continue
-            candidates.append(cid)
-        stats["wb_chat_candidates"] += min(len(candidates), max_autosend_per_store)
-        for cid in candidates[:max_autosend_per_store]:
-            row = chat_by_id.get(cid)
-            if not row or not isinstance(row, dict):
-                continue
-            evs = by_chat.get(cid) or []
-            gc = merge_good_card(row, evs)
-            lines_ts = collect_thread_lines(evs, cid)
-            texts = [t for _, t, __ in lines_ts]
-            title = product_title_from_wb_chat(gc, texts)
-            excerpt_parts = []
-            for role, text, _ in lines_ts:
-                label = "Покупатель" if role == "client" else "Продавец" if role == "seller" else role
-                excerpt_parts.append(f"{label}: {text}")
-            conversation = "\n".join(excerpt_parts)
-            reply_sign = str(row.get("replySign") or "").strip()
-            if not reply_sign:
-                stats["wb_chat_send_failed"] += 1
-                continue
-            try:
-                draft = await generate_wb_buyer_chat_reply(
-                    db, key, product_title=title, conversation_excerpt=conversation, model=model
-                )
-            except (asyncio.CancelledError, GeneratorExit):
-                raise
-            except Exception:
-                log.exception("wb_chat_auto generate store=%s chat=%s", store.id, cid)
-                stats["wb_chat_gen_failed"] += 1
-                continue
-            try:
-                await client.send_message(reply_sign, draft)
-                stats["wb_chat_sent"] += 1
-            except HttpStatusError:
-                log.warning("wb_chat_auto send HTTP store=%s chat=%s", store.id, cid)
-                stats["wb_chat_send_failed"] += 1
-            except (asyncio.CancelledError, GeneratorExit):
-                raise
-            except Exception:
-                log.exception("wb_chat_auto send store=%s chat=%s", store.id, cid)
-                stats["wb_chat_send_failed"] += 1
+        stats["wb_chat_candidates"] += int(part.get("wb_chat_candidates") or 0)
+        stats["wb_chat_sent"] += int(part.get("wb_chat_sent") or 0)
+        stats["wb_chat_gen_failed"] += int(part.get("wb_chat_gen_failed") or 0)
+        stats["wb_chat_send_failed"] += int(
+            int(part.get("wb_chat_send_failed") or 0) + int(part.get("wb_chat_skipped_no_reply_sign") or 0)
+        )
+    return stats
+
+
+async def ozon_buyer_chats_mass_generate_send_for_store(
+    db: Database,
+    store: Store,
+    *,
+    openai_key: str,
+    max_chats: int = 50,
+    model: str = "gpt-5.2",
+    pause_between_chats_sec: float = 1.0,
+) -> Dict[str, int]:
+    stats: Dict[str, int] = {
+        "ozon_chat_candidates": 0,
+        "ozon_chat_eligible": 0,
+        "ozon_chat_sent": 0,
+        "ozon_chat_gen_failed": 0,
+        "ozon_chat_send_failed": 0,
+        "ozon_chat_skipped_already_replied": 0,
+        "ozon_chat_skipped_before_cutoff": 0,
+    }
+    key = (openai_key or "").strip()
+    if not key:
+        return stats
+    if store.marketplace != "ozon" or not (store.client_id or "").strip() or not (store.api_key or "").strip():
+        return stats
+    reply_from = _buyer_chat_reply_from(db)
+    oai = OpenAIClient(openai_key, model=model)
+    client = OzonClient(store.client_id or "", store.api_key)
+    rows = await client.list_all_buyer_chats(unread_only=False)
+    candidates: List[tuple[str, dict, List[tuple], str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        chat_id = ozon_chat_row_id(row)
+        if not chat_id:
+            continue
+        hist = await client.chat_history(chat_id, limit=50)
+        messages = hist.get("messages") or []
+        if not isinstance(messages, list):
+            messages = []
+        lines = collect_ozon_thread_lines(messages)
+        ok, reason, msg_key, _created = _ozon_chat_eligibility(db, store.id, chat_id, lines, reply_from)
+        if not ok:
+            if reason == "already_replied":
+                stats["ozon_chat_skipped_already_replied"] += 1
+            elif reason == "before_cutoff":
+                stats["ozon_chat_skipped_before_cutoff"] += 1
+            continue
+        candidates.append((chat_id, row, lines, msg_key))
+    stats["ozon_chat_eligible"] = len(candidates)
+    take = candidates[: max(0, int(max_chats))]
+    stats["ozon_chat_candidates"] = len(take)
+    for i, (chat_id, _row, lines, client_msg_key) in enumerate(take):
+        hist = await client.chat_history(chat_id, limit=50)
+        messages = hist.get("messages") or []
+        if not isinstance(messages, list):
+            messages = []
+        lines = collect_ozon_thread_lines(messages)
+        title = product_title_from_ozon_chat(messages, lines)
+        excerpt_parts = []
+        for role, text, _mid, _ca in lines:
+            label = "Покупатель" if role == "client" else "Продавец" if role == "seller" else role
+            excerpt_parts.append(f"{label}: {text}")
+        conversation = "\n".join(excerpt_parts)
+        try:
+            draft = await generate_ozon_buyer_chat_reply(
+                db,
+                key,
+                product_title=title,
+                conversation_excerpt=conversation,
+                model=model,
+                openai_client=oai,
+            )
+        except (asyncio.CancelledError, GeneratorExit):
+            raise
+        except HttpStatusError as e:
+            log.warning("ozon_chat_mass generate store=%s chat=%s: %s", store.id, chat_id, e)
+            stats["ozon_chat_gen_failed"] += 1
+            if pause_between_chats_sec > 0 and i + 1 < len(take):
+                await asyncio.sleep(pause_between_chats_sec)
+            continue
+        except Exception:
+            log.exception("ozon_chat_mass generate store=%s chat=%s", store.id, chat_id)
+            stats["ozon_chat_gen_failed"] += 1
+            if pause_between_chats_sec > 0 and i + 1 < len(take):
+                await asyncio.sleep(pause_between_chats_sec)
+            continue
+        try:
+            await client.send_chat_message(chat_id, draft)
+            db.mark_buyer_chat_replied(store.id, "ozon", chat_id, client_msg_key)
+            stats["ozon_chat_sent"] += 1
+        except HttpStatusError:
+            log.warning("ozon_chat_mass send HTTP store=%s chat=%s", store.id, chat_id)
+            stats["ozon_chat_send_failed"] += 1
+        except (asyncio.CancelledError, GeneratorExit):
+            raise
+        except Exception:
+            log.exception("ozon_chat_mass send store=%s chat=%s", store.id, chat_id)
+            stats["ozon_chat_send_failed"] += 1
+        if pause_between_chats_sec > 0 and i + 1 < len(take):
+            await asyncio.sleep(pause_between_chats_sec)
+    return stats
+
+
+async def auto_process_ozon_buyer_chats(
+    db: Database,
+    stores: List[Store],
+    *,
+    openai_key: str,
+    max_autosend_per_store: int = 5,
+    model: str = "gpt-5.2",
+) -> Dict[str, int]:
+    stats: Dict[str, int] = {
+        "ozon_chat_stores": 0,
+        "ozon_chat_candidates": 0,
+        "ozon_chat_sent": 0,
+        "ozon_chat_gen_failed": 0,
+        "ozon_chat_send_failed": 0,
+    }
+    key = (openai_key or "").strip()
+    if not key:
+        return stats
+    for store in stores:
+        if store.marketplace != "ozon":
+            continue
+        if not (store.client_id or "").strip() or not (store.api_key or "").strip():
+            continue
+        stats["ozon_chat_stores"] += 1
+        try:
+            part = await ozon_buyer_chats_mass_generate_send_for_store(
+                db,
+                store,
+                openai_key=key,
+                max_chats=max_autosend_per_store,
+                model=model,
+                pause_between_chats_sec=1.0,
+            )
+        except HttpStatusError as e:
+            log.warning("ozon_chat_auto store=%s: HTTP %s", store.id, e.status)
+            continue
+        except (asyncio.CancelledError, GeneratorExit):
+            raise
+        except Exception:
+            log.exception("ozon_chat_auto store=%s: list/history failed", store.id)
+            continue
+        stats["ozon_chat_candidates"] += int(part.get("ozon_chat_candidates") or 0)
+        stats["ozon_chat_sent"] += int(part.get("ozon_chat_sent") or 0)
+        stats["ozon_chat_gen_failed"] += int(part.get("ozon_chat_gen_failed") or 0)
+        stats["ozon_chat_send_failed"] += int(part.get("ozon_chat_send_failed") or 0)
     return stats

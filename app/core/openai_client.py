@@ -3,9 +3,11 @@ OpenAI клиент через Responses API (https://api.openai.com/v1/response
 
 - Модель по умолчанию: gpt-5.2 (качество).
 - Ретраи только на 5xx (без 429): квота/лимит OpenAI не дублируем бессмысленными повторами.
+- При insufficient_quota на экземпляре клиента выставляется флаг: дальнейшие generate() без HTTP.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -45,11 +47,25 @@ def _openai_error_summary(status: int, body: str) -> str:
     return f"OpenAI: ошибка HTTP {status}"
 
 
+def is_openai_insufficient_quota_raw(response_text: str) -> bool:
+    """Сырой JSON ответа OpenAI: insufficient_quota — не rate_limit, ретраи бессмысленны."""
+    try:
+        j = json.loads(response_text or "")
+        err = j.get("error") if isinstance(j, dict) else None
+        if isinstance(err, dict):
+            if err.get("code") == "insufficient_quota" or err.get("type") == "insufficient_quota":
+                return True
+    except Exception:
+        pass
+    return False
+
+
 class OpenAIClient:
     def __init__(self, api_key: str, model: str = "gpt-5.2", timeout_s: float = 40.0) -> None:
         self.api_key = api_key.strip()
         self.model = model
         self.timeout = aiohttp.ClientTimeout(connect=10, total=timeout_s)
+        self._quota_exhausted = asyncio.Event()
 
     @staticmethod
     def _extract_text(resp_json: dict) -> str:
@@ -62,6 +78,12 @@ class OpenAIClient:
         return "\n".join([p for p in parts if p]).strip()
 
     async def generate(self, system_prompt: str, user_prompt: str) -> str:
+        if self._quota_exhausted.is_set():
+            raise HttpStatusError(
+                429,
+                "OpenAI: insufficient_quota — дальнейшие вызовы к API на этом клиенте пропущены "
+                "(после первого отказа по квоте/биллингу).",
+            )
         url = "https://api.openai.com/v1/responses"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -81,6 +103,8 @@ class OpenAIClient:
                     txt = await resp.text()
                     if resp.status >= 400:
                         short = _openai_error_summary(resp.status, txt)
+                        if resp.status == 429 and is_openai_insufficient_quota_raw(txt):
+                            self._quota_exhausted.set()
                         log.warning("OpenAI responses %s: %s", resp.status, short)
                         raise HttpStatusError(resp.status, short)
                     data = json.loads(txt) if txt else {}

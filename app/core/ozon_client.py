@@ -167,3 +167,85 @@ class OzonClient:
             if sku_id is not None and name:
                 out[sku_id] = name
         return out
+
+    async def list_buyer_chats(
+        self,
+        *,
+        limit: int = 30,
+        unread_only: bool = False,
+        chat_status: str = "OPENED",
+        cursor: Optional[str] = None,
+    ) -> dict:
+        """POST /v3/chat/list — чаты с покупателями (Buyer_Seller)."""
+        filt: Dict[str, Any] = {
+            "chat_type": "Buyer_Seller",
+            "chat_status": chat_status,
+        }
+        if unread_only:
+            filt["unread_only"] = True
+        body: Dict[str, Any] = {
+            "filter": filt,
+            "limit": min(max(int(limit), 1), 100),
+        }
+        if cursor:
+            body["cursor"] = str(cursor)
+        data = await self._request("POST", "/v3/chat/list", json_body=body)
+        return data if isinstance(data, dict) else {}
+
+    async def list_all_buyer_chats(
+        self,
+        *,
+        unread_only: bool = False,
+        chat_status: str = "OPENED",
+        max_pages: int = 20,
+    ) -> List[dict]:
+        rows: List[dict] = []
+        cursor: Optional[str] = None
+        for _ in range(max(1, max_pages)):
+            block = await self.list_buyer_chats(
+                limit=100,
+                unread_only=unread_only,
+                chat_status=chat_status,
+                cursor=cursor,
+            )
+            chunk = block.get("chats") or []
+            if isinstance(chunk, list):
+                rows.extend(chunk)
+            has_next = block.get("has_next")
+            if has_next in (False, "false", 0, "0", None):
+                break
+            nxt = block.get("cursor")
+            if not nxt:
+                break
+            cursor = str(nxt)
+        return rows
+
+    async def chat_history(
+        self,
+        chat_id: str,
+        *,
+        limit: int = 50,
+        direction: str = "Backward",
+    ) -> dict:
+        """POST /v3/chat/history."""
+        body: Dict[str, Any] = {
+            "chat_id": str(chat_id),
+            "limit": min(max(int(limit), 1), 1000),
+            "direction": direction,
+        }
+        data = await self._request("POST", "/v3/chat/history", json_body=body)
+        return data if isinstance(data, dict) else {}
+
+    async def send_chat_message(self, chat_id: str, text: str) -> dict:
+        """POST /v1/chat/send/message."""
+        t = (text or "").strip()
+        if not t:
+            raise ValueError("text обязателен")
+        body = {"chat_id": str(chat_id), "text": t[:4000]}
+        data = await self._request("POST", "/v1/chat/send/message", json_body=body)
+        if isinstance(data, dict):
+            res = str(data.get("result") or "").strip().lower()
+            if res and res not in ("success", "ok"):
+                raise HttpStatusError(502, json.dumps(data))
+        return data if isinstance(data, dict) else {}
+

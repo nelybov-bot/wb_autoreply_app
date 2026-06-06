@@ -43,6 +43,7 @@
     <button type="button" class="tab" data-tab="reviews">Отзывы</button>
     <button type="button" class="tab" data-tab="questions">Вопросы</button>
     <button type="button" class="tab" data-tab="wb-chats">Чаты WB</button>
+    <button type="button" class="tab" data-tab="ozon-chats">Чаты Ozon</button>
     <button type="button" class="tab" data-tab="auto">Автозапуск</button>
     <button type="button" class="tab" data-tab="settings">Настройки</button>
     <button type="button" class="tab" data-tab="log">Лог</button>
@@ -71,6 +72,10 @@
         <div class="stat-card">
           <div class="value" id="stat-wb-chats">—</div>
           <div class="label">Сообщений в чаты WB</div>
+        </div>
+        <div class="stat-card">
+          <div class="value" id="stat-ozon-chats">—</div>
+          <div class="label">Сообщений в чаты Ozon</div>
         </div>
       </div>
       <div class="chart-section">
@@ -240,10 +245,11 @@
 
     <!-- Чаты WB -->
     <section id="panel-wb-chats" class="panel">
-      <p class="form-hint" style="margin: 0 0 12px;">Ключ WB из настроек магазина (в кабинете — с правом «Чат с покупателем»). Запросы к buyer-chat идут по одному; первая загрузка может занять десятки секунд. Если в кабинете право есть, а в приложении 429 — это лимит частоты WB на аккаунт (несколько магазинов, автозапуск, открытый UI), не «нет доступа». 401 — тогда проверьте ключ и категорию токена.</p>
-      <div class="toolbar">
+      <p class="form-hint" style="margin: 0 0 12px;">Ключ WB из настроек магазина (в кабинете — с правом «Чат с покупателем»). При открытии вкладки список чатов подгружается сам; кнопка «Обновить список чатов» — принудительный запрос к WB (реже нажимайте при 429). Запросы к buyer-chat идут по одному; первая загрузка может занять десятки секунд. Если в кабинете право есть, а в приложении 429 — это лимит частоты WB на аккаунт (несколько магазинов, автозапуск, открытый UI), не «нет доступа». 401 — тогда проверьте ключ и категорию токена.</p>
+      <div class="toolbar" style="flex-wrap:wrap;">
         <select id="wb-chats-store" title="Магазин WB"></select>
         <button type="button" class="btn btn-primary" id="btn-wb-chats-refresh">Обновить список чатов</button>
+        <button type="button" class="btn btn-secondary" id="btn-wb-chats-mass" title="До 50 чатов за раз: ИИ + сразу отправка в WB">Сгенерировать и отправить ответы по всем подходящим чатам</button>
       </div>
       <div class="wb-chats-layout">
         <div class="wb-chats-list-wrap">
@@ -261,6 +267,7 @@
               <label>Переписка</label>
               <div id="wb-chats-thread" class="wb-chats-thread"></div>
             </div>
+            <div class="form-hint" id="wb-chats-status-hint"></div>
             <div class="form-group">
               <label>Ответ</label>
               <textarea id="wb-chats-draft" rows="6" style="width:100%; max-width:720px;" placeholder="Текст ответа покупателю (до 1000 символов)"></textarea>
@@ -276,13 +283,52 @@
       </div>
     </section>
 
+    <!-- Чаты Ozon -->
+    <section id="panel-ozon-chats" class="panel">
+      <p class="form-hint" style="margin: 0 0 12px;">Client-Id и Api-Key из настроек магазина Ozon. Для чатов с покупателями нужны подписка Premium Plus/Pro и право «Чат» у API-ключа. Лимит Ozon — 1 запрос/с; первая загрузка может занять минуту.</p>
+      <div class="toolbar" style="flex-wrap:wrap;">
+        <select id="ozon-chats-store" title="Магазин Ozon"></select>
+        <button type="button" class="btn btn-primary" id="btn-ozon-chats-refresh">Обновить список чатов</button>
+        <button type="button" class="btn btn-secondary" id="btn-ozon-chats-mass" title="До 50 чатов за раз: ИИ + сразу отправка в Ozon">Сгенерировать и отправить ответы по всем подходящим чатам</button>
+      </div>
+      <div class="wb-chats-layout">
+        <div class="wb-chats-list-wrap">
+          <h3 class="wb-chats-subtitle">Чаты</h3>
+          <div id="ozon-chats-list" class="wb-chats-list"></div>
+        </div>
+        <div class="wb-chats-detail">
+          <div class="form-hint" id="ozon-chats-hint">Выберите чат слева.</div>
+          <div id="ozon-chats-detail-body" style="display:none;">
+            <div class="form-group">
+              <label>Товар</label>
+              <div id="ozon-chats-product-title" class="wb-chats-product"></div>
+            </div>
+            <div class="form-group">
+              <label>Переписка</label>
+              <div id="ozon-chats-thread" class="wb-chats-thread"></div>
+            </div>
+            <div class="form-hint" id="ozon-chats-status-hint"></div>
+            <div class="form-group">
+              <label>Ответ</label>
+              <textarea id="ozon-chats-draft" rows="6" style="width:100%; max-width:720px;" placeholder="Текст ответа покупателю"></textarea>
+            </div>
+            <div class="toolbar" style="flex-wrap:wrap;">
+              <button type="button" class="btn btn-secondary" id="btn-ozon-chats-load-thread">Обновить переписку</button>
+              <button type="button" class="btn btn-secondary" id="btn-ozon-chats-generate">Сгенерировать</button>
+              <button type="button" class="btn btn-primary" id="btn-ozon-chats-send">Отправить в Ozon</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Автозапуск -->
     <section id="panel-auto" class="panel">
       <div class="form-card auto-card">
         <h2>Автозапуск</h2>
         <div class="form-group">
           <label class="checkbox-row"><input type="checkbox" id="auto-enabled"> Включить автозапуск</label>
-          <small class="form-hint">Цикл: Загрузить новые → Сгенерировать → Отправить. Чаты WB: по ленте событий WB, до 5 автоответов за слот на магазин (последнее сообщение от покупателя). Планировщик живёт внутри запущенного веб-сервера: на Render при «засыпании» инстанса слот по времени может не сработать — нужен постоянно работающий процесс или режим «по интервалу» после пробуждения.</small>
+          <small class="form-hint">Цикл: Загрузить новые → Сгенерировать → Отправить. За один слот берётся один магазин из отмеченных ниже (по очереди), чтобы не дергать API всех сразу. Чаты WB в слоте — только для этого же магазина (если это WB и есть ключ). Планировщик живёт внутри запущенного веб-сервера: на Render при «засыпании» инстанса слот по времени может не сработать — нужен постоянно работающий процесс или режим «по интервалу» после пробуждения.</small>
         </div>
         <div class="form-group">
           <label>Режим расписания</label>
@@ -313,7 +359,8 @@
           <label class="checkbox-row"><input type="checkbox" id="auto-run-reviews" checked> Отзывы</label>
           <label class="checkbox-row"><input type="checkbox" id="auto-run-questions" checked> Вопросы</label>
           <label class="checkbox-row"><input type="checkbox" id="auto-run-wb-chats"> Чаты WB</label>
-          <small class="form-hint" style="display:block;margin-top:6px;">Автоответ в чате WB, если последнее сообщение от покупателя (до 5 чатов за слот на магазин). Нужны ключ OpenAI в «Настройки» и API-ключ магазина WB с категорией «Чат с покупателем». Включите галочку и нажмите «Сохранить автозапуск».</small>
+          <label class="checkbox-row"><input type="checkbox" id="auto-run-ozon-chats"> Чаты Ozon</label>
+          <small class="form-hint" style="display:block;margin-top:6px;">Автоответ в чате, если последнее сообщение от покупателя (до 5 чатов за слот на магазин). Учитывается дата «отвечать с» из настроек и проверка на повторный ответ. Нужны ключ OpenAI и ключи магазина с доступом к чатам.</small>
         </div>
         <div class="form-group" style="margin-top: 12px;">
           <label>Магазины для авто</label>
@@ -351,6 +398,12 @@
             <div class="form-group">
               <label>API-ключ</label>
               <input type="password" id="setting-openai_key" placeholder="sk-...">
+            </div>
+            <h2 style="margin-top: 22px;">Чаты с покупателями</h2>
+            <div class="form-group">
+              <label>Отвечать на сообщения с даты</label>
+              <input type="date" id="setting-buyer_chat_reply_from_date">
+              <small class="form-hint">Пусто — без ограничения по дате. Применяется к автоответам и массовой обработке WB и Ozon (по времени MSK).</small>
             </div>
             <h2 style="margin-top: 22px;">Telegram</h2>
             <div class="form-group">
@@ -447,6 +500,8 @@
           <option value="generate">Генерация</option>
           <option value="send">Отправка</option>
           <option value="template_apply">Шаблон</option>
+          <option value="wb_buyer_chat_mass_send">Чаты WB: массово</option>
+          <option value="ozon_buyer_chat_mass_send">Чаты Ozon: массово</option>
         </select>
         <select id="log-level">
           <option value="">Все уровни</option>

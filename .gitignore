@@ -1,0 +1,55 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE / OS
+.vscode/
+.idea/
+.cursor/
+*.swp
+*~
+.DS_Store
+
+# Local data and logs (kept out of repo to avoid leaking secrets / user data)
+# NOTE: existing tracked files data/reviews.db and logs/app.log will not be
+# auto-removed by .gitignore. Untrack them explicitly when ready:
+#   git rm --cached data/reviews.db logs/app.log
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+logs/
+*.log
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# PyInstaller / py2app build output (если появится)
+*.spec
+build/
+dist/

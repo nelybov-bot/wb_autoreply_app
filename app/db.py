@@ -176,6 +176,20 @@ class Database:
                     updated_at TEXT NOT NULL
                 )
             """)
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS buyer_chat_replies (
+                    store_id INTEGER NOT NULL,
+                    marketplace TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    client_message_key TEXT NOT NULL,
+                    replied_at TEXT NOT NULL,
+                    PRIMARY KEY (store_id, marketplace, chat_id, client_message_key)
+                )
+            """)
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_buyer_chat_replies_store "
+                "ON buyer_chat_replies(store_id, marketplace)"
+            )
             self._conn.commit()
             self._seed_prompts_if_empty()
 
@@ -532,6 +546,49 @@ class Database:
             self._conn.execute(
                 "INSERT INTO app_settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, value),
+            )
+            self._conn.commit()
+
+    # ---------- Buyer chat deduplication ----------
+    def is_buyer_chat_replied(
+        self,
+        store_id: int,
+        marketplace: str,
+        chat_id: str,
+        client_message_key: str,
+    ) -> bool:
+        mp = (marketplace or "").strip().lower()
+        cid = (chat_id or "").strip()
+        mk = (client_message_key or "").strip()
+        if not mp or not cid or not mk:
+            return False
+        with _DB_LOCK:
+            row = self._conn.execute(
+                """SELECT 1 FROM buyer_chat_replies
+                   WHERE store_id=? AND marketplace=? AND chat_id=? AND client_message_key=?""",
+                (int(store_id), mp, cid, mk),
+            ).fetchone()
+            return row is not None
+
+    def mark_buyer_chat_replied(
+        self,
+        store_id: int,
+        marketplace: str,
+        chat_id: str,
+        client_message_key: str,
+    ) -> None:
+        mp = (marketplace or "").strip().lower()
+        cid = (chat_id or "").strip()
+        mk = (client_message_key or "").strip()
+        if not mp or not cid or not mk:
+            return
+        now = dt.datetime.now().isoformat(timespec="seconds")
+        with _DB_LOCK:
+            self._conn.execute(
+                """INSERT INTO buyer_chat_replies(store_id, marketplace, chat_id, client_message_key, replied_at)
+                   VALUES(?,?,?,?,?)
+                   ON CONFLICT(store_id, marketplace, chat_id, client_message_key) DO UPDATE SET replied_at=excluded.replied_at""",
+                (int(store_id), mp, cid, mk, now),
             )
             self._conn.commit()
 
@@ -897,6 +954,17 @@ class Database:
             ).fetchone()
             wb_chat_sent_today = int(wb_today_row["n"]) if wb_today_row else 0
 
+            ozon_chat_row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM audit_events WHERE action=? AND result=?",
+                ("ozon_buyer_chat_send", "ok"),
+            ).fetchone()
+            ozon_chat_sent = int(ozon_chat_row["n"]) if ozon_chat_row else 0
+            ozon_today_row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM audit_events WHERE action=? AND result=? AND substr(ts,1,10)=?",
+                ("ozon_buyer_chat_send", "ok", today_prefix),
+            ).fetchone()
+            ozon_chat_sent_today = int(ozon_today_row["n"]) if ozon_today_row else 0
+
         return {
             "total_sent": total_sent,
             "sent_today": sent_today,
@@ -906,4 +974,6 @@ class Database:
             "stores": {"active": active_stores, "total": total_stores},
             "wb_chat_sent": wb_chat_sent,
             "wb_chat_sent_today": wb_chat_sent_today,
+            "ozon_chat_sent": ozon_chat_sent,
+            "ozon_chat_sent_today": ozon_chat_sent_today,
         }

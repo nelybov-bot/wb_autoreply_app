@@ -23,11 +23,37 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 
+from .chat_common import parse_api_error_detail
 from .net import HttpStatusError, RateLimiter, USER_AGENT, retry
 
 log = logging.getLogger("wb_chat")
 
 BASE = "https://buyer-chat-api.wildberries.ru"
+
+
+def wb_chat_error_message(status: int, body: str) -> str:
+    """Человекочитаемое сообщение по коду и телу ответа buyer-chat-api."""
+    detail = parse_api_error_detail(body)
+    if status == 401:
+        return (
+            "WB buyer-chat: 401 — не авторизован. Проверьте API-ключ и категорию токена "
+            "«Чат с покупателями» (buyer-chat-api)."
+            + (f" {detail}" if detail and detail not in (body or "")[:80] else "")
+        )
+    if status == 402:
+        return (
+            "WB buyer-chat: 402 — требуется платёж или подписка."
+            + (f" {detail}" if detail else "")
+        )
+    if status == 429:
+        return (
+            "WB чаты: 429 — лимит buyer-chat-api (10 запросов / 10 с). "
+            "Подождите 1–2 минуты. Не открывайте вкладку чатов параллельно с автозапуском."
+            + (f" {detail}" if detail else "")
+        )
+    if status == 400:
+        return f"WB buyer-chat: 400 — неверный запрос. {detail}"
+    return f"WB buyer-chat: HTTP {status}. {detail}"
 
 # ~0.9 rps ≈ 1.1 с между запросами — укладывается в 10 запросов / 10 с (личный/сервисный тариф WB).
 _wb_buyer_rl = RateLimiter(0.9)
@@ -181,6 +207,9 @@ class WbBuyerChatClient:
             data = await self._http_get_json("/api/v1/seller/chats")
             if not isinstance(data, dict):
                 return []
+            api_errs = data.get("errors")
+            if isinstance(api_errs, list) and api_errs:
+                raise HttpStatusError(400, json.dumps({"errors": api_errs}))
             res = data.get("result")
             if isinstance(res, list):
                 return res
@@ -198,6 +227,9 @@ class WbBuyerChatClient:
             data = await self._http_get_json("/api/v1/seller/events", params=params or None)
             if not isinstance(data, dict):
                 return {}
+            api_errs = data.get("errors")
+            if isinstance(api_errs, list) and api_errs:
+                raise HttpStatusError(400, json.dumps({"errors": api_errs}))
             res = data.get("result")
             if isinstance(res, dict):
                 return res
@@ -216,7 +248,12 @@ class WbBuyerChatClient:
             form = aiohttp.FormData()
             form.add_field("replySign", reply_sign)
             form.add_field("message", msg_cut)
-            return await self._http_post_multipart("/api/v1/seller/message", form)
+            data = await self._http_post_multipart("/api/v1/seller/message", form)
+            if isinstance(data, dict):
+                api_errs = data.get("errors")
+                if isinstance(api_errs, list) and api_errs:
+                    raise HttpStatusError(400, json.dumps({"errors": api_errs}))
+            return data if isinstance(data, dict) else {}
 
         return await retry(_do, retry_on_status=(500, 502, 503, 504), retries=3)
 
@@ -312,9 +349,9 @@ def merge_good_card(chat_row: dict, events: List[dict]) -> dict:
     return gc
 
 
-def collect_thread_lines(events: List[dict], chat_id: str) -> List[Tuple[str, str, int]]:
-    """Сообщения одного чата: (role, text, addTimestamp)."""
-    out: List[Tuple[str, str, int]] = []
+def collect_thread_lines(events: List[dict], chat_id: str) -> List[Tuple[str, str, int, str]]:
+    """Сообщения одного чата: (role, text, addTimestamp, message_key)."""
+    out: List[Tuple[str, str, int, str]] = []
     cid = (chat_id or "").strip()
     for ev in events:
         if not isinstance(ev, dict):
@@ -334,9 +371,19 @@ def collect_thread_lines(events: List[dict], chat_id: str) -> List[Tuple[str, st
         else:
             role = sender or "other"
         ts = int(ev.get("addTimestamp") or 0)
-        out.append((role, text, ts))
+        event_id = str(ev.get("eventID") or ev.get("id") or "").strip()
+        msg_key = event_id if event_id else str(ts)
+        out.append((role, text, ts, msg_key))
     out.sort(key=lambda x: x[2])
     return out
+
+
+def last_client_message_info(lines_ts: List[Tuple[str, str, int, str]]) -> Optional[Tuple[str, int]]:
+    """Ключ и timestamp последнего сообщения покупателя."""
+    for role, _text, ts, msg_key in reversed(lines_ts):
+        if role == "client":
+            return msg_key, ts
+    return None
 
 
 async def fetch_events_for_chat(

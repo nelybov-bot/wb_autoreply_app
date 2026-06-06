@@ -40,15 +40,32 @@ from app.core.wb_buyer_chat import (
     WbBuyerChatClient,
     collect_thread_lines,
     fetch_events_for_chat,
+    last_client_message_info as wb_last_client_info,
     merge_good_card,
     product_title_from_wb_chat,
+    wb_chat_error_message,
 )
+from app.core.ozon_buyer_chat import (
+    collect_ozon_thread_lines,
+    last_client_message_info as ozon_last_client_info,
+    ozon_chat_row_id,
+    product_title_from_ozon_chat,
+)
+from app.core.ozon_client import OzonClient
+from app.core.chat_common import SETTING_REPLY_FROM, parse_api_error_detail
 from app.core.workflows import (
+    auto_process_ozon_buyer_chats,
     auto_process_wb_buyer_chats,
     generate_mass,
+    generate_ozon_buyer_chat_reply,
     generate_wb_buyer_chat_reply,
     load_new_all,
+    ozon_buyer_chats_mass_generate_send_for_store,
     send_mass_all,
+    wb_buyer_chats_mass_generate_send_for_store,
+    _buyer_chat_reply_from,
+    _ozon_chat_eligibility,
+    _wb_chat_eligibility,
 )
 
 log = logging.getLogger("web")
@@ -299,7 +316,7 @@ class PromptUpdate(BaseModel):
 
 
 class LoadNewBody(BaseModel):
-    store_ids: Optional[list[int]] = None  # null = все магазины
+    store_ids: Optional[list[int]] = None  # null = все магазины по очереди в одной задаче
 
 
 class GenerateBody(BaseModel):
@@ -324,6 +341,29 @@ class WbBuyerChatGenerateBody(BaseModel):
 class WbBuyerChatSendBody(BaseModel):
     reply_sign: str
     message: str
+    chat_id: str = ""
+    client_message_key: str = ""
+
+
+class OzonBuyerChatGenerateBody(BaseModel):
+    chat_id: str
+
+
+class OzonBuyerChatSendBody(BaseModel):
+    chat_id: str
+    message: str
+    client_message_key: str = ""
+
+
+class OzonBuyerChatMassBody(BaseModel):
+    max_chats: int = 50
+
+
+class WbBuyerChatMassBody(BaseModel):
+    """Ручная массовая обработка: только чаты, где последнее сообщение от покупателя."""
+    max_chats: int = 50
+    event_pages: int = 6
+
 
 class AutoScheduleBody(BaseModel):
     enabled: bool = False
@@ -334,11 +374,16 @@ class AutoScheduleBody(BaseModel):
     run_reviews: bool = True
     run_questions: bool = True
     run_wb_chats: bool = False
+    run_ozon_chats: bool = False
 
 AUTO_SCHEDULE_KEY = "auto_schedule_json"
 AUTO_LAST_RUN_KEY = "auto_schedule_last_run_at"
+# Индекс слота автозапуска: за один проход — один магазин (карусель по активным из настроек).
+AUTO_RR_STORE_INDEX_KEY = "auto_rr_store_index"
 _WB_CHAT_LIST_TTL_S = 55.0
+_OZON_CHAT_LIST_TTL_S = 55.0
 _wb_chat_list_cache: dict[int, tuple[float, list]] = {}
+_ozon_chat_list_cache: dict[int, tuple[float, list]] = {}
 _scheduler_task: Optional[asyncio.Task] = None
 _scheduler_seen: set[str] = set()
 _auto_run_task: Optional[asyncio.Task] = None
@@ -378,6 +423,7 @@ def _get_auto_schedule(db: Database) -> dict:
         "run_reviews": True,
         "run_questions": True,
         "run_wb_chats": False,
+        "run_ozon_chats": False,
     }
     if not raw:
         return cfg
@@ -392,6 +438,7 @@ def _get_auto_schedule(db: Database) -> dict:
         cfg["run_reviews"] = bool(obj.get("run_reviews", True))
         cfg["run_questions"] = bool(obj.get("run_questions", True))
         cfg["run_wb_chats"] = bool(obj.get("run_wb_chats", False))
+        cfg["run_ozon_chats"] = bool(obj.get("run_ozon_chats", False))
     except Exception:
         pass
     return cfg
@@ -410,9 +457,10 @@ def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
         "run_reviews": bool(body.run_reviews),
         "run_questions": bool(body.run_questions),
         "run_wb_chats": bool(body.run_wb_chats),
+        "run_ozon_chats": bool(body.run_ozon_chats),
     }
-    if not cfg["run_reviews"] and not cfg["run_questions"] and not cfg["run_wb_chats"]:
-        raise HTTPException(400, "Нужно включить хотя бы один тип: отзывы, вопросы или чаты WB")
+    if not cfg["run_reviews"] and not cfg["run_questions"] and not cfg["run_wb_chats"] and not cfg["run_ozon_chats"]:
+        raise HTTPException(400, "Нужно включить хотя бы один тип: отзывы, вопросы или чаты WB/Ozon")
     db.set_setting(AUTO_SCHEDULE_KEY, json.dumps(cfg, ensure_ascii=False))
     return cfg
 
@@ -461,6 +509,13 @@ async def _run_auto_slot(slot: str) -> None:
             store_ids,
         )
         return
+    sorted_stores = sorted(stores, key=lambda s: s.id)
+    n_slot_stores = len(sorted_stores)
+    try:
+        rr_abs = int((db.get_setting(AUTO_RR_STORE_INDEX_KEY) or "0").strip() or "0")
+    except ValueError:
+        rr_abs = 0
+    slot_store = sorted_stores[rr_abs % n_slot_stores]
     started_dt = dt.datetime.now(MSK_TZ)
     started = started_dt.isoformat(timespec="seconds")
     _auto_state.update({
@@ -474,13 +529,16 @@ async def _run_auto_slot(slot: str) -> None:
         run_reviews = bool(cfg.get("run_reviews", True))
         run_questions = bool(cfg.get("run_questions", True))
         run_wb_chats = bool(cfg.get("run_wb_chats", False))
+        run_ozon_chats = bool(cfg.get("run_ozon_chats", False))
         log.info(
-            "auto_run start slot=%s stores=%s reviews=%s questions=%s wb_chats=%s",
+            "auto_run start slot=%s stores_all=%s slot_store_id=%s reviews=%s questions=%s wb_chats=%s ozon_chats=%s",
             slot,
             [s.id for s in stores],
+            slot_store.id,
             run_reviews,
             run_questions,
             run_wb_chats,
+            run_ozon_chats,
         )
         item_types: list[str] = []
         if run_reviews:
@@ -496,10 +554,10 @@ async def _run_auto_slot(slot: str) -> None:
         reviews_phase_error = ""
         if item_types:
             try:
-                deleted = db.clear_items([s.id for s in stores], item_types=item_types)
-                added = await load_new_all(db, stores)
+                deleted = db.clear_items([slot_store.id], item_types=item_types)
+                added = await load_new_all(db, [slot_store])
                 _auto_state["phase"] = "generate"
-                item_ids = _collect_pending_item_ids(db, [s.id for s in stores], item_types=item_types)
+                item_ids = _collect_pending_item_ids(db, [slot_store.id], item_types=item_types)
                 if item_ids and key:
                     gen_ok, gen_failed = await generate_mass(db, item_ids, key, model="gpt-5.2")
                     _auto_state["phase"] = "send"
@@ -515,12 +573,39 @@ async def _run_auto_slot(slot: str) -> None:
         if run_wb_chats:
             _auto_state["phase"] = "wb_chats"
             if key:
-                wb_stats = await auto_process_wb_buyer_chats(db, stores, openai_key=key)
+                if slot_store.marketplace == "wb" and (slot_store.api_key or "").strip():
+                    wb_stats = await auto_process_wb_buyer_chats(db, [slot_store], openai_key=key)
+                else:
+                    wb_stats = {
+                        "wb_chat_skipped": 1,
+                        "reason": "slot_store_not_wb_or_no_key",
+                        "slot_store_id": slot_store.id,
+                    }
             else:
                 wb_stats = {"wb_chat_skipped": 1, "reason": "no_openai_key"}
+        ozon_stats: dict = {}
+        if run_ozon_chats:
+            _auto_state["phase"] = "ozon_chats"
+            if key:
+                if (
+                    slot_store.marketplace == "ozon"
+                    and (slot_store.client_id or "").strip()
+                    and (slot_store.api_key or "").strip()
+                ):
+                    ozon_stats = await auto_process_ozon_buyer_chats(db, [slot_store], openai_key=key)
+                else:
+                    ozon_stats = {
+                        "ozon_chat_skipped": 1,
+                        "reason": "slot_store_not_ozon_or_no_keys",
+                        "slot_store_id": slot_store.id,
+                    }
+            else:
+                ozon_stats = {"ozon_chat_skipped": 1, "reason": "no_openai_key"}
         meta_run = {
             "slot": slot,
             "store_ids": [s.id for s in stores],
+            "slot_store_id": slot_store.id,
+            "rr_abs": rr_abs,
             "item_types": item_types,
             "deleted_before_load": deleted,
             "added": added,
@@ -531,7 +616,9 @@ async def _run_auto_slot(slot: str) -> None:
             "sent_skipped": sent_skipped,
             "sent_failed": sent_failed,
             "run_wb_chats": run_wb_chats,
+            "run_ozon_chats": run_ozon_chats,
             **wb_stats,
+            **ozon_stats,
         }
         if reviews_phase_error:
             meta_run["reviews_phase_error"] = reviews_phase_error
@@ -543,6 +630,10 @@ async def _run_auto_slot(slot: str) -> None:
             meta=meta_run,
         )
         _auto_state["phase"] = "done"
+        try:
+            db.set_setting(AUTO_RR_STORE_INDEX_KEY, str(rr_abs + 1))
+        except Exception:
+            pass
     except asyncio.CancelledError:
         _auto_state["phase"] = "cancelled"
         raise
@@ -641,6 +732,15 @@ def _schedule_hint(cfg: dict, db: Database) -> str:
             return "В цикле включены чаты WB, но среди выбранных магазинов нет WB с API-ключом."
         if not (db.get_setting("openai_key") or "").strip():
             return "Автоответы в чатах WB: нужен ключ OpenAI в «Настройки» (генерация текста)."
+    if cfg.get("run_ozon_chats"):
+        ozon_stores = [
+            s for s in stores
+            if s.marketplace == "ozon" and (s.client_id or "").strip() and (s.api_key or "").strip()
+        ]
+        if not ozon_stores:
+            return "В цикле включены чаты Ozon, но среди выбранных магазинов нет Ozon с Client-Id и Api-Key."
+        if not (db.get_setting("openai_key") or "").strip():
+            return "Автоответы в чатах Ozon: нужен ключ OpenAI в «Настройки»."
     return ""
 
 
@@ -683,6 +783,7 @@ def _auto_status(db: Database) -> dict:
         "run_reviews": bool(cfg.get("run_reviews", True)),
         "run_questions": bool(cfg.get("run_questions", True)),
         "run_wb_chats": bool(cfg.get("run_wb_chats", False)),
+        "run_ozon_chats": bool(cfg.get("run_ozon_chats", False)),
         "next_slot": next_slot,
         "timezone": "Europe/Moscow",
         "schedule_hint": _schedule_hint(cfg, db),
@@ -945,7 +1046,7 @@ def api_items_bulk(body: BulkItemsBody, db: Database = Depends(get_db), _: UserR
 # ---------- API: settings ----------
 @app.get("/api/settings")
 def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
-    keys = ["openai_key", "telegram_bot_token", "telegram_chat_id", "telegram_enabled", "theme"]
+    keys = ["openai_key", "telegram_bot_token", "telegram_chat_id", "telegram_enabled", "theme", SETTING_REPLY_FROM]
     return {k: db.get_setting(k) or "" for k in keys}
 
 
@@ -1194,22 +1295,24 @@ def _require_wb_store_for_chats(db: Database, store_id: int) -> Store:
 
 
 def _wb_chat_http_error(e: HttpStatusError) -> HTTPException:
-    body = (e.body or "")[:500]
+    return HTTPException(e.status, wb_chat_error_message(e.status, e.body or ""))
+
+
+def _ozon_chat_http_error(e: HttpStatusError) -> HTTPException:
+    detail = parse_api_error_detail(e.body or "")
     if e.status == 401:
+        return HTTPException(401, f"Ozon chat: 401 — проверьте Client-Id и Api-Key. {detail}")
+    if e.status == 403:
         return HTTPException(
-            401,
-            "WB buyer-chat: 401. Проверьте API-ключ и категорию токена «Чат с покупателями» (если WB разделил права — нужен токен с доступом к buyer-chat-api).",
+            403,
+            "Ozon chat: 403 — нет доступа к чатам. Нужны Premium Plus/Pro и право «Чат» у API-ключа. "
+            + detail,
         )
-    if e.status == 402:
-        return HTTPException(402, "WB buyer-chat: платный доступ или подписка (402).")
     if e.status == 429:
-        return HTTPException(
-            429,
-            "WB чаты: 429 (лимит buyer-chat-api: 10 запросов / 10 с по документации). "
-            "Подождите 1–2 минуты. Проверьте токен с категорией «Чат с покупателями». "
-            "На Render: один инстанс сервиса и uvicorn с --workers 1, иначе параллельные запросы снова дадут 429.",
-        )
-    return HTTPException(e.status, f"WB buyer-chat: {body or e.status}")
+        return HTTPException(429, f"Ozon chat: слишком много запросов (лимит 1 req/s). {detail}")
+    if e.status == 400:
+        return HTTPException(400, f"Ozon chat: неверный параметр. {detail}")
+    return HTTPException(e.status, f"Ozon chat: {detail or e.status}")
 
 
 @app.get("/api/wb/buyer-chats/{store_id}")
@@ -1254,11 +1357,16 @@ async def api_wb_buyer_chat_thread(
         lm = chat_row.get("lastMessage") or {}
         t = str(lm.get("text") or "").strip()
         if t:
-            lines_ts = [("client", t, int(lm.get("addTimestamp") or 0))]
-    lines = [{"role": r, "text": t, "addTimestamp": ts} for r, t, ts in lines_ts]
-    texts_for_title = [t for _, t, __ in lines_ts]
+            ts = int(lm.get("addTimestamp") or 0)
+            lines_ts = [("client", t, ts, str(ts))]
+    lines = [{"role": r, "text": t, "addTimestamp": ts} for r, t, ts, _mk in lines_ts]
+    texts_for_title = [t for _, t, __, ___ in lines_ts]
     product_title = product_title_from_wb_chat(gc, texts_for_title)
     reply_sign = str(chat_row.get("replySign") or "").strip()
+    reply_from = _buyer_chat_reply_from(db)
+    eligible, skip_reason, client_msg_key, _ts = _wb_chat_eligibility(
+        db, store_id, chat_id, lines_ts, reply_from
+    )
     return {
         "chat": chat_row,
         "events": events,
@@ -1266,6 +1374,11 @@ async def api_wb_buyer_chat_thread(
         "product_title": product_title,
         "reply_sign": reply_sign,
         "good_card": gc,
+        "client_message_key": client_msg_key,
+        "already_replied": skip_reason == "already_replied",
+        "eligible_for_reply": eligible,
+        "skip_reason": skip_reason if not eligible else "",
+        "reply_from_date": reply_from.isoformat() if reply_from else "",
     }
 
 
@@ -1301,11 +1414,12 @@ async def api_wb_buyer_chat_generate(
         lm = chat_row.get("lastMessage") or {}
         t = str(lm.get("text") or "").strip()
         if t:
-            lines_ts = [("client", t, int(lm.get("addTimestamp") or 0))]
-    texts_for_title = [t for _, t, __ in lines_ts]
+            ts = int(lm.get("addTimestamp") or 0)
+            lines_ts = [("client", t, ts, str(ts))]
+    texts_for_title = [t for _, t, __, ___ in lines_ts]
     product_title = product_title_from_wb_chat(gc, texts_for_title)
     excerpt_parts = []
-    for role, text, _ in lines_ts:
+    for role, text, _, __ in lines_ts:
         label = "Покупатель" if role == "client" else "Продавец" if role == "seller" else role
         excerpt_parts.append(f"{label}: {text}")
     conversation = "\n".join(excerpt_parts) if excerpt_parts else "(сообщений пока нет)"
@@ -1356,10 +1470,17 @@ async def api_wb_buyer_chat_send(
     rs = (body.reply_sign or "").strip()
     if not rs:
         raise HTTPException(400, "reply_sign пустой — обновите чат (кнопка «Загрузить переписку»)")
+    chat_id = (body.chat_id or "").strip()
+    client_msg_key = (body.client_message_key or "").strip()
+    if chat_id and client_msg_key:
+        if db.is_buyer_chat_replied(store_id, "wb", chat_id, client_msg_key):
+            raise HTTPException(409, "На это сообщение покупателя уже был отправлен ответ.")
     try:
         out = await client.send_message(rs, msg)
     except HttpStatusError as e:
         raise _wb_chat_http_error(e) from e
+    if chat_id and client_msg_key:
+        db.mark_buyer_chat_replied(store_id, "wb", chat_id, client_msg_key)
     _wb_chat_list_cache.pop(int(store_id), None)
     try:
         db.add_audit_event(
@@ -1368,11 +1489,296 @@ async def api_wb_buyer_chat_send(
             item_type="wb_chat",
             store_id=store_id,
             result="ok",
-            meta={"len": len(msg)},
+            meta={"len": len(msg), "chat_id": chat_id, "client_message_key": client_msg_key},
         )
     except Exception:
         pass
     return {"ok": True, "result": out}
+
+
+@app.post("/api/wb/buyer-chats/{store_id}/mass-generate-send")
+async def api_wb_buyer_chat_mass_generate_send(
+    store_id: int,
+    body: WbBuyerChatMassBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    """
+    Для выбранного магазина WB: найти чаты, где последнее в треде — от покупателя,
+    сгенерировать ответ (OpenAI) и сразу отправить в WB. Ограничение max_chats за один запрос.
+    """
+    s = _require_wb_store_for_chats(db, store_id)
+    key = (db.get_setting("openai_key") or "").strip()
+    if not key:
+        raise HTTPException(400, "Не задан OpenAI ключ в настройках")
+    max_chats = max(1, min(int(body.max_chats or 50), 100))
+    event_pages = max(1, min(int(body.event_pages or 6), 12))
+    _wb_chat_list_cache.pop(int(store_id), None)
+    try:
+        stats = await wb_buyer_chats_mass_generate_send_for_store(
+            db,
+            s,
+            openai_key=key,
+            event_pages=event_pages,
+            max_chats=max_chats,
+            model="gpt-5.2",
+            pause_between_chats_sec=1.1,
+        )
+    except HttpStatusError as e:
+        raise _wb_chat_http_error(e) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="wb_buyer_chat_mass_send",
+            item_type="wb_chat",
+            store_id=store_id,
+            result="ok",
+            meta=dict(stats),
+        )
+    except Exception:
+        pass
+    return stats
+
+
+async def _ozon_buyer_chat_list_cached(store_id: int, client_id: str, api_key: str, *, force_refresh: bool) -> list:
+    sid = int(store_id)
+    if force_refresh:
+        _ozon_chat_list_cache.pop(sid, None)
+    now = time.monotonic()
+    ent = _ozon_chat_list_cache.get(sid)
+    if ent and (now - ent[0]) < _OZON_CHAT_LIST_TTL_S:
+        return list(ent[1])
+    client = OzonClient(client_id, api_key)
+    try:
+        chats = await client.list_all_buyer_chats()
+    except HttpStatusError:
+        raise
+    _ozon_chat_list_cache[sid] = (now, chats)
+    return chats
+
+
+def _require_ozon_store_for_chats(db: Database, store_id: int) -> Store:
+    stores = [s for s in db.list_stores() if s.id == int(store_id)]
+    if not stores:
+        raise HTTPException(404, "Магазин не найден")
+    s = stores[0]
+    if s.marketplace != "ozon":
+        raise HTTPException(400, "Чаты Ozon доступны только для магазинов Ozon")
+    if not (s.client_id or "").strip() or not (s.api_key or "").strip():
+        raise HTTPException(400, "Не заданы Client-Id и Api-Key магазина")
+    return s
+
+
+def _ozon_chat_preview(row: dict) -> str:
+    unread = int(row.get("unread_count") or 0)
+    chat = row.get("chat") if isinstance(row, dict) else {}
+    status = ""
+    if isinstance(chat, dict):
+        status = str(chat.get("chat_status") or "")
+    parts = []
+    if unread:
+        parts.append(f"непрочит.: {unread}")
+    if status:
+        parts.append(status)
+    return ", ".join(parts) if parts else "—"
+
+
+@app.get("/api/ozon/buyer-chats/{store_id}")
+async def api_ozon_buyer_chat_list(
+    store_id: int,
+    refresh: bool = Query(False),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    s = _require_ozon_store_for_chats(db, store_id)
+    try:
+        rows = await _ozon_buyer_chat_list_cached(
+            store_id, s.client_id or "", s.api_key, force_refresh=refresh
+        )
+    except HttpStatusError as e:
+        raise _ozon_chat_http_error(e) from e
+    chats = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        cid = ozon_chat_row_id(row)
+        if not cid:
+            continue
+        chat_obj = row.get("chat") if isinstance(row.get("chat"), dict) else {}
+        chats.append({
+            "chat_id": cid,
+            "chat_status": chat_obj.get("chat_status"),
+            "created_at": chat_obj.get("created_at"),
+            "unread_count": row.get("unread_count"),
+            "preview": _ozon_chat_preview(row),
+        })
+    return {"chats": chats}
+
+
+@app.get("/api/ozon/buyer-chats/{store_id}/{chat_id}/thread")
+async def api_ozon_buyer_chat_thread(
+    store_id: int,
+    chat_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    s = _require_ozon_store_for_chats(db, store_id)
+    client = OzonClient(s.client_id or "", s.api_key)
+    try:
+        hist = await client.chat_history(chat_id, limit=limit)
+    except HttpStatusError as e:
+        raise _ozon_chat_http_error(e) from e
+    messages = hist.get("messages") or []
+    if not isinstance(messages, list):
+        messages = []
+    lines_raw = collect_ozon_thread_lines(messages)
+    lines = [
+        {"role": r, "text": t, "message_id": mid, "created_at": ca}
+        for r, t, mid, ca in lines_raw
+    ]
+    product_title = product_title_from_ozon_chat(messages, lines_raw)
+    reply_from = _buyer_chat_reply_from(db)
+    eligible, skip_reason, client_msg_key, _ca = _ozon_chat_eligibility(
+        db, store_id, chat_id, lines_raw, reply_from
+    )
+    return {
+        "lines": lines,
+        "product_title": product_title,
+        "client_message_key": client_msg_key,
+        "already_replied": skip_reason == "already_replied",
+        "eligible_for_reply": eligible,
+        "skip_reason": skip_reason if not eligible else "",
+        "reply_from_date": reply_from.isoformat() if reply_from else "",
+    }
+
+
+@app.post("/api/ozon/buyer-chats/{store_id}/generate-draft")
+async def api_ozon_buyer_chat_generate(
+    store_id: int,
+    body: OzonBuyerChatGenerateBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    s = _require_ozon_store_for_chats(db, store_id)
+    key = (db.get_setting("openai_key") or "").strip()
+    if not key:
+        raise HTTPException(400, "Не задан OpenAI ключ в настройках")
+    chat_id = (body.chat_id or "").strip()
+    if not chat_id:
+        raise HTTPException(400, "chat_id пустой")
+    client = OzonClient(s.client_id or "", s.api_key)
+    try:
+        hist = await client.chat_history(chat_id, limit=50)
+    except HttpStatusError as e:
+        raise _ozon_chat_http_error(e) from e
+    messages = hist.get("messages") or []
+    if not isinstance(messages, list):
+        messages = []
+    lines_raw = collect_ozon_thread_lines(messages)
+    product_title = product_title_from_ozon_chat(messages, lines_raw)
+    excerpt_parts = []
+    for role, text, _mid, _ca in lines_raw:
+        label = "Покупатель" if role == "client" else "Продавец" if role == "seller" else role
+        excerpt_parts.append(f"{label}: {text}")
+    conversation = "\n".join(excerpt_parts) if excerpt_parts else "(сообщений пока нет)"
+    try:
+        draft = await generate_ozon_buyer_chat_reply(
+            db, key, product_title=product_title, conversation_excerpt=conversation
+        )
+    except json.JSONDecodeError:
+        raise HTTPException(502, "Модель вернула не JSON — попробуйте сгенерировать ещё раз")
+    except ValueError as e:
+        raise HTTPException(502, str(e))
+    except HttpStatusError as e:
+        st = e.status if 400 <= e.status < 600 else 502
+        raise HTTPException(st, e.body or str(e)) from e
+    except Exception as e:
+        raise HTTPException(502, f"Ошибка генерации: {e}") from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="ozon_buyer_chat_generate",
+            item_type="ozon_chat",
+            store_id=store_id,
+            result="ok",
+            meta={"chat_id": chat_id, "product_title": product_title[:200]},
+        )
+    except Exception:
+        pass
+    return {"draft": draft, "product_title": product_title}
+
+
+@app.post("/api/ozon/buyer-chats/{store_id}/send")
+async def api_ozon_buyer_chat_send(
+    store_id: int,
+    body: OzonBuyerChatSendBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    s = _require_ozon_store_for_chats(db, store_id)
+    client = OzonClient(s.client_id or "", s.api_key)
+    chat_id = (body.chat_id or "").strip()
+    msg = (body.message or "").strip()
+    client_msg_key = (body.client_message_key or "").strip()
+    if not chat_id:
+        raise HTTPException(400, "chat_id пустой")
+    if not msg:
+        raise HTTPException(400, "Текст сообщения пустой")
+    if client_msg_key and db.is_buyer_chat_replied(store_id, "ozon", chat_id, client_msg_key):
+        raise HTTPException(409, "На это сообщение покупателя уже был отправлен ответ.")
+    try:
+        out = await client.send_chat_message(chat_id, msg)
+    except HttpStatusError as e:
+        raise _ozon_chat_http_error(e) from e
+    if client_msg_key:
+        db.mark_buyer_chat_replied(store_id, "ozon", chat_id, client_msg_key)
+    _ozon_chat_list_cache.pop(int(store_id), None)
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="ozon_buyer_chat_send",
+            item_type="ozon_chat",
+            store_id=store_id,
+            result="ok",
+            meta={"len": len(msg), "chat_id": chat_id, "client_message_key": client_msg_key},
+        )
+    except Exception:
+        pass
+    return {"ok": True, "result": out}
+
+
+@app.post("/api/ozon/buyer-chats/{store_id}/mass-generate-send")
+async def api_ozon_buyer_chat_mass_generate_send(
+    store_id: int,
+    body: OzonBuyerChatMassBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    s = _require_ozon_store_for_chats(db, store_id)
+    key = (db.get_setting("openai_key") or "").strip()
+    if not key:
+        raise HTTPException(400, "Не задан OpenAI ключ в настройках")
+    max_chats = max(1, min(int(body.max_chats or 50), 100))
+    _ozon_chat_list_cache.pop(int(store_id), None)
+    try:
+        stats = await ozon_buyer_chats_mass_generate_send_for_store(
+            db, s, openai_key=key, max_chats=max_chats, model="gpt-5.2", pause_between_chats_sec=1.0
+        )
+    except HttpStatusError as e:
+        raise _ozon_chat_http_error(e) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="ozon_buyer_chat_mass_send",
+            item_type="ozon_chat",
+            store_id=store_id,
+            result="ok",
+            meta=dict(stats),
+        )
+    except Exception:
+        pass
+    return stats
 
 
 # ---------- API: stats ----------
