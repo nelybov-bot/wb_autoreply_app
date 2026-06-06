@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
+from .ozon_buyer_chat import is_ozon_buyer_chat_row
+
 from .net import HttpStatusError, RateLimiter, USER_AGENT, retry
 
 log = logging.getLogger("ozon")
@@ -173,7 +175,7 @@ class OzonClient:
         *,
         limit: int = 30,
         unread_only: bool = False,
-        chat_status: str = "OPENED",
+        chat_status: str = "Opened",
         cursor: Optional[str] = None,
     ) -> dict:
         """POST /v3/chat/list — чаты с покупателями (Buyer_Seller)."""
@@ -196,7 +198,7 @@ class OzonClient:
         self,
         *,
         unread_only: bool = False,
-        chat_status: str = "OPENED",
+        chat_status: str = "Opened",
         max_pages: int = 20,
     ) -> List[dict]:
         rows: List[dict] = []
@@ -218,7 +220,7 @@ class OzonClient:
             if not nxt:
                 break
             cursor = str(nxt)
-        return rows
+        return [r for r in rows if isinstance(r, dict) and is_ozon_buyer_chat_row(r)]
 
     async def chat_history(
         self,

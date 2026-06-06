@@ -47,7 +47,9 @@ from app.core.wb_buyer_chat import (
 )
 from app.core.ozon_buyer_chat import (
     collect_ozon_thread_lines,
+    is_ozon_buyer_chat_row,
     ozon_chat_row_id,
+    ozon_chat_type,
     product_title_from_ozon_chat,
 )
 from app.core.ozon_client import OzonClient
@@ -1568,6 +1570,24 @@ def _require_ozon_store_for_chats(db: Database, store_id: int) -> Store:
     return s
 
 
+async def _assert_ozon_buyer_chat_id(
+    store_id: int,
+    client_id: str,
+    api_key: str,
+    chat_id: str,
+) -> None:
+    cid = (chat_id or "").strip()
+    if not cid:
+        raise HTTPException(400, "chat_id пустой")
+    rows = await _ozon_buyer_chat_list_cached(store_id, client_id, api_key, force_refresh=False)
+    if any(ozon_chat_row_id(r) == cid for r in rows):
+        return
+    raise HTTPException(
+        400,
+        "Это чат с поддержкой Ozon или неизвестный чат. Автоответы только для переписки с покупателями.",
+    )
+
+
 def _ozon_chat_preview(row: dict) -> str:
     unread = int(row.get("unread_count") or 0)
     chat = row.get("chat") if isinstance(row, dict) else {}
@@ -1600,18 +1620,21 @@ async def api_ozon_buyer_chat_list(
     for row in rows:
         if not isinstance(row, dict):
             continue
+        if not is_ozon_buyer_chat_row(row):
+            continue
         cid = ozon_chat_row_id(row)
         if not cid:
             continue
         chat_obj = row.get("chat") if isinstance(row.get("chat"), dict) else {}
         chats.append({
             "chat_id": cid,
+            "chat_type": ozon_chat_type(row) or "Buyer_Seller",
             "chat_status": chat_obj.get("chat_status"),
             "created_at": chat_obj.get("created_at"),
             "unread_count": row.get("unread_count"),
             "preview": _ozon_chat_preview(row),
         })
-    return {"chats": chats}
+    return {"chats": chats, "buyer_only": True}
 
 
 @app.get("/api/ozon/buyer-chats/{store_id}/{chat_id}/thread")
@@ -1623,6 +1646,7 @@ async def api_ozon_buyer_chat_thread(
     _: UserRow = Depends(require_user),
 ):
     s = _require_ozon_store_for_chats(db, store_id)
+    await _assert_ozon_buyer_chat_id(store_id, s.client_id or "", s.api_key, chat_id)
     client = OzonClient(s.client_id or "", s.api_key)
     try:
         hist = await client.chat_history(chat_id, limit=limit)
@@ -1666,6 +1690,7 @@ async def api_ozon_buyer_chat_generate(
     chat_id = (body.chat_id or "").strip()
     if not chat_id:
         raise HTTPException(400, "chat_id пустой")
+    await _assert_ozon_buyer_chat_id(store_id, s.client_id or "", s.api_key, chat_id)
     client = OzonClient(s.client_id or "", s.api_key)
     try:
         hist = await client.chat_history(chat_id, limit=50)
@@ -1724,6 +1749,7 @@ async def api_ozon_buyer_chat_send(
         raise HTTPException(400, "chat_id пустой")
     if not msg:
         raise HTTPException(400, "Текст сообщения пустой")
+    await _assert_ozon_buyer_chat_id(store_id, s.client_id or "", s.api_key, chat_id)
     if client_msg_key and db.is_buyer_chat_replied(store_id, "ozon", chat_id, client_msg_key):
         raise HTTPException(409, "На это сообщение покупателя уже был отправлен ответ.")
     try:

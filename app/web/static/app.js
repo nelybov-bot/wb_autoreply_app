@@ -1090,6 +1090,15 @@
     return v ? Number(v) : null;
   }
 
+  function ozonChatRoleLabel(role) {
+    if (role === 'client') return 'Покупатель';
+    if (role === 'seller') return 'Вы';
+    if (role === 'support') return 'Поддержка Ozon';
+    if (role === 'crm') return 'Система Ozon';
+    if (role === 'courier') return 'Курьер';
+    return escapeHtml(role || '');
+  }
+
   function renderOzonChatsList() {
     const wrap = document.getElementById('ozon-chats-list');
     if (!wrap) return;
@@ -1215,7 +1224,7 @@
       if (threadEl) {
         threadEl.innerHTML = lines.length
           ? lines.map(l => {
-            const lab = l.role === 'client' ? 'Покупатель' : l.role === 'seller' ? 'Вы' : escapeHtml(l.role || '');
+            const lab = ozonChatRoleLabel(l.role);
             return `<div class="wb-chat-line"><span class="wb-chat-role">${lab}</span><span class="wb-chat-text">${escapeHtml(l.text)}</span></div>`;
           }).join('')
           : '<div class="form-hint">Нет текста сообщений.</div>';
@@ -1318,7 +1327,7 @@
         body: JSON.stringify({ max_chats: 50 }),
       });
       toast(
-        `Ozon: отправлено ${r.ozon_chat_sent ?? 0}, уже отвечено ${r.ozon_chat_skipped_already_replied ?? 0}, раньше даты ${r.ozon_chat_skipped_before_cutoff ?? 0}.`,
+        `Ozon: отправлено ${r.ozon_chat_sent ?? 0}, уже отвечено ${r.ozon_chat_skipped_already_replied ?? 0}, раньше даты ${r.ozon_chat_skipped_before_cutoff ?? 0}, поддержка ${r.ozon_chat_skipped_support ?? 0}.`,
       );
       await refreshOzonChatsList(true);
     } catch (err) {

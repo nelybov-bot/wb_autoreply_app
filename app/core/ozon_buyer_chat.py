@@ -14,6 +14,8 @@ def _ozon_user_role(user: Any) -> str:
         return "client"
     if raw == "seller":
         return "seller"
+    if raw in ("support", "crm", "courier"):
+        return raw
     return raw or "other"
 
 
@@ -84,3 +86,39 @@ def ozon_chat_row_id(row: dict) -> str:
     if isinstance(chat, dict):
         return str(chat.get("chat_id") or "").strip()
     return ""
+
+
+def ozon_chat_type(row: dict) -> str:
+    if not isinstance(row, dict):
+        return ""
+    chat = row.get("chat")
+    if isinstance(chat, dict):
+        t = chat.get("chat_type")
+        if t is not None and str(t).strip():
+            return str(t).strip()
+    return str(row.get("chat_type") or "").strip()
+
+
+def _norm_ozon_chat_type(value: str) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def is_ozon_buyer_chat_row(row: dict) -> bool:
+    """True только для чатов с покупателями (Buyer_Seller), не Seller_Support."""
+    ct = _norm_ozon_chat_type(ozon_chat_type(row))
+    if not ct:
+        return False
+    if ct in ("seller_support", "seller_support_chat"):
+        return False
+    if "support" in ct and "buyer" not in ct:
+        return False
+    if ct in ("buyer_seller", "buyer_sueller"):
+        return True
+    if "buyer" in ct and "support" not in ct:
+        return True
+    return False
+
+
+def is_ozon_support_chat_row(row: dict) -> bool:
+    ct = _norm_ozon_chat_type(ozon_chat_type(row))
+    return bool(ct) and not is_ozon_buyer_chat_row(row)

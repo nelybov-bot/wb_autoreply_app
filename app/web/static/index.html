@@ -287,7 +287,7 @@
 
     <!-- Чаты Ozon -->
     <section id="panel-ozon-chats" class="panel">
-      <p class="form-hint" style="margin: 0 0 12px;">Client-Id и Api-Key из настроек магазина Ozon. Для чатов с покупателями нужны подписка Premium Plus/Pro и право «Чат» у API-ключа. Лимит Ozon — 1 запрос/с; первая загрузка может занять минуту.</p>
+      <p class="form-hint" style="margin: 0 0 12px;">Client-Id и Api-Key из настроек магазина Ozon. Показываются только чаты с покупателями (Buyer_Seller); чаты с поддержкой Ozon (Seller_Support) скрыты и не получают автоответ. Нужны Premium Plus/Pro и право «Чат» у API-ключа. Лимит — 1 запрос/с; первая загрузка может занять минуту.</p>
       <div class="toolbar" style="flex-wrap:wrap;">
         <select id="ozon-chats-store" title="Магазин Ozon"></select>
         <button type="button" class="btn btn-primary" id="btn-ozon-chats-refresh">Обновить список чатов</button>
@@ -583,6 +583,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=7"></script>
+  <script src="/static/app.js?v=8"></script>
 </body>
 </html>

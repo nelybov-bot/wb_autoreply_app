@@ -27,6 +27,7 @@ from .chat_common import (
 )
 from .ozon_buyer_chat import (
     collect_ozon_thread_lines,
+    is_ozon_buyer_chat_row,
     last_client_message_info as ozon_last_client_info,
     ozon_chat_row_id,
     product_title_from_ozon_chat,
@@ -1196,6 +1197,7 @@ async def ozon_buyer_chats_mass_generate_send_for_store(
         "ozon_chat_send_failed": 0,
         "ozon_chat_skipped_already_replied": 0,
         "ozon_chat_skipped_before_cutoff": 0,
+        "ozon_chat_skipped_support": 0,
     }
     key = (openai_key or "").strip()
     if not key:
@@ -1212,6 +1214,9 @@ async def ozon_buyer_chats_mass_generate_send_for_store(
             continue
         chat_id = ozon_chat_row_id(row)
         if not chat_id:
+            continue
+        if not is_ozon_buyer_chat_row(row):
+            stats["ozon_chat_skipped_support"] += 1
             continue
         hist = await client.chat_history(chat_id, limit=50)
         messages = hist.get("messages") or []
