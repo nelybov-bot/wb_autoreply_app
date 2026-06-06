@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
-  <link rel="stylesheet" href="/static/styles.css?v=5">
+  <link rel="stylesheet" href="/static/styles.css?v=6">
 </head>
 <body>
   <div class="bg-noise" aria-hidden="true"></div>
@@ -37,28 +37,76 @@
     </div>
   </header>
 
-  <nav class="tabs" aria-label="Разделы приложения">
-    <div class="tabs-scroll">
-      <div class="tab-group">
-        <button type="button" class="tab active" data-tab="summary">Сводка</button>
-        <button type="button" class="tab" data-tab="stores">Магазины</button>
+  <nav class="app-nav" aria-label="Разделы приложения">
+    <div class="app-nav-inner">
+      <button type="button" class="nav-link active" data-tab="summary">Сводка</button>
+      <button type="button" class="nav-link" data-tab="stores">Магазины</button>
+
+      <div class="nav-menu" data-nav-group="comms">
+        <button type="button" class="nav-trigger" aria-haspopup="true" aria-expanded="false">
+          Отзывы и вопросы
+          <span class="nav-caret" aria-hidden="true"></span>
+        </button>
+        <div class="nav-dropdown">
+          <div class="nav-mega">
+            <div class="nav-mega-col">
+              <div class="nav-mega-title">Очередь ответов</div>
+              <button type="button" class="nav-dd-item" data-tab="reviews">Отзывы</button>
+              <button type="button" class="nav-dd-item" data-tab="questions">Вопросы</button>
+            </div>
+          </div>
+        </div>
       </div>
-      <span class="tab-divider" aria-hidden="true"></span>
-      <div class="tab-group">
-        <button type="button" class="tab" data-tab="reviews">Отзывы</button>
-        <button type="button" class="tab" data-tab="questions">Вопросы</button>
+
+      <div class="nav-menu nav-menu-wb" data-nav-group="wb">
+        <button type="button" class="nav-trigger" aria-haspopup="true" aria-expanded="false">
+          Wildberries
+          <span class="nav-caret" aria-hidden="true"></span>
+        </button>
+        <div class="nav-dropdown">
+          <div class="nav-mega">
+            <div class="nav-mega-col">
+              <div class="nav-mega-title">Коммуникации</div>
+              <button type="button" class="nav-dd-item" data-tab="wb-chats">Чаты с покупателями</button>
+            </div>
+          </div>
+        </div>
       </div>
-      <span class="tab-divider" aria-hidden="true"></span>
-      <div class="tab-group tab-group-mp">
-        <button type="button" class="tab tab-wb" data-tab="wb-chats">Чаты WB</button>
-        <button type="button" class="tab tab-ozon" data-tab="ozon-chats">Чаты Ozon</button>
-        <button type="button" class="tab tab-ozon" data-tab="ozon-actions">Акции Ozon</button>
+
+      <div class="nav-menu nav-menu-ozon" data-nav-group="ozon">
+        <button type="button" class="nav-trigger" aria-haspopup="true" aria-expanded="false">
+          Ozon
+          <span class="nav-caret" aria-hidden="true"></span>
+        </button>
+        <div class="nav-dropdown">
+          <div class="nav-mega">
+            <div class="nav-mega-col">
+              <div class="nav-mega-title">Коммуникации</div>
+              <button type="button" class="nav-dd-item" data-tab="ozon-chats">Чаты с покупателями</button>
+              <button type="button" class="nav-dd-item" data-tab="ozon-actions">Акции и автоудаление</button>
+            </div>
+          </div>
+        </div>
       </div>
-      <span class="tab-divider" aria-hidden="true"></span>
-      <div class="tab-group">
-        <button type="button" class="tab" data-tab="auto">Автозапуск</button>
-        <button type="button" class="tab" data-tab="settings">Настройки</button>
-        <button type="button" class="tab" data-tab="log">Лог</button>
+
+      <div class="nav-menu" data-nav-group="system">
+        <button type="button" class="nav-trigger" aria-haspopup="true" aria-expanded="false">
+          Система
+          <span class="nav-caret" aria-hidden="true"></span>
+        </button>
+        <div class="nav-dropdown">
+          <div class="nav-mega">
+            <div class="nav-mega-col">
+              <div class="nav-mega-title">Автоматизация</div>
+              <button type="button" class="nav-dd-item" data-tab="auto">Автозапуск</button>
+            </div>
+            <div class="nav-mega-col">
+              <div class="nav-mega-title">Администрирование</div>
+              <button type="button" class="nav-dd-item" data-tab="settings">Настройки</button>
+              <button type="button" class="nav-dd-item" data-tab="log">Журнал событий</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </nav>
@@ -645,6 +693,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=13"></script>
+  <script src="/static/app.js?v=14"></script>
 </body>
 </html>

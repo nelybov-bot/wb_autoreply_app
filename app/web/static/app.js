@@ -142,18 +142,87 @@
     const canSettings = currentUser && (currentUser.role === 'admin' || (currentUser.permissions && currentUser.permissions.includes('view_settings')));
     const canLog = currentUser && (currentUser.role === 'admin' || (currentUser.permissions && currentUser.permissions.includes('view_log')));
     const canOpsLog = currentUser && (currentUser.role === 'admin' || (currentUser.permissions && currentUser.permissions.includes('view_ops_log')));
-    document.querySelectorAll('.tab').forEach(tab => {
-      const id = tab.getAttribute('data-tab');
-      if (id === 'settings') tab.style.display = canSettings ? '' : 'none';
-      else if (id === 'auto') tab.style.display = canSettings ? '' : 'none';
-      else if (id === 'log') tab.style.display = (canLog || canOpsLog) ? '' : 'none';
+    document.querySelectorAll('.nav-dd-item[data-tab="settings"], .nav-dd-item[data-tab="auto"]').forEach(el => {
+      el.style.display = canSettings ? '' : 'none';
     });
+    document.querySelectorAll('.nav-dd-item[data-tab="log"]').forEach(el => {
+      el.style.display = (canLog || canOpsLog) ? '' : 'none';
+    });
+    const systemMenu = document.querySelector('.nav-menu[data-nav-group="system"]');
+    if (systemMenu) {
+      const visibleItems = systemMenu.querySelectorAll('.nav-dd-item:not([style*="display: none"])');
+      systemMenu.style.display = visibleItems.length ? '' : 'none';
+    }
     const panelSettings = document.getElementById('panel-settings');
     const panelAuto = document.getElementById('panel-auto');
     const panelLog = document.getElementById('panel-log');
     if (panelSettings) panelSettings.style.display = canSettings ? '' : 'none';
     if (panelAuto) panelAuto.style.display = canSettings ? '' : 'none';
     if (panelLog) panelLog.style.display = (canLog || canOpsLog) ? '' : 'none';
+  }
+
+  function setNavActive(tabId) {
+    document.querySelectorAll('.nav-link[data-tab], .nav-dd-item[data-tab]').forEach(el => {
+      el.classList.toggle('active', el.getAttribute('data-tab') === tabId);
+    });
+    document.querySelectorAll('.nav-menu').forEach(menu => {
+      const hit = menu.querySelector(`.nav-dd-item[data-tab="${tabId}"]`);
+      menu.classList.toggle('active', !!hit);
+    });
+  }
+
+  function closeNavMenus(exceptMenu) {
+    document.querySelectorAll('.nav-menu.open').forEach(menu => {
+      if (exceptMenu && menu === exceptMenu) return;
+      menu.classList.remove('open');
+      const trigger = menu.querySelector('.nav-trigger');
+      if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  function activatePanel(tabId) {
+    if (!tabId) return;
+    const panel = document.getElementById('panel-' + tabId);
+    if (!panel || panel.style.display === 'none') return;
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    panel.classList.add('active');
+    setNavActive(tabId);
+    closeNavMenus();
+    if (tabId === 'summary') loadStats();
+    if (tabId === 'stores') loadStores();
+    if (tabId === 'reviews') { loadReviews(); resumePanelTask('reviews'); }
+    if (tabId === 'questions') { loadQuestions(); resumePanelTask('questions'); }
+    if (tabId === 'wb-chats') loadWbChatsPanel();
+    if (tabId === 'ozon-chats') loadOzonChatsPanel();
+    if (tabId === 'ozon-actions') loadOzonActionsPanel();
+    if (tabId === 'auto') loadAutoSchedulePanel();
+    if (tabId === 'settings') loadSettings();
+    if (tabId === 'log') loadLog();
+  }
+
+  function wireAppNav() {
+    document.querySelectorAll('.nav-link[data-tab], .nav-dd-item[data-tab]').forEach(el => {
+      el.addEventListener('click', () => {
+        activatePanel(el.getAttribute('data-tab'));
+      });
+    });
+    document.querySelectorAll('.nav-menu').forEach(menu => {
+      const trigger = menu.querySelector('.nav-trigger');
+      if (!trigger) return;
+      trigger.addEventListener('click', (e) => {
+        if (window.matchMedia('(hover: hover)').matches) return;
+        e.preventDefault();
+        const open = menu.classList.contains('open');
+        closeNavMenus();
+        if (!open) {
+          menu.classList.add('open');
+          trigger.setAttribute('aria-expanded', 'true');
+        }
+      });
+    });
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.nav-menu')) closeNavMenus();
+    });
   }
 
   function _activeTaskKey(panelPrefix) {
@@ -195,27 +264,8 @@
     }
   }
 
-  // ---- Tabs ----
-  document.querySelectorAll('.tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-      tab.classList.add('active');
-      const id = tab.getAttribute('data-tab');
-      const panel = document.getElementById('panel-' + id);
-      if (panel) panel.classList.add('active');
-      if (id === 'summary') loadStats();
-      if (id === 'stores') loadStores();
-      if (id === 'reviews') { loadReviews(); resumePanelTask('reviews'); }
-      if (id === 'questions') { loadQuestions(); resumePanelTask('questions'); }
-      if (id === 'wb-chats') { loadWbChatsPanel(); }
-      if (id === 'ozon-chats') { loadOzonChatsPanel(); }
-      if (id === 'ozon-actions') { loadOzonActionsPanel(); }
-      if (id === 'auto') loadAutoSchedulePanel();
-      if (id === 'settings') loadSettings();
-      if (id === 'log') loadLog();
-    });
-  });
+  // ---- Navigation ----
+  wireAppNav();
 
   // ---- Сводка ----
   async function loadStats() {
