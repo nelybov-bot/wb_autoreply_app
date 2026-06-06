@@ -38,6 +38,7 @@ from app.web import tasks as web_tasks
 from app.core.net import HttpStatusError
 from app.core.wb_buyer_chat import (
     WbBuyerChatClient,
+    fallback_line_from_chat_row,
     collect_thread_lines,
     fetch_events_for_chat,
     merge_good_card,
@@ -1340,7 +1341,7 @@ async def api_wb_buyer_chat_list(
 async def api_wb_buyer_chat_thread(
     store_id: int,
     chat_id: str,
-    pages: int = Query(2, ge=1, le=8, description="Сколько страниц ленты /events обойти для этого чата"),
+    pages: int = Query(6, ge=1, le=12, description="Сколько страниц ленты /events обойти для этого чата"),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):
@@ -1360,11 +1361,7 @@ async def api_wb_buyer_chat_thread(
     gc = merge_good_card(chat_row if isinstance(chat_row, dict) else {}, events)
     lines_ts = collect_thread_lines(events, chat_id)
     if not lines_ts and isinstance(chat_row, dict):
-        lm = chat_row.get("lastMessage") or {}
-        t = str(lm.get("text") or "").strip()
-        if t:
-            ts = int(lm.get("addTimestamp") or 0)
-            lines_ts = [("client", t, ts, str(ts))]
+        lines_ts = fallback_line_from_chat_row(chat_row)
     lines = [{"role": r, "text": t, "addTimestamp": ts} for r, t, ts, _mk in lines_ts]
     texts_for_title = [t for _, t, __, ___ in lines_ts]
     product_title = product_title_from_wb_chat(gc, texts_for_title)
@@ -1417,11 +1414,7 @@ async def api_wb_buyer_chat_generate(
     gc = merge_good_card(chat_row if isinstance(chat_row, dict) else {}, events)
     lines_ts = collect_thread_lines(events, chat_id)
     if not lines_ts and isinstance(chat_row, dict):
-        lm = chat_row.get("lastMessage") or {}
-        t = str(lm.get("text") or "").strip()
-        if t:
-            ts = int(lm.get("addTimestamp") or 0)
-            lines_ts = [("client", t, ts, str(ts))]
+        lines_ts = fallback_line_from_chat_row(chat_row)
     texts_for_title = [t for _, t, __, ___ in lines_ts]
     product_title = product_title_from_wb_chat(gc, texts_for_title)
     excerpt_parts = []

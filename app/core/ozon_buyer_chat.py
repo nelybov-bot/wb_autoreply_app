@@ -10,7 +10,7 @@ def _ozon_user_role(user: Any) -> str:
         return "other"
     raw = str(user.get("type") or "").strip().lower()
     # в документации иногда «Customer», иногда с кириллической «С»
-    if raw in ("customer", "сustomer", "client"):
+    if raw in ("customer", "сustomer", "client", "buyer"):
         return "client"
     if raw == "seller":
         return "seller"

@@ -374,9 +374,7 @@
       await api('/stores', { method: 'POST', body: JSON.stringify(body) });
       toast('Магазин добавлен');
       e.target.reset();
-      invalidateStoresCache();
-      loadStores();
-      fillStoreSelects();
+      await reloadStoresIntoSelects();
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -445,9 +443,7 @@
       await api(`/stores/${storeId}`, { method: 'PATCH', body: JSON.stringify(body) });
       toast('Магазин обновлён');
       document.getElementById('modal-store').classList.remove('visible');
-      invalidateStoresCache();
-      loadStores();
-      fillStoreSelects();
+      await reloadStoresIntoSelects();
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -468,9 +464,7 @@
     try {
       await api(`/stores/${storeId}`, { method: 'DELETE' });
       toast('Магазин удалён');
-      invalidateStoresCache();
-      loadStores();
-      fillStoreSelects();
+      await reloadStoresIntoSelects();
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -490,6 +484,21 @@
     }
   }
 
+  function storesForMarketplace(mp) {
+    const want = String(mp || '').toLowerCase();
+    return stores.filter(s => String(s.marketplace || '').toLowerCase() === want);
+  }
+
+  async function reloadStoresIntoSelects() {
+    invalidateStoresCache();
+    try {
+      await ensureStoresLoaded({ force: true });
+      fillStoreSelects();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
   function fillStoreSelects() {
     const opts = '<option value="">Все магазины</option>' + stores.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
     const rev = document.getElementById('reviews-store');
@@ -498,7 +507,7 @@
     if (qu) qu.innerHTML = opts;
     const wbSel = document.getElementById('wb-chats-store');
     if (wbSel) {
-      const wb = stores.filter(s => s.marketplace === 'wb');
+      const wb = storesForMarketplace('wb');
       const prev = String(wbSel.value || '').trim();
       wbChatsSuppressSelectChange = true;
       wbSel.innerHTML = wb.length
@@ -513,7 +522,7 @@
     }
     const ozSel = document.getElementById('ozon-chats-store');
     if (ozSel) {
-      const oz = stores.filter(s => s.marketplace === 'ozon');
+      const oz = storesForMarketplace('ozon');
       const prevOz = String(ozSel.value || '').trim();
       ozChatsSuppressSelectChange = true;
       ozSel.innerHTML = oz.length
@@ -601,7 +610,7 @@
   let wbChatSelectedId = null;
   let wbChatReplySign = '';
   let wbChatClientMessageKey = '';
-  let wbChatThreadPages = 2;
+  let wbChatThreadPages = 4;
   /** кэш переписки: ключ «storeId:chatId» */
   const wbChatThreadCache = new Map();
   /** защита от гонок: быстрая смена вкладки / чата / магазина */
@@ -745,7 +754,7 @@
       btn.addEventListener('click', () => {
         const chatId = decodeURIComponent(btn.getAttribute('data-chat-id') || '');
         wbChatSelectedId = chatId;
-        wbChatThreadPages = 2;
+        wbChatThreadPages = 4;
         renderWbChatsList();
         restoreWbChatDetailForSelected();
       });
@@ -1047,7 +1056,7 @@
         toast('Выберите чат', 'error');
         return;
       }
-      wbChatThreadPages = 2;
+      wbChatThreadPages = 4;
       void loadWbChatThread(wbChatSelectedId);
     });
     const bMore = document.getElementById('btn-wb-chats-more-history');
@@ -1121,24 +1130,51 @@
   }
 
   async function refreshOzonChatsList(forceRefresh = true) {
+    try {
+      await ensureStoresLoaded();
+      fillStoreSelects();
+    } catch (err) {
+      if (!getOzonChatsStoreId()) {
+        setChatStatusBar('ozon-chats-status-bar', 'error', err.message || 'Не удалось загрузить магазины');
+        setPanelLoading('ozon-chats-loading', false);
+        return;
+      }
+    }
     const sid = getOzonChatsStoreId();
     if (!sid) {
-      toast('Выберите магазин Ozon или добавьте его во вкладке «Магазины»', 'error');
+      const oz = storesForMarketplace('ozon');
+      const msg = oz.length
+        ? 'Выберите магазин Ozon в списке выше.'
+        : 'Нет магазинов Ozon. Добавьте во вкладке «Магазины»: тип Ozon, Client-Id и Api-Key.';
+      setChatStatusBar('ozon-chats-status-bar', 'error', msg);
+      setPanelLoading('ozon-chats-loading', false);
+      const wrap = document.getElementById('ozon-chats-list');
+      if (wrap) wrap.innerHTML = `<div class="form-hint">${escapeHtml(msg)}</div>`;
       return;
     }
     const gen = ++ozonChatsListFetchGen;
     const q = forceRefresh ? '?refresh=1' : '';
+    const storeLabel = getStoreNameById(sid) || `ID ${sid}`;
     const wrap = document.getElementById('ozon-chats-list');
     if (wrap) wrap.innerHTML = '<div class="form-hint">Загрузка списка…</div>';
-    setPanelLoading('ozon-chats-loading', true, 'Загружаю чаты Ozon… (1 запрос/с, может занять минуту)');
+    const loadMsg = `Загружаю чаты Ozon «${storeLabel}»… (1 запрос/с, может занять до минуты)`;
+    setChatStatusBar('ozon-chats-status-bar', 'loading', loadMsg);
+    setPanelLoading('ozon-chats-loading', true, loadMsg);
     setChatToolbarBusy('ozon-chats', true);
     try {
-      const data = await api(`/ozon/buyer-chats/${sid}${q}`);
+      const data = await api(`/ozon/buyer-chats/${sid}${q}`, { timeoutMs: 120000 });
       if (gen !== ozonChatsListFetchGen) return;
+      if (Number(getOzonChatsStoreId()) !== Number(sid)) return;
       ozonChatsRaw = data.chats || [];
       ozonChatsListStoreId = sid;
       ozonChatSelectedId = null;
       renderOzonChatsList();
+      const n = ozonChatsRaw.length;
+      setChatStatusBar(
+        'ozon-chats-status-bar',
+        n ? 'ok' : 'info',
+        n ? `Загружено чатов: ${n}. Выберите чат слева.` : 'Чатов пока нет (или нет доступа Premium Plus/Pro).',
+      );
       const hint = document.getElementById('ozon-chats-hint');
       const body = document.getElementById('ozon-chats-detail-body');
       if (hint) {
@@ -1149,7 +1185,9 @@
     } catch (err) {
       if (gen !== ozonChatsListFetchGen) return;
       ozonChatsRaw = [];
+      ozonChatsListStoreId = null;
       renderOzonChatsList();
+      setChatStatusBar('ozon-chats-status-bar', 'error', err.message || 'Ошибка загрузки чатов Ozon');
       toast(err.message, 'error');
     } finally {
       if (gen === ozonChatsListFetchGen) {
@@ -1210,22 +1248,40 @@
 
   async function loadOzonChatsPanel() {
     const gen = ++ozonChatsPanelGen;
+    if (!stores.length) {
+      setChatStatusBar('ozon-chats-status-bar', 'loading', 'Подготавливаю список магазинов…');
+    }
     try {
       await ensureStoresLoaded();
-    } catch (_) {}
+    } catch (e) {
+      if (gen !== ozonChatsPanelGen) return;
+      if (getOzonChatsStoreId()) {
+        await refreshOzonChatsList(false);
+        return;
+      }
+      setChatStatusBar('ozon-chats-status-bar', 'error', (e && e.message) ? e.message : 'Не удалось загрузить магазины');
+      return;
+    }
     if (gen !== ozonChatsPanelGen) return;
     fillStoreSelects();
+    if (gen !== ozonChatsPanelGen) return;
     const sid = getOzonChatsStoreId();
-    if (sid != null && ozonChatsListStoreId != null && Number(sid) === Number(ozonChatsListStoreId)) {
+    if (!sid) {
+      const oz = storesForMarketplace('ozon');
+      const msg = oz.length
+        ? 'Выберите магазин Ozon в списке.'
+        : 'Нет магазинов Ozon — добавьте во вкладке «Магазины» (Client-Id + Api-Key).';
+      setChatStatusBar('ozon-chats-status-bar', 'error', msg);
+      ozonChatsRaw = [];
       renderOzonChatsList();
       return;
     }
-    if (sid) {
-      await refreshOzonChatsList(false);
+    if (sid != null && ozonChatsListStoreId != null && Number(sid) === Number(ozonChatsListStoreId) && ozonChatsRaw.length) {
+      renderOzonChatsList();
+      setChatStatusBar('ozon-chats-status-bar', 'ok', `Загружено чатов: ${ozonChatsRaw.length}.`);
       return;
     }
-    ozonChatsRaw = [];
-    renderOzonChatsList();
+    await refreshOzonChatsList(false);
   }
 
   async function ozonChatsGenerateDraft() {
@@ -1314,9 +1370,10 @@
       });
     }
     document.getElementById('btn-ozon-chats-refresh')?.addEventListener('click', () => {
+      retryStoresLoad();
       setChatStatusBar('ozon-chats-status-bar', 'loading', 'Запрос к Ozon…');
       setPanelLoading('ozon-chats-loading', true, 'Запрос к Ozon…');
-      void refreshOzonChatsList();
+      void refreshOzonChatsList(true);
     });
     document.getElementById('btn-ozon-chats-mass')?.addEventListener('click', () => { void ozonChatsMassGenerateSend(); });
     document.getElementById('btn-ozon-chats-load-thread')?.addEventListener('click', () => {

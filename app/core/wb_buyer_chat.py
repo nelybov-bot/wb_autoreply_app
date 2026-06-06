@@ -349,6 +349,21 @@ def merge_good_card(chat_row: dict, events: List[dict]) -> dict:
     return gc
 
 
+def _event_role(ev: dict) -> str:
+    """Роль автора события: client / seller / other."""
+    sender = str(ev.get("sender") or "").strip().lower()
+    if sender == "client":
+        return "client"
+    if sender in ("seller", "seller-public-api"):
+        return "seller"
+    source = str(ev.get("source") or "").strip().lower()
+    if source in ("rusite", "client", "buyer", "customer"):
+        return "client"
+    if source.startswith("seller") or source in ("seller-portal", "seller-public-api", "seller-web"):
+        return "seller"
+    return sender or source or "other"
+
+
 def collect_thread_lines(events: List[dict], chat_id: str) -> List[Tuple[str, str, int, str]]:
     """Сообщения одного чата: (role, text, addTimestamp, message_key)."""
     out: List[Tuple[str, str, int, str]] = []
@@ -363,19 +378,28 @@ def collect_thread_lines(events: List[dict], chat_id: str) -> List[Tuple[str, st
         text = _event_text(ev)
         if not text:
             continue
-        sender = str(ev.get("sender") or "").strip().lower()
-        if sender == "client":
-            role = "client"
-        elif sender in ("seller", "seller-public-api"):
-            role = "seller"
-        else:
-            role = sender or "other"
+        role = _event_role(ev)
         ts = int(ev.get("addTimestamp") or 0)
         event_id = str(ev.get("eventID") or ev.get("id") or "").strip()
         msg_key = event_id if event_id else str(ts)
         out.append((role, text, ts, msg_key))
     out.sort(key=lambda x: x[2])
     return out
+
+
+def fallback_line_from_chat_row(chat_row: dict) -> List[Tuple[str, str, int, str]]:
+    """Если в /events нет сообщений — одна строка из lastMessage списка чатов."""
+    if not isinstance(chat_row, dict):
+        return []
+    lm = chat_row.get("lastMessage") or {}
+    if not isinstance(lm, dict):
+        return []
+    t = str(lm.get("text") or "").strip()
+    if not t:
+        return []
+    ts = int(lm.get("addTimestamp") or 0)
+    role = _event_role({**chat_row, **lm})
+    return [(role, t, ts, str(ts))]
 
 
 def last_client_message_info(lines_ts: List[Tuple[str, str, int, str]]) -> Optional[Tuple[str, int]]:
@@ -396,6 +420,7 @@ async def fetch_events_for_chat(
     Подтягивает страницы /seller/events и отбирает события выбранного чата.
     """
     merged: List[dict] = []
+    seen_event_ids: set[str] = set()
     next_cursor: Optional[int] = None
     last_next: Optional[int] = None
     for _ in range(max_wb_requests):
@@ -404,8 +429,16 @@ async def fetch_events_for_chat(
         if not isinstance(events, list):
             events = []
         for ev in events:
-            if isinstance(ev, dict) and str(ev.get("chatID") or "").strip() == (chat_id or "").strip():
-                merged.append(ev)
+            if not isinstance(ev, dict):
+                continue
+            if str(ev.get("chatID") or "").strip() != (chat_id or "").strip():
+                continue
+            eid = str(ev.get("eventID") or ev.get("id") or "").strip()
+            if eid:
+                if eid in seen_event_ids:
+                    continue
+                seen_event_ids.add(eid)
+            merged.append(ev)
         total = int(block.get("totalEvents") or 0)
         if total == 0:
             last_next = None
