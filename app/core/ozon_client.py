@@ -251,3 +251,72 @@ class OzonClient:
                 raise HttpStatusError(502, json.dumps(data))
         return data if isinstance(data, dict) else {}
 
+    async def list_actions(self) -> List[dict]:
+        """GET /v1/actions — список акций Ozon."""
+        data = await self._request("GET", "/v1/actions")
+        if not isinstance(data, dict):
+            return []
+        res = data.get("result")
+        return res if isinstance(res, list) else []
+
+    async def list_action_products(
+        self,
+        action_id: int,
+        *,
+        limit: int = 100,
+        last_id: Any = None,
+    ) -> dict:
+        """POST /v1/actions/products — товары, участвующие в акции."""
+        body: Dict[str, Any] = {
+            "action_id": int(action_id),
+            "limit": min(max(int(limit), 1), 100),
+        }
+        if last_id is not None and str(last_id).strip():
+            body["last_id"] = last_id
+        data = await self._request("POST", "/v1/actions/products", json_body=body)
+        if isinstance(data, dict):
+            res = data.get("result")
+            return res if isinstance(res, dict) else {}
+        return {}
+
+    async def list_action_candidates(
+        self,
+        action_id: int,
+        *,
+        limit: int = 100,
+        last_id: Any = None,
+    ) -> dict:
+        """POST /v1/actions/candidates — товары, доступные для акции."""
+        body: Dict[str, Any] = {
+            "action_id": int(action_id),
+            "limit": min(max(int(limit), 1), 100),
+        }
+        if last_id is not None and str(last_id).strip():
+            body["last_id"] = last_id
+        data = await self._request("POST", "/v1/actions/candidates", json_body=body)
+        if isinstance(data, dict):
+            res = data.get("result")
+            return res if isinstance(res, dict) else {}
+        return {}
+
+    async def deactivate_action_products(self, action_id: int, product_ids: List[int]) -> dict:
+        """POST /v1/actions/products/deactivate — убрать товары из акции."""
+        ids = [int(x) for x in (product_ids or []) if x is not None]
+        if not ids:
+            return {"product_ids": [], "rejected": []}
+        body = {"action_id": int(action_id), "product_ids": ids}
+        data = await self._request("POST", "/v1/actions/products/deactivate", json_body=body)
+        if isinstance(data, dict):
+            res = data.get("result")
+            return res if isinstance(res, dict) else {}
+        return {}
+
+    async def activate_action_products(self, action_id: int, products: List[dict]) -> dict:
+        """POST /v1/actions/products/activate — добавить товары в акцию."""
+        body = {"action_id": int(action_id), "products": products[:1000]}
+        data = await self._request("POST", "/v1/actions/products/activate", json_body=body)
+        if isinstance(data, dict):
+            res = data.get("result")
+            return res if isinstance(res, dict) else {}
+        return {}
+

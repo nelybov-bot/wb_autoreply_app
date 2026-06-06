@@ -52,6 +52,12 @@ from app.core.ozon_buyer_chat import (
     ozon_chat_type,
     product_title_from_ozon_chat,
 )
+from app.core.ozon_actions import (
+    auto_remove_from_ozon_auto_actions,
+    normalize_action_row,
+    pick_actions_for_removal,
+    remove_products_from_actions,
+)
 from app.core.ozon_client import OzonClient
 from app.core.chat_common import SETTING_REPLY_FROM, parse_api_error_detail
 from app.core.workflows import (
@@ -62,6 +68,7 @@ from app.core.workflows import (
     generate_wb_buyer_chat_reply,
     load_new_all,
     ozon_buyer_chats_mass_generate_send_for_store,
+    ozon_actions_auto_remove_for_store,
     send_mass_all,
     wb_buyer_chats_mass_generate_send_for_store,
     _buyer_chat_reply_from,
@@ -376,7 +383,21 @@ class AutoScheduleBody(BaseModel):
     run_questions: bool = True
     run_wb_chats: bool = False
     run_ozon_chats: bool = False
+    run_ozon_actions_remove: bool = False
 
+
+class OzonActionsSettingsBody(BaseModel):
+    auto_remove_on_schedule: bool = False
+    only_auto_add: bool = True
+    watched_action_ids: list[int] = []
+
+
+class OzonActionsRemoveBody(BaseModel):
+    action_ids: list[int] = []
+    only_auto_add: bool = False
+
+
+OZON_ACTIONS_SETTINGS_KEY = "ozon_actions_settings_json"
 AUTO_SCHEDULE_KEY = "auto_schedule_json"
 AUTO_LAST_RUN_KEY = "auto_schedule_last_run_at"
 # Индекс слота автозапуска: за один проход — один магазин (карусель по активным из настроек).
@@ -396,6 +417,36 @@ _auto_state: dict = {
     "last_finished_at": "",
     "last_error": "",
 }
+
+def _get_ozon_actions_settings(db: Database) -> dict:
+    raw = (db.get_setting(OZON_ACTIONS_SETTINGS_KEY) or "").strip()
+    cfg: dict = {"auto_remove_on_schedule": False, "only_auto_add": True, "stores": {}}
+    if not raw:
+        return cfg
+    try:
+        obj = json.loads(raw)
+        cfg["auto_remove_on_schedule"] = bool(obj.get("auto_remove_on_schedule"))
+        cfg["only_auto_add"] = bool(obj.get("only_auto_add", True))
+        stores = obj.get("stores") or {}
+        cfg["stores"] = stores if isinstance(stores, dict) else {}
+    except Exception:
+        pass
+    return cfg
+
+
+def _store_watched_action_ids(cfg: dict, store_id: int) -> list[int]:
+    stores = cfg.get("stores") or {}
+    if not isinstance(stores, dict):
+        return []
+    ent = stores.get(str(int(store_id))) or {}
+    out: list[int] = []
+    for x in ent.get("watched_action_ids") or []:
+        try:
+            out.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    return out
+
 
 def _normalize_slots(slots: list[str]) -> list[str]:
     out: list[str] = []
@@ -425,6 +476,7 @@ def _get_auto_schedule(db: Database) -> dict:
         "run_questions": True,
         "run_wb_chats": False,
         "run_ozon_chats": False,
+        "run_ozon_actions_remove": False,
     }
     if not raw:
         return cfg
@@ -440,6 +492,7 @@ def _get_auto_schedule(db: Database) -> dict:
         cfg["run_questions"] = bool(obj.get("run_questions", True))
         cfg["run_wb_chats"] = bool(obj.get("run_wb_chats", False))
         cfg["run_ozon_chats"] = bool(obj.get("run_ozon_chats", False))
+        cfg["run_ozon_actions_remove"] = bool(obj.get("run_ozon_actions_remove", False))
     except Exception:
         pass
     return cfg
@@ -459,9 +512,16 @@ def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
         "run_questions": bool(body.run_questions),
         "run_wb_chats": bool(body.run_wb_chats),
         "run_ozon_chats": bool(body.run_ozon_chats),
+        "run_ozon_actions_remove": bool(body.run_ozon_actions_remove),
     }
-    if not cfg["run_reviews"] and not cfg["run_questions"] and not cfg["run_wb_chats"] and not cfg["run_ozon_chats"]:
-        raise HTTPException(400, "Нужно включить хотя бы один тип: отзывы, вопросы или чаты WB/Ozon")
+    if not (
+        cfg["run_reviews"]
+        or cfg["run_questions"]
+        or cfg["run_wb_chats"]
+        or cfg["run_ozon_chats"]
+        or cfg["run_ozon_actions_remove"]
+    ):
+        raise HTTPException(400, "Нужно включить хотя бы один тип: отзывы, вопросы, чаты WB/Ozon или автоудаление из акций Ozon")
     db.set_setting(AUTO_SCHEDULE_KEY, json.dumps(cfg, ensure_ascii=False))
     return cfg
 
@@ -531,8 +591,9 @@ async def _run_auto_slot(slot: str) -> None:
         run_questions = bool(cfg.get("run_questions", True))
         run_wb_chats = bool(cfg.get("run_wb_chats", False))
         run_ozon_chats = bool(cfg.get("run_ozon_chats", False))
+        run_ozon_actions_remove = bool(cfg.get("run_ozon_actions_remove", False))
         log.info(
-            "auto_run start slot=%s stores_all=%s slot_store_id=%s reviews=%s questions=%s wb_chats=%s ozon_chats=%s",
+            "auto_run start slot=%s stores_all=%s slot_store_id=%s reviews=%s questions=%s wb_chats=%s ozon_chats=%s ozon_actions=%s",
             slot,
             [s.id for s in stores],
             slot_store.id,
@@ -540,6 +601,7 @@ async def _run_auto_slot(slot: str) -> None:
             run_questions,
             run_wb_chats,
             run_ozon_chats,
+            run_ozon_actions_remove,
         )
         item_types: list[str] = []
         if run_reviews:
@@ -602,6 +664,27 @@ async def _run_auto_slot(slot: str) -> None:
                     }
             else:
                 ozon_stats = {"ozon_chat_skipped": 1, "reason": "no_openai_key"}
+        ozon_action_stats: dict = {}
+        if run_ozon_actions_remove:
+            _auto_state["phase"] = "ozon_actions"
+            if (
+                slot_store.marketplace == "ozon"
+                and (slot_store.client_id or "").strip()
+                and (slot_store.api_key or "").strip()
+            ):
+                ocfg = _get_ozon_actions_settings(db)
+                watched = _store_watched_action_ids(ocfg, slot_store.id)
+                ozon_action_stats = await ozon_actions_auto_remove_for_store(
+                    slot_store,
+                    only_auto_add=bool(ocfg.get("only_auto_add", True)),
+                    action_ids=watched if watched else None,
+                )
+            else:
+                ozon_action_stats = {
+                    "skipped": 1,
+                    "reason": "slot_store_not_ozon_or_no_keys",
+                    "slot_store_id": slot_store.id,
+                }
         meta_run = {
             "slot": slot,
             "store_ids": [s.id for s in stores],
@@ -618,8 +701,10 @@ async def _run_auto_slot(slot: str) -> None:
             "sent_failed": sent_failed,
             "run_wb_chats": run_wb_chats,
             "run_ozon_chats": run_ozon_chats,
+            "run_ozon_actions_remove": run_ozon_actions_remove,
             **wb_stats,
             **ozon_stats,
+            **({"ozon_actions": ozon_action_stats} if ozon_action_stats else {}),
         }
         if reviews_phase_error:
             meta_run["reviews_phase_error"] = reviews_phase_error
@@ -742,6 +827,13 @@ def _schedule_hint(cfg: dict, db: Database) -> str:
             return "В цикле включены чаты Ozon, но среди выбранных магазинов нет Ozon с Client-Id и Api-Key."
         if not (db.get_setting("openai_key") or "").strip():
             return "Автоответы в чатах Ozon: нужен ключ OpenAI в «Настройки»."
+    if cfg.get("run_ozon_actions_remove"):
+        ozon_stores = [
+            s for s in stores
+            if s.marketplace == "ozon" and (s.client_id or "").strip() and (s.api_key or "").strip()
+        ]
+        if not ozon_stores:
+            return "В цикле включено автоудаление из акций Ozon, но нет Ozon-магазина с Client-Id и Api-Key."
     return ""
 
 
@@ -785,6 +877,7 @@ def _auto_status(db: Database) -> dict:
         "run_questions": bool(cfg.get("run_questions", True)),
         "run_wb_chats": bool(cfg.get("run_wb_chats", False)),
         "run_ozon_chats": bool(cfg.get("run_ozon_chats", False)),
+        "run_ozon_actions_remove": bool(cfg.get("run_ozon_actions_remove", False)),
         "next_slot": next_slot,
         "timezone": "Europe/Moscow",
         "schedule_hint": _schedule_hint(cfg, db),
@@ -1800,6 +1893,157 @@ async def api_ozon_buyer_chat_mass_generate_send(
             store_id=store_id,
             result="ok",
             meta=dict(stats),
+        )
+    except Exception:
+        pass
+    return stats
+
+
+# ---------- API: Ozon actions (promotions) ----------
+@app.get("/api/ozon/actions/settings/{store_id}")
+def api_ozon_actions_settings_get(
+    store_id: int,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    _require_ozon_store_for_chats(db, store_id)
+    cfg = _get_ozon_actions_settings(db)
+    watched = _store_watched_action_ids(cfg, store_id)
+    return {
+        "auto_remove_on_schedule": bool(cfg.get("auto_remove_on_schedule")),
+        "only_auto_add": bool(cfg.get("only_auto_add", True)),
+        "watched_action_ids": watched,
+    }
+
+
+@app.post("/api/ozon/actions/settings/{store_id}")
+def api_ozon_actions_settings_set(
+    store_id: int,
+    body: OzonActionsSettingsBody,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_permission("view_settings")),
+):
+    _require_ozon_store_for_chats(db, store_id)
+    cfg = _get_ozon_actions_settings(db)
+    cfg["auto_remove_on_schedule"] = bool(body.auto_remove_on_schedule)
+    cfg["only_auto_add"] = bool(body.only_auto_add)
+    stores = cfg.get("stores") or {}
+    if not isinstance(stores, dict):
+        stores = {}
+    stores[str(int(store_id))] = {
+        "watched_action_ids": [int(x) for x in (body.watched_action_ids or [])],
+    }
+    cfg["stores"] = stores
+    db.set_setting(OZON_ACTIONS_SETTINGS_KEY, json.dumps(cfg, ensure_ascii=False))
+    return {
+        "auto_remove_on_schedule": cfg["auto_remove_on_schedule"],
+        "only_auto_add": cfg["only_auto_add"],
+        "watched_action_ids": stores[str(int(store_id))]["watched_action_ids"],
+    }
+
+
+@app.get("/api/ozon/actions/{store_id}")
+async def api_ozon_actions_list(
+    store_id: int,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    s = _require_ozon_store_for_chats(db, store_id)
+    client = OzonClient(s.client_id or "", s.api_key)
+    try:
+        raw = await client.list_actions()
+    except HttpStatusError as e:
+        raise _ozon_chat_http_error(e) from e
+    actions = [normalize_action_row(a) for a in raw if isinstance(a, dict)]
+    actions.sort(key=lambda x: (0 if x.get("is_auto_add") else 1, -(x.get("participating_products_count") or 0)))
+    return {"actions": actions}
+
+
+@app.get("/api/ozon/actions/{store_id}/{action_id}/products")
+async def api_ozon_action_products(
+    store_id: int,
+    action_id: int,
+    limit: int = Query(100, ge=1, le=100),
+    last_id: Optional[str] = Query(None),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    s = _require_ozon_store_for_chats(db, store_id)
+    client = OzonClient(s.client_id or "", s.api_key)
+    try:
+        block = await client.list_action_products(int(action_id), limit=limit, last_id=last_id)
+    except HttpStatusError as e:
+        raise _ozon_chat_http_error(e) from e
+    products = block.get("products") or []
+    return {
+        "products": products if isinstance(products, list) else [],
+        "total": block.get("total"),
+        "last_id": block.get("last_id"),
+    }
+
+
+@app.post("/api/ozon/actions/{store_id}/remove")
+async def api_ozon_actions_remove(
+    store_id: int,
+    body: OzonActionsRemoveBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    s = _require_ozon_store_for_chats(db, store_id)
+    client = OzonClient(s.client_id or "", s.api_key)
+    action_ids = [int(x) for x in (body.action_ids or [])]
+    if not action_ids:
+        try:
+            raw = await client.list_actions()
+        except HttpStatusError as e:
+            raise _ozon_chat_http_error(e) from e
+        picked = pick_actions_for_removal(raw, only_auto_add=bool(body.only_auto_add))
+        action_ids = [int(a.get("id")) for a in picked if a.get("id") is not None]
+    if not action_ids:
+        return {"actions_processed": 0, "products_removed": 0, "message": "Нет акций с товарами для удаления"}
+    try:
+        stats = await remove_products_from_actions(client, action_ids)
+    except HttpStatusError as e:
+        raise _ozon_chat_http_error(e) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="ozon_actions_remove",
+            item_type="ozon_action",
+            store_id=store_id,
+            result="ok",
+            meta=dict(stats),
+        )
+    except Exception:
+        pass
+    return stats
+
+
+@app.post("/api/ozon/actions/{store_id}/auto-remove")
+async def api_ozon_actions_auto_remove(
+    store_id: int,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    s = _require_ozon_store_for_chats(db, store_id)
+    cfg = _get_ozon_actions_settings(db)
+    watched = _store_watched_action_ids(cfg, store_id)
+    try:
+        stats = await ozon_actions_auto_remove_for_store(
+            s,
+            only_auto_add=bool(cfg.get("only_auto_add", True)),
+            action_ids=watched if watched else None,
+        )
+    except HttpStatusError as e:
+        raise _ozon_chat_http_error(e) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="ozon_actions_auto_remove",
+            item_type="ozon_action",
+            store_id=store_id,
+            result="ok",
+            meta=dict(stats) if isinstance(stats, dict) else {"stats": str(stats)},
         )
     except Exception:
         pass

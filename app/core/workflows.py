@@ -10,7 +10,7 @@ import datetime as dt
 import json
 import logging
 from queue import Queue
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..db import Database, Store
 from .net import HttpStatusError, UnauthorizedStoreError
@@ -25,6 +25,7 @@ from .chat_common import (
     parse_reply_from_date,
     wb_ts_ms_after_cutoff,
 )
+from .ozon_actions import auto_remove_from_ozon_auto_actions
 from .ozon_buyer_chat import (
     collect_ozon_thread_lines,
     is_ozon_buyer_chat_row,
@@ -1327,3 +1328,31 @@ async def auto_process_ozon_buyer_chats(
         stats["ozon_chat_gen_failed"] += int(part.get("ozon_chat_gen_failed") or 0)
         stats["ozon_chat_send_failed"] += int(part.get("ozon_chat_send_failed") or 0)
     return stats
+
+
+async def ozon_actions_auto_remove_for_store(
+    store: Store,
+    *,
+    only_auto_add: bool = True,
+    action_ids: Optional[List[int]] = None,
+) -> Dict[str, Any]:
+    """Удалить товары из автоакций Ozon (или из указанных action_ids)."""
+    if store.marketplace != "ozon":
+        return {"skipped": 1, "reason": "not_ozon_store"}
+    if not (store.client_id or "").strip() or not (store.api_key or "").strip():
+        return {"skipped": 1, "reason": "no_ozon_keys"}
+    client = OzonClient(store.client_id or "", store.api_key)
+    try:
+        return await auto_remove_from_ozon_auto_actions(
+            client,
+            only_auto_add=only_auto_add,
+            action_ids=action_ids,
+        )
+    except HttpStatusError as e:
+        log.warning("ozon_actions_auto_remove store=%s: HTTP %s", store.id, e.status)
+        return {"skipped": 1, "reason": "http_error", "status": e.status, "body": (e.body or "")[:300]}
+    except (asyncio.CancelledError, GeneratorExit):
+        raise
+    except Exception as e:
+        log.exception("ozon_actions_auto_remove store=%s", store.id)
+        return {"skipped": 1, "reason": "error", "error": str(e)[:300]}

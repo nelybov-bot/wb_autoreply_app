@@ -210,6 +210,7 @@
       if (id === 'questions') { loadQuestions(); resumePanelTask('questions'); }
       if (id === 'wb-chats') { loadWbChatsPanel(); }
       if (id === 'ozon-chats') { loadOzonChatsPanel(); }
+      if (id === 'ozon-actions') { loadOzonActionsPanel(); }
       if (id === 'auto') loadAutoSchedulePanel();
       if (id === 'settings') loadSettings();
       if (id === 'log') loadLog();
@@ -240,6 +241,7 @@
         send: 'отправка',
         wb_chats: 'чаты WB',
         ozon_chats: 'чаты Ozon',
+        ozon_actions: 'акции Ozon',
         idle_items: 'без отзывов/вопросов',
         done: 'завершено',
         cancelled: 'остановлено',
@@ -535,6 +537,21 @@
       }
       setTimeout(() => { ozonChatsSuppressSelectChange = false; }, 0);
     }
+    const ozActSel = document.getElementById('ozon-actions-store');
+    if (ozActSel) {
+      const oz = storesForMarketplace('ozon');
+      const prevAct = String(ozActSel.value || '').trim();
+      ozonActionsSuppressSelectChange = true;
+      ozActSel.innerHTML = oz.length
+        ? oz.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')
+        : '<option value="">Нет магазинов Ozon — добавьте во вкладке «Магазины»</option>';
+      if (oz.length) {
+        const ids = new Set(oz.map(s => String(s.id)));
+        if (prevAct && ids.has(prevAct)) ozActSel.value = prevAct;
+        else selectFirstStoreOption(ozActSel);
+      }
+      setTimeout(() => { ozonActionsSuppressSelectChange = false; }, 0);
+    }
   }
 
   function renderAutoStoreList(selectedIds) {
@@ -572,6 +589,7 @@
         send: 'отправка',
         wb_chats: 'чаты WB',
         ozon_chats: 'чаты Ozon',
+        ozon_actions: 'акции Ozon',
         idle_items: 'без отзывов/вопросов',
         done: 'завершено',
         cancelled: 'остановлено',
@@ -1392,6 +1410,231 @@
     document.getElementById('btn-ozon-chats-send')?.addEventListener('click', () => { void ozonChatsSendMessage(); });
   }
 
+  // ---- Ozon actions (promotions) ----
+  let ozonActionsRaw = [];
+  let ozonActionsSuppressSelectChange = false;
+
+  function getOzonActionsStoreId() {
+    const el = document.getElementById('ozon-actions-store');
+    if (!el) return null;
+    const v = String(el.value || '').trim();
+    if (!v) return null;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+
+  function parseWatchedActionIds(raw) {
+    if (!raw || !String(raw).trim()) return [];
+    return String(raw).split(/[,;\s]+/).map(x => x.trim()).filter(Boolean).map(x => parseInt(x, 10)).filter(n => Number.isFinite(n) && n > 0);
+  }
+
+  function formatOzonActionPeriod(a) {
+    const s = (a.date_start || '').slice(0, 10);
+    const e = (a.date_end || '').slice(0, 10);
+    if (s && e) return `${s} — ${e}`;
+    return s || e || '—';
+  }
+
+  function setOzonActionsStatus(msg) {
+    const el = document.getElementById('ozon-actions-status');
+    if (el) el.textContent = msg || '';
+  }
+
+  function renderOzonActionsTable() {
+    const tbody = document.getElementById('ozon-actions-tbody');
+    if (!tbody) return;
+    if (!ozonActionsRaw.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="form-hint">Нет акций для отображения.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = ozonActionsRaw.map(a => {
+      const badges = [];
+      if (a.is_auto_add) badges.push('<span class="status-badge" title="Ozon сам добавляет товары">авто</span>');
+      if (a.is_voucher_action) badges.push('<span class="status-badge">промокод</span>');
+      if (a.with_targeting) badges.push('<span class="status-badge">таргет</span>');
+      const part = a.is_participating ? 'да' : 'нет';
+      const cnt = `${a.participating_products_count || 0} / ${a.potential_products_count || 0}`;
+      return `<tr data-action-id="${a.id}">
+        <td class="col-check"><input type="checkbox" class="ozon-action-check" value="${a.id}" ${a.participating_products_count > 0 ? '' : 'disabled'}></td>
+        <td>${a.id ?? '—'}</td>
+        <td>${escapeHtml(a.title || '')}${badges.length ? ' ' + badges.join(' ') : ''}</td>
+        <td>${escapeHtml(a.action_type || '—')}</td>
+        <td>${escapeHtml(formatOzonActionPeriod(a))}</td>
+        <td>${cnt}</td>
+        <td>${part}</td>
+      </tr>`;
+    }).join('');
+    const all = document.getElementById('ozon-actions-check-all');
+    if (all) {
+      all.checked = false;
+      all.indeterminate = false;
+    }
+  }
+
+  function getSelectedOzonActionIds() {
+    return Array.from(document.querySelectorAll('.ozon-action-check:checked'))
+      .map(el => parseInt(el.value, 10))
+      .filter(n => Number.isFinite(n) && n > 0);
+  }
+
+  async function loadOzonActionsSettings() {
+    const sid = getOzonActionsStoreId();
+    if (!sid) return;
+    try {
+      const cfg = await api(`/ozon/actions/settings/${sid}`);
+      const onlyAuto = document.getElementById('ozon-actions-only-auto');
+      const watched = document.getElementById('ozon-actions-watched-ids');
+      if (onlyAuto) onlyAuto.checked = cfg.only_auto_add !== false;
+      if (watched) watched.value = (cfg.watched_action_ids || []).join(', ');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  async function saveOzonActionsSettings() {
+    const sid = getOzonActionsStoreId();
+    if (!sid) {
+      toast('Выберите магазин Ozon', 'error');
+      return;
+    }
+    const only_auto_add = !!document.getElementById('ozon-actions-only-auto')?.checked;
+    const watched_action_ids = parseWatchedActionIds(document.getElementById('ozon-actions-watched-ids')?.value || '');
+    try {
+      await api(`/ozon/actions/settings/${sid}`, {
+        method: 'POST',
+        body: JSON.stringify({ only_auto_add, watched_action_ids, auto_remove_on_schedule: false }),
+      });
+      toast('Настройки акций сохранены');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  async function loadOzonActionsList(refresh) {
+    const sid = getOzonActionsStoreId();
+    if (!sid) {
+      setOzonActionsStatus('Нет магазина Ozon — добавьте во вкладке «Магазины».');
+      ozonActionsRaw = [];
+      renderOzonActionsTable();
+      return;
+    }
+    setPanelLoading('ozon-actions-loading', true, 'Запрос к Ozon…');
+    setOzonActionsStatus('Загрузка списка акций…');
+    try {
+      const r = await api(`/ozon/actions/${sid}`, refresh ? { timeoutMs: 120000 } : {});
+      ozonActionsRaw = r.actions || [];
+      renderOzonActionsTable();
+      const autoCnt = ozonActionsRaw.filter(a => a.is_auto_add).length;
+      const partCnt = ozonActionsRaw.filter(a => (a.participating_products_count || 0) > 0).length;
+      setOzonActionsStatus(`Загружено акций: ${ozonActionsRaw.length}. Автоакций: ${autoCnt}. С вашими товарами: ${partCnt}.`);
+    } catch (err) {
+      ozonActionsRaw = [];
+      renderOzonActionsTable();
+      setOzonActionsStatus(err.message || 'Ошибка загрузки акций');
+      toast(err.message, 'error');
+    } finally {
+      setPanelLoading('ozon-actions-loading', false);
+    }
+  }
+
+  async function ozonActionsRemoveSelected() {
+    const sid = getOzonActionsStoreId();
+    if (!sid) {
+      toast('Выберите магазин Ozon', 'error');
+      return;
+    }
+    const action_ids = getSelectedOzonActionIds();
+    if (!action_ids.length) {
+      toast('Отметьте акции в таблице', 'error');
+      return;
+    }
+    if (!confirm(`Удалить ваши товары из ${action_ids.length} акций? Это необратимо до повторного добавления вручную.`)) return;
+    const btn = document.getElementById('btn-ozon-actions-remove-selected');
+    if (btn) btn.disabled = true;
+    setPanelLoading('ozon-actions-loading', true, 'Удаление из акций…');
+    try {
+      const r = await api(`/ozon/actions/${sid}/remove`, {
+        method: 'POST',
+        body: JSON.stringify({ action_ids, only_auto_add: false }),
+        timeoutMs: 300000,
+      });
+      toast(`Удалено товаров: ${r.products_removed ?? 0}, акций: ${r.actions_processed ?? 0}, отклонено: ${r.products_rejected ?? 0}`);
+      setOzonActionsStatus(`Готово: удалено ${r.products_removed ?? 0} позиций из ${r.actions_processed ?? 0} акций.`);
+      await loadOzonActionsList(true);
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+      setPanelLoading('ozon-actions-loading', false);
+    }
+  }
+
+  async function ozonActionsAutoRemoveNow() {
+    const sid = getOzonActionsStoreId();
+    if (!sid) {
+      toast('Выберите магазин Ozon', 'error');
+      return;
+    }
+    const onlyAuto = !!document.getElementById('ozon-actions-only-auto')?.checked;
+    const hint = onlyAuto ? 'всех автоакций с вашими товарами' : 'выбранных/всех акций по настройкам';
+    if (!confirm(`Запустить автоудаление (${hint})?`)) return;
+    await saveOzonActionsSettings();
+    const btn = document.getElementById('btn-ozon-actions-auto-remove');
+    if (btn) btn.disabled = true;
+    setPanelLoading('ozon-actions-loading', true, 'Автоудаление…');
+    try {
+      const r = await api(`/ozon/actions/${sid}/auto-remove`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+        timeoutMs: 300000,
+      });
+      toast(`Автоудаление: товаров ${r.products_removed ?? 0}, акций ${r.actions_processed ?? 0}, подошло ${r.actions_matched ?? 0}`);
+      setOzonActionsStatus(`Автоудаление: удалено ${r.products_removed ?? 0} позиций из ${r.actions_processed ?? 0} акций.`);
+      await loadOzonActionsList(true);
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+      setPanelLoading('ozon-actions-loading', false);
+    }
+  }
+
+  async function loadOzonActionsPanel() {
+    try {
+      await ensureStoresLoaded();
+    } catch (e) {
+      setOzonActionsStatus((e && e.message) ? e.message : 'Не удалось загрузить магазины');
+      return;
+    }
+    fillStoreSelects();
+    await loadOzonActionsSettings();
+    if (ozonActionsRaw.length) {
+      renderOzonActionsTable();
+      return;
+    }
+    setOzonActionsStatus('Нажмите «Загрузить акции» для списка из Ozon API.');
+  }
+
+  function wireOzonActionsPanel() {
+    if (wireOzonActionsPanel._done) return;
+    wireOzonActionsPanel._done = true;
+    document.getElementById('ozon-actions-store')?.addEventListener('change', () => {
+      if (ozonActionsSuppressSelectChange) return;
+      ozonActionsRaw = [];
+      renderOzonActionsTable();
+      void loadOzonActionsSettings();
+      setOzonActionsStatus('Магазин сменён — нажмите «Загрузить акции».');
+    });
+    document.getElementById('btn-ozon-actions-load')?.addEventListener('click', () => { void loadOzonActionsList(true); });
+    document.getElementById('btn-ozon-actions-remove-selected')?.addEventListener('click', () => { void ozonActionsRemoveSelected(); });
+    document.getElementById('btn-ozon-actions-auto-remove')?.addEventListener('click', () => { void ozonActionsAutoRemoveNow(); });
+    document.getElementById('btn-ozon-actions-save-settings')?.addEventListener('click', () => { void saveOzonActionsSettings(); });
+    document.getElementById('ozon-actions-check-all')?.addEventListener('change', (e) => {
+      const checked = !!e.target.checked;
+      document.querySelectorAll('.ozon-action-check:not(:disabled)').forEach(el => { el.checked = checked; });
+    });
+  }
+
   // ---- Items (reviews / questions) ----
   let reviews = [];
   let questions = [];
@@ -1803,6 +2046,8 @@
       if (autoRunWbChats) autoRunWbChats.checked = !!autoCfg.run_wb_chats;
       const autoRunOzonChats = document.getElementById('auto-run-ozon-chats');
       if (autoRunOzonChats) autoRunOzonChats.checked = !!autoCfg.run_ozon_chats;
+      const autoRunOzonActions = document.getElementById('auto-run-ozon-actions-remove');
+      if (autoRunOzonActions) autoRunOzonActions.checked = !!autoCfg.run_ozon_actions_remove;
       syncAutoScheduleModeUi();
       renderAutoStoreList(autoCfg.store_ids || []);
       await refreshAutoStatus();
@@ -1856,17 +2101,18 @@
       const run_questions = !!document.getElementById('auto-run-questions')?.checked;
       const run_wb_chats = !!document.getElementById('auto-run-wb-chats')?.checked;
       const run_ozon_chats = !!document.getElementById('auto-run-ozon-chats')?.checked;
+      const run_ozon_actions_remove = !!document.getElementById('auto-run-ozon-actions-remove')?.checked;
       const store_ids = getAutoSelectedStoreIds();
       if (!store_ids.length) {
         toast('Выбери хотя бы один магазин для автозапуска', 'error');
         return;
       }
-      if (!run_reviews && !run_questions && !run_wb_chats && !run_ozon_chats) {
-        toast('Выбери хотя бы один тип: отзывы, вопросы или чаты', 'error');
+      if (!run_reviews && !run_questions && !run_wb_chats && !run_ozon_chats && !run_ozon_actions_remove) {
+        toast('Выбери хотя бы один тип: отзывы, вопросы, чаты или акции Ozon', 'error');
         return;
       }
       try {
-        await api('/auto-schedule', { method: 'POST', body: JSON.stringify({ enabled, slots, store_ids, schedule_mode, interval_hours, run_reviews, run_questions, run_wb_chats, run_ozon_chats }) });
+        await api('/auto-schedule', { method: 'POST', body: JSON.stringify({ enabled, slots, store_ids, schedule_mode, interval_hours, run_reviews, run_questions, run_wb_chats, run_ozon_chats, run_ozon_actions_remove }) });
         toast('Автозапуск сохранён');
         await loadAutoSchedulePanel();
       } catch (err) {
@@ -2186,6 +2432,7 @@
     loadStats();
     wireWbChatsPanel();
     wireOzonChatsPanel();
+    wireOzonActionsPanel();
     ensureStoresLoaded().then(() => {
       fillStoreSelects();
       loadReviews();

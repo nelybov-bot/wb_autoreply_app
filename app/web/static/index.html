@@ -44,6 +44,7 @@
     <button type="button" class="tab" data-tab="questions">Вопросы</button>
     <button type="button" class="tab" data-tab="wb-chats">Чаты WB</button>
     <button type="button" class="tab" data-tab="ozon-chats">Чаты Ozon</button>
+    <button type="button" class="tab" data-tab="ozon-actions">Акции Ozon</button>
     <button type="button" class="tab" data-tab="auto">Автозапуск</button>
     <button type="button" class="tab" data-tab="settings">Настройки</button>
     <button type="button" class="tab" data-tab="log">Лог</button>
@@ -329,6 +330,48 @@
       </div>
     </section>
 
+    <!-- Акции Ozon -->
+    <section id="panel-ozon-actions" class="panel">
+      <div class="form-card">
+        <h2>Акции Ozon</h2>
+        <p class="form-hint" style="margin-top:0;">Ozon сам добавляет товары в часть акций (автоакции — в API это поле <code>auto_add_dates</code>). Здесь можно посмотреть акции и удалить ваши товары из выбранных или из всех автоакций с участием.</p>
+        <div class="toolbar" style="margin:12px 0; flex-wrap:wrap; gap:8px;">
+          <select id="ozon-actions-store" title="Магазин Ozon"></select>
+          <button type="button" class="btn btn-primary" id="btn-ozon-actions-load">Загрузить акции</button>
+          <button type="button" class="btn btn-secondary" id="btn-ozon-actions-remove-selected">Удалить товары из выбранных</button>
+          <button type="button" class="btn btn-secondary" id="btn-ozon-actions-auto-remove">Автоудаление сейчас</button>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-row"><input type="checkbox" id="ozon-actions-only-auto" checked> Только автоакции (Ozon сам добавляет товары)</label>
+          <label style="margin-top:8px;">ID акций для отслеживания (через запятую, необязательно)</label>
+          <input type="text" id="ozon-actions-watched-ids" placeholder="71342, 66011">
+          <small class="form-hint">Если пусто — автоудаление берёт все автоакции, где есть ваши товары. Если указаны ID — только эти акции (при ручном «Автоудаление сейчас» и в слоте автозапуска).</small>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-actions-save-settings" style="margin-top:10px;">Сохранить настройки акций</button>
+        </div>
+        <div id="ozon-actions-status" class="form-hint" role="status">Выберите магазин Ozon и нажмите «Загрузить акции».</div>
+        <div class="progress-wrap" id="ozon-actions-loading" aria-live="polite" hidden>
+          <div class="progress-bar" role="progressbar"></div>
+          <span class="progress-label">Загрузка…</span>
+        </div>
+        <div class="items-table-wrap" style="margin-top:12px;">
+          <table class="items-table" id="ozon-actions-table">
+            <thead>
+              <tr>
+                <th class="col-check"><input type="checkbox" id="ozon-actions-check-all" title="Выбрать все"></th>
+                <th>ID</th>
+                <th>Название</th>
+                <th>Тип</th>
+                <th>Период</th>
+                <th>Товаров</th>
+                <th>Участие</th>
+              </tr>
+            </thead>
+            <tbody id="ozon-actions-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <!-- Автозапуск -->
     <section id="panel-auto" class="panel">
       <div class="form-card auto-card">
@@ -367,7 +410,8 @@
           <label class="checkbox-row"><input type="checkbox" id="auto-run-questions" checked> Вопросы</label>
           <label class="checkbox-row"><input type="checkbox" id="auto-run-wb-chats"> Чаты WB</label>
           <label class="checkbox-row"><input type="checkbox" id="auto-run-ozon-chats"> Чаты Ozon</label>
-          <small class="form-hint" style="display:block;margin-top:6px;">Автоответ в чате, если последнее сообщение от покупателя (до 5 чатов за слот на магазин). Учитывается дата «отвечать с» из настроек и проверка на повторный ответ. Нужны ключ OpenAI и ключи магазина с доступом к чатам.</small>
+          <label class="checkbox-row"><input type="checkbox" id="auto-run-ozon-actions-remove"> Удаление из автоакций Ozon</label>
+          <small class="form-hint" style="display:block;margin-top:6px;">Чаты: автоответ, если последнее сообщение от покупателя (до 5 чатов за слот). Акции: удаление ваших товаров из автоакций Ozon для магазина слота (настройки — вкладка «Акции Ozon»). Нужны Client-Id и Api-Key Ozon; для чатов ещё OpenAI.</small>
         </div>
         <div class="form-group" style="margin-top: 12px;">
           <label>Магазины для авто</label>
@@ -583,6 +627,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=8"></script>
+  <script src="/static/app.js?v=9"></script>
 </body>
 </html>
