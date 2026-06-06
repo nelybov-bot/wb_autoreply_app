@@ -51,6 +51,8 @@ from app.core.ozon_buyer_chat import (
     ozon_chat_error_message,
     ozon_chat_row_id,
     ozon_chat_type,
+    ozon_feature_unavailable_user_message,
+    ozon_http_skip_reason,
     ozon_reply_window_hint,
     product_title_from_ozon_chat,
 )
@@ -407,7 +409,7 @@ AUTO_RR_STORE_INDEX_KEY = "auto_rr_store_index"
 _WB_CHAT_LIST_TTL_S = 55.0
 _OZON_CHAT_LIST_TTL_S = 55.0
 _wb_chat_list_cache: dict[int, tuple[float, list]] = {}
-_ozon_chat_list_cache: dict[int, tuple[float, list]] = {}
+_ozon_chat_list_cache: dict[int, tuple[float, list, Optional[str]]] = {}
 _scheduler_task: Optional[asyncio.Task] = None
 _scheduler_seen: set[str] = set()
 _auto_run_task: Optional[asyncio.Task] = None
@@ -1623,21 +1625,32 @@ async def api_wb_buyer_chat_mass_generate_send(
     return stats
 
 
-async def _ozon_buyer_chat_list_cached(store_id: int, client_id: str, api_key: str, *, force_refresh: bool) -> list:
+async def _ozon_buyer_chat_list_cached(
+    store_id: int,
+    client_id: str,
+    api_key: str,
+    *,
+    force_refresh: bool,
+) -> tuple[list, Optional[str]]:
     sid = int(store_id)
     if force_refresh:
         _ozon_chat_list_cache.pop(sid, None)
     now = time.monotonic()
     ent = _ozon_chat_list_cache.get(sid)
     if ent and (now - ent[0]) < _OZON_CHAT_LIST_TTL_S:
-        return list(ent[1])
+        return list(ent[1]), ent[2]
     client = OzonClient(client_id, api_key)
     try:
         chats = await client.list_all_buyer_chats()
-    except HttpStatusError:
+    except HttpStatusError as e:
+        reason = ozon_http_skip_reason(e.status, e.body or "", feature="chat")
+        if reason:
+            log.info("ozon chats store=%s skipped: %s (HTTP %s)", sid, reason, e.status)
+            _ozon_chat_list_cache[sid] = (now, [], reason)
+            return [], reason
         raise
-    _ozon_chat_list_cache[sid] = (now, chats)
-    return chats
+    _ozon_chat_list_cache[sid] = (now, chats, None)
+    return chats, None
 
 
 def _require_ozon_store_for_chats(db: Database, store_id: int) -> Store:
@@ -1661,7 +1674,9 @@ async def _assert_ozon_buyer_chat_id(
     cid = (chat_id or "").strip()
     if not cid:
         raise HTTPException(400, "chat_id пустой")
-    rows = await _ozon_buyer_chat_list_cached(store_id, client_id, api_key, force_refresh=False)
+    rows, skip = await _ozon_buyer_chat_list_cached(store_id, client_id, api_key, force_refresh=False)
+    if skip:
+        raise HTTPException(400, ozon_feature_unavailable_user_message(skip, feature="chat"))
     for row in rows:
         if ozon_chat_row_id(row) == cid:
             return row if isinstance(row, dict) else {}
@@ -1694,11 +1709,19 @@ async def api_ozon_buyer_chat_list(
 ):
     s = _require_ozon_store_for_chats(db, store_id)
     try:
-        rows = await _ozon_buyer_chat_list_cached(
+        rows, skip = await _ozon_buyer_chat_list_cached(
             store_id, s.client_id or "", s.api_key, force_refresh=refresh
         )
     except HttpStatusError as e:
         raise _ozon_chat_http_error(e) from e
+    if skip:
+        return {
+            "chats": [],
+            "buyer_only": True,
+            "unavailable": True,
+            "unavailable_reason": skip,
+            "message": ozon_feature_unavailable_user_message(skip, feature="chat"),
+        }
     chats = []
     for row in rows:
         if not isinstance(row, dict):
@@ -1955,6 +1978,14 @@ async def api_ozon_actions_list(
     try:
         raw = await client.list_actions()
     except HttpStatusError as e:
+        reason = ozon_http_skip_reason(e.status, e.body or "", feature="actions")
+        if reason:
+            return {
+                "actions": [],
+                "unavailable": True,
+                "unavailable_reason": reason,
+                "message": ozon_feature_unavailable_user_message(reason, feature="actions"),
+            }
         raise _ozon_chat_http_error(e) from e
     actions = [normalize_action_row(a) for a in raw if isinstance(a, dict)]
     actions.sort(key=lambda x: (0 if x.get("is_auto_add") else 1, -(x.get("participating_products_count") or 0)))
@@ -1998,6 +2029,15 @@ async def api_ozon_actions_remove(
         try:
             raw = await client.list_actions()
         except HttpStatusError as e:
+            reason = ozon_http_skip_reason(e.status, e.body or "", feature="actions")
+            if reason:
+                return {
+                    "actions_processed": 0,
+                    "products_removed": 0,
+                    "skipped": 1,
+                    "reason": reason,
+                    "message": ozon_feature_unavailable_user_message(reason, feature="actions"),
+                }
             raise _ozon_chat_http_error(e) from e
         picked = pick_actions_for_removal(raw, only_auto_add=bool(body.only_auto_add))
         action_ids = [int(a.get("id")) for a in picked if a.get("id") is not None]

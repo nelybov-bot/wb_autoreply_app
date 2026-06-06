@@ -1198,6 +1198,10 @@
       ozonChatsListStoreId = sid;
       ozonChatSelectedId = null;
       renderOzonChatsList();
+      if (data.unavailable) {
+        setChatStatusBar('ozon-chats-status-bar', 'info', data.message || 'Чаты недоступны для этого магазина.');
+        return;
+      }
       const n = ozonChatsRaw.length;
       setChatStatusBar(
         'ozon-chats-status-bar',
@@ -1356,6 +1360,12 @@
         method: 'POST',
         body: JSON.stringify({ max_chats: 50 }),
       });
+      if (r.ozon_chat_skipped_no_access) {
+        toast(r.ozon_chat_skip_reason === 'no_premium'
+          ? 'У этого магазина нет Premium — чаты пропущены.'
+          : 'Чаты недоступны для этого магазина — пропущено.');
+        return;
+      }
       toast(
         `Ozon: отправлено ${r.ozon_chat_sent ?? 0}, уже отвечено ${r.ozon_chat_skipped_already_replied ?? 0}, раньше даты ${r.ozon_chat_skipped_before_cutoff ?? 0}, окно закрыто ${r.ozon_chat_skipped_reply_window ?? 0}, поддержка ${r.ozon_chat_skipped_support ?? 0}.`,
       );
@@ -1534,6 +1544,12 @@
     setOzonActionsStatus('Загрузка списка акций…');
     try {
       const r = await api(`/ozon/actions/${sid}`, refresh ? { timeoutMs: 120000 } : {});
+      if (r.unavailable) {
+        ozonActionsRaw = [];
+        renderOzonActionsTable();
+        setOzonActionsStatus(r.message || 'Акции недоступны для этого магазина.');
+        return;
+      }
       ozonActionsRaw = r.actions || [];
       renderOzonActionsTable();
       const autoCnt = ozonActionsRaw.filter(a => a.is_auto_add).length;
@@ -1600,6 +1616,11 @@
         body: JSON.stringify({}),
         timeoutMs: 300000,
       });
+      if (r.skipped && r.reason && String(r.reason).startsWith('no_')) {
+        toast(r.message || 'Акции недоступны для этого магазина — пропущено.');
+        setOzonActionsStatus(r.message || 'Магазин пропущен (нет доступа к акциям).');
+        return;
+      }
       toast(`Автоудаление: товаров ${r.products_removed ?? 0}, акций ${r.actions_processed ?? 0}, подошло ${r.actions_matched ?? 0}`);
       setOzonActionsStatus(`Автоудаление: удалено ${r.products_removed ?? 0} позиций из ${r.actions_processed ?? 0} акций.`);
       await loadOzonActionsList(true);

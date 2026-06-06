@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from .net import HttpStatusError
+from .ozon_buyer_chat import ozon_feature_unavailable_user_message, ozon_http_skip_reason
 from .ozon_client import OzonClient
 
 log = logging.getLogger("ozon_actions")
@@ -160,7 +162,22 @@ async def auto_remove_from_ozon_auto_actions(
     action_ids: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
     """Загрузить акции и удалить товары из автоакций (или выбранных id)."""
-    raw = await client.list_actions()
+    try:
+        raw = await client.list_actions()
+    except HttpStatusError as e:
+        reason = ozon_http_skip_reason(e.status, e.body or "", feature="actions")
+        if reason:
+            log.info("ozon_actions skipped: %s (HTTP %s)", reason, e.status)
+            return {
+                "skipped": 1,
+                "reason": reason,
+                "message": ozon_feature_unavailable_user_message(reason, feature="actions"),
+                "actions_matched": 0,
+                "actions_processed": 0,
+                "products_removed": 0,
+                "only_auto_add": only_auto_add,
+            }
+        raise
     picked = pick_actions_for_removal(
         raw,
         only_auto_add=only_auto_add,

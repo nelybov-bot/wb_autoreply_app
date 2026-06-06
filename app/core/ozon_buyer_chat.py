@@ -201,6 +201,57 @@ def ozon_reply_window_hint(
     return out
 
 
+def is_ozon_per_chat_send_error(body: str) -> bool:
+    """403 из-за закрытого окна ответа в конкретном чате — не повод скипать весь магазин."""
+    low = ((body or "") + " " + parse_api_error_detail(body or "")).lower()
+    return "access period has expired" in low or "actions with this chat not permitted" in low
+
+
+def ozon_http_skip_reason(status: int, body: str, *, feature: str = "") -> Optional[str]:
+    """
+    Причина тихого пропуска магазина (нет Premium, нет доступа к API).
+    None — обычная ошибка, её нужно показать или залогировать отдельно.
+    """
+    if status == 401:
+        return None
+    if status not in (402, 403, 404):
+        return None
+    if feature == "chat" and is_ozon_per_chat_send_error(body):
+        return None
+    detail = parse_api_error_detail(body or "")
+    combined = f"{detail} {body or ''}".lower()
+    if any(x in combined for x in ("premium", "subscription", "tariff", " plus", "plus ", "премиум", "подписк")):
+        return "no_premium"
+    if feature == "chat" and status in (402, 403):
+        return "no_chat_access"
+    if feature == "actions" and status in (402, 403):
+        return "no_actions_access"
+    if status in (402, 403):
+        return "no_access"
+    return None
+
+
+def ozon_feature_unavailable_user_message(reason: str, *, feature: str = "") -> str:
+    labels = {
+        "chat": "чаты с покупателями",
+        "actions": "акции",
+    }
+    feat = labels.get(feature, "этот раздел API")
+    if reason == "no_premium":
+        return (
+            f"Магазин пропущен: для {feat} нужен Premium Plus/Pro у Ozon. "
+            "Отзывы и вопросы работают без Premium."
+        )
+    if reason == "no_chat_access":
+        return (
+            "Магазин пропущен: нет доступа к чатам Ozon "
+            "(Premium Plus/Pro и право «Чат» у API-ключа)."
+        )
+    if reason in ("no_actions_access", "no_access"):
+        return f"Магазин пропущен: Ozon API недоступен для {feat} ({reason})."
+    return f"Магазин пропущен: {feat} недоступны ({reason})."
+
+
 def ozon_chat_error_message(status: int, body: str) -> str:
     detail = parse_api_error_detail(body or "")
     low = detail.lower()

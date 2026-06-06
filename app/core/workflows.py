@@ -36,6 +36,8 @@ from .ozon_buyer_chat import (
     last_client_message_info as ozon_last_client_info,
     ozon_chat_row_id,
     ozon_reply_window_hint,
+    ozon_http_skip_reason,
+    ozon_feature_unavailable_user_message,
     product_title_from_ozon_chat,
 )
 from .wb_buyer_chat import (
@@ -1229,6 +1231,8 @@ async def ozon_buyer_chats_mass_generate_send_for_store(
         "ozon_chat_skipped_support": 0,
         "ozon_chat_skipped_reply_window": 0,
         "ozon_chat_skipped_too_old": 0,
+        "ozon_chat_skipped_no_access": 0,
+        "ozon_chat_skip_reason": "",
     }
     key = (openai_key or "").strip()
     if not key:
@@ -1238,7 +1242,17 @@ async def ozon_buyer_chats_mass_generate_send_for_store(
     reply_from = _buyer_chat_reply_from(db)
     oai = OpenAIClient(openai_key, model=model)
     client = OzonClient(store.client_id or "", store.api_key)
-    rows = await client.list_all_buyer_chats(unread_only=False)
+    try:
+        rows = await client.list_all_buyer_chats(unread_only=False)
+    except HttpStatusError as e:
+        reason = ozon_http_skip_reason(e.status, e.body or "", feature="chat")
+        if reason:
+            stats["ozon_chat_skipped_no_access"] = 1
+            stats["ozon_chat_skip_reason"] = reason
+            stats["message"] = ozon_feature_unavailable_user_message(reason, feature="chat")
+            log.info("ozon_chat_mass store=%s skipped: %s (HTTP %s)", store.id, reason, e.status)
+            return stats
+        raise
     candidates: List[tuple[str, dict, List[tuple], str]] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -1336,6 +1350,7 @@ async def auto_process_ozon_buyer_chats(
         "ozon_chat_sent": 0,
         "ozon_chat_gen_failed": 0,
         "ozon_chat_send_failed": 0,
+        "ozon_chat_skipped_no_access": 0,
     }
     key = (openai_key or "").strip()
     if not key:
@@ -1368,6 +1383,7 @@ async def auto_process_ozon_buyer_chats(
         stats["ozon_chat_sent"] += int(part.get("ozon_chat_sent") or 0)
         stats["ozon_chat_gen_failed"] += int(part.get("ozon_chat_gen_failed") or 0)
         stats["ozon_chat_send_failed"] += int(part.get("ozon_chat_send_failed") or 0)
+        stats["ozon_chat_skipped_no_access"] += int(part.get("ozon_chat_skipped_no_access") or 0)
     return stats
 
 
@@ -1390,6 +1406,17 @@ async def ozon_actions_auto_remove_for_store(
             action_ids=action_ids,
         )
     except HttpStatusError as e:
+        reason = ozon_http_skip_reason(e.status, e.body or "", feature="actions")
+        if reason:
+            log.info("ozon_actions_auto_remove store=%s skipped: %s (HTTP %s)", store.id, reason, e.status)
+            return {
+                "skipped": 1,
+                "reason": reason,
+                "message": ozon_feature_unavailable_user_message(reason, feature="actions"),
+                "actions_matched": 0,
+                "actions_processed": 0,
+                "products_removed": 0,
+            }
         log.warning("ozon_actions_auto_remove store=%s: HTTP %s", store.id, e.status)
         return {"skipped": 1, "reason": "http_error", "status": e.status, "body": (e.body or "")[:300]}
     except (asyncio.CancelledError, GeneratorExit):
