@@ -282,10 +282,35 @@
     const wrap = document.getElementById(id);
     if (!wrap) return;
     wrap.classList.toggle('visible', !!visible);
+    wrap.style.display = visible ? 'block' : '';
     if (message) {
       const t = wrap.querySelector('.progress-text');
       if (t) t.textContent = message;
     }
+  }
+
+  function setChatStatusBar(barId, kind, message) {
+    const el = document.getElementById(barId);
+    if (!el) return;
+    const msg = (message || '').trim();
+    if (!msg) {
+      el.hidden = true;
+      el.className = 'chat-status-bar';
+      el.innerHTML = '';
+      return;
+    }
+    el.hidden = false;
+    el.className = 'chat-status-bar' + (kind ? ` is-${kind}` : '');
+    if (kind === 'loading') {
+      el.innerHTML = `<span class="chat-status-spinner" aria-hidden="true"></span><span class="chat-status-text">${escapeHtml(msg)}</span>`;
+    } else {
+      el.innerHTML = `<span class="chat-status-text">${escapeHtml(msg)}</span>`;
+    }
+  }
+
+  function getStoreNameById(storeId) {
+    const s = stores.find(x => Number(x.id) === Number(storeId));
+    return s ? s.name : '';
   }
 
   function setChatToolbarBusy(panelPrefix, busy) {
@@ -643,16 +668,26 @@
   }
 
   async function refreshWbChatsList(forceRefresh = true) {
+    await ensureStoresLoaded().catch(() => {});
+    fillStoreSelects();
     const sid = getWbChatsStoreId();
     if (!sid) {
-      toast('Выберите магазин WB', 'error');
+      const wrap = document.getElementById('wb-chats-list');
+      if (wrap) {
+        wrap.innerHTML = '<div class="form-hint">Нет магазина WB. Добавьте магазин Wildberries во вкладке «Магазины» и укажите ключ с правом «Чат с покупателями».</div>';
+      }
+      setChatStatusBar('wb-chats-status-bar', 'error', 'Выберите или добавьте магазин WB в «Магазины».');
+      setPanelLoading('wb-chats-loading', false);
       return;
     }
     const gen = ++wbChatsListFetchGen;
     const q = forceRefresh ? '?refresh=1' : '';
+    const storeLabel = getStoreNameById(sid) || `ID ${sid}`;
     const wrap = document.getElementById('wb-chats-list');
     if (wrap) wrap.innerHTML = '<div class="form-hint">Загрузка списка…</div>';
-    setPanelLoading('wb-chats-loading', true, 'Загружаю список чатов WB… (до 30–60 с при первом запросе)');
+    const loadMsg = `Загружаю чаты WB «${storeLabel}»… Первый запрос может занять 30–90 секунд (лимиты WB).`;
+    setChatStatusBar('wb-chats-status-bar', 'loading', loadMsg);
+    setPanelLoading('wb-chats-loading', true, loadMsg);
     setChatToolbarBusy('wb-chats', true);
     try {
       const data = await api(`/wb/buyer-chats/${sid}${q}`);
@@ -663,6 +698,12 @@
       wbChatSelectedId = null;
       wbChatReplySign = '';
       renderWbChatsList();
+      const n = wbChatsRaw.length;
+      setChatStatusBar(
+        'wb-chats-status-bar',
+        n ? 'ok' : 'info',
+        n ? `Загружено чатов: ${n}. Выберите чат слева.` : 'Чатов пока нет (или пустой ответ WB).',
+      );
       const hint = document.getElementById('wb-chats-hint');
       const body = document.getElementById('wb-chats-detail-body');
       if (hint) {
@@ -676,7 +717,11 @@
       wbChatsListStoreId = null;
       wbChatSelectedId = null;
       wbChatReplySign = '';
-      renderWbChatsList();
+      const wrapErr = document.getElementById('wb-chats-list');
+      if (wrapErr) {
+        wrapErr.innerHTML = `<div class="form-hint" style="color:#b91c1c;">${escapeHtml(err.message || 'Ошибка загрузки')}</div>`;
+      }
+      setChatStatusBar('wb-chats-status-bar', 'error', err.message || 'Ошибка загрузки чатов WB');
       toast(err.message, 'error');
     } finally {
       if (gen === wbChatsListFetchGen) {
@@ -690,6 +735,7 @@
     const sid = getWbChatsStoreId();
     if (!sid || !chatId) return;
     const gen = ++wbChatThreadFetchGen;
+    setChatStatusBar('wb-chats-status-bar', 'loading', 'Загружаю переписку…');
     setPanelLoading('wb-chats-loading', true, 'Загружаю переписку…');
     setChatToolbarBusy('wb-chats', true);
     try {
@@ -757,20 +803,24 @@
 
   async function loadWbChatsPanel() {
     const gen = ++wbChatsPanelGen;
+    setChatStatusBar('wb-chats-status-bar', 'loading', 'Подготавливаю список магазинов…');
     try {
       await ensureStoresLoaded();
-    } catch (_) {}
+    } catch (e) {
+      setChatStatusBar('wb-chats-status-bar', 'error', (e && e.message) ? e.message : 'Не удалось загрузить магазины');
+      return;
+    }
     if (gen !== wbChatsPanelGen) return;
     fillStoreSelects();
     if (gen !== wbChatsPanelGen) return;
     const sid = getWbChatsStoreId();
     const listMatches = sid != null && wbChatsListStoreId != null && Number(sid) === Number(wbChatsListStoreId);
-    if (listMatches) {
+    if (listMatches && wbChatsRaw.length) {
       renderWbChatsList();
+      setChatStatusBar('wb-chats-status-bar', 'ok', `Загружено чатов: ${wbChatsRaw.length}.`);
       return;
     }
     if (sid) {
-      // При первом заходе на вкладку сразу тянем список (без ?refresh=1 — серверный кэш ~55 с, меньше 429)
       await refreshWbChatsList(false);
       return;
     }
@@ -779,13 +829,7 @@
     wbChatSelectedId = null;
     wbChatReplySign = '';
     renderWbChatsList();
-    const hint = document.getElementById('wb-chats-hint');
-    const body = document.getElementById('wb-chats-detail-body');
-    if (hint) {
-      hint.style.display = '';
-      hint.textContent = 'Выберите магазин WB в списке выше.';
-    }
-    if (body) body.style.display = 'none';
+    setChatStatusBar('wb-chats-status-bar', 'error', 'Нет магазинов WB — добавьте во вкладке «Магазины».');
   }
 
   async function wbChatsGenerateDraft() {

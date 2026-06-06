@@ -895,6 +895,60 @@ body.theme-dark .toolbar {
   100% { transform: translateX(-10%); }
 }
 
+/* Статус загрузки чатов — заметная полоса над списком */
+.chat-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  font-size: 0.9rem;
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.chat-status-bar[hidden] {
+  display: none !important;
+}
+
+.chat-status-bar.is-loading {
+  border-color: rgba(91, 143, 217, 0.45);
+  background: var(--accent-dim);
+}
+
+.chat-status-bar.is-error {
+  border-color: rgba(220, 38, 38, 0.45);
+  background: var(--danger-dim);
+  color: var(--text);
+}
+
+.chat-status-bar.is-ok {
+  border-color: rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.chat-status-bar.is-info {
+  border-color: var(--border);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.chat-status-bar .chat-status-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: chatSpin 0.75s linear infinite;
+}
+
+@keyframes chatSpin {
+  to { transform: rotate(360deg); }
+}
+
 body.theme-dark .progress-wrap {
   background: rgba(11, 18, 32, 0.88);
   border-color: #2d3a4f;

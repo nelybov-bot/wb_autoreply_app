@@ -1322,7 +1322,15 @@ async def api_wb_buyer_chat_list(
 ):
     s = _require_wb_store_for_chats(db, store_id)
     try:
-        chats = await _wb_buyer_chat_list_cached(store_id, s.api_key, force_refresh=refresh)
+        chats = await asyncio.wait_for(
+            _wb_buyer_chat_list_cached(store_id, s.api_key, force_refresh=refresh),
+            timeout=120.0,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            504,
+            "WB чаты: таймаут 120 с. WB buyer-chat отвечает медленно или 429 — подождите 1–2 мин и нажмите «Обновить».",
+        ) from None
     except HttpStatusError as e:
         raise _wb_chat_http_error(e) from e
     return {"chats": chats}
