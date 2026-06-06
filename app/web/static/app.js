@@ -602,6 +602,8 @@
   let wbChatReplySign = '';
   let wbChatClientMessageKey = '';
   let wbChatThreadPages = 2;
+  /** кэш переписки: ключ «storeId:chatId» */
+  const wbChatThreadCache = new Map();
   /** защита от гонок: быстрая смена вкладки / чата / магазина */
   let wbChatsPanelGen = 0;
   let wbChatsListFetchGen = 0;
@@ -628,6 +630,68 @@
     return '—';
   }
 
+  function wbChatThreadCacheKey(chatId, sid) {
+    const storeId = sid != null ? sid : getWbChatsStoreId();
+    const cid = String(chatId || '').trim();
+    if (!storeId || !cid) return '';
+    return `${storeId}:${cid}`;
+  }
+
+  function wbChatPreviewHintHtml() {
+    return '<div class="form-hint" style="margin-top:8px;">Показано последнее сообщение из списка WB. Нажмите «Обновить переписку» для полной истории.</div>';
+  }
+
+  function applyWbChatThreadData(t) {
+    wbChatReplySign = (t.reply_sign || '').trim();
+    wbChatClientMessageKey = (t.client_message_key || '').trim();
+    const statusHint = document.getElementById('wb-chats-status-hint');
+    if (statusHint) {
+      if (t.already_replied) {
+        statusHint.textContent = 'На последнее сообщение покупателя уже отвечали.';
+        statusHint.style.color = '#b45309';
+      } else if (t.skip_reason === 'before_cutoff') {
+        statusHint.textContent = 'Сообщение раньше даты «отвечать с» из настроек.';
+        statusHint.style.color = '#b45309';
+      } else if (t.skip_reason === 'last_not_client') {
+        statusHint.textContent = 'Последнее сообщение не от покупателя — автоответ не нужен.';
+        statusHint.style.color = '';
+      } else {
+        statusHint.textContent = '';
+      }
+    }
+    const titleEl = document.getElementById('wb-chats-product-title');
+    if (titleEl) titleEl.textContent = t.product_title || '—';
+    const threadEl = document.getElementById('wb-chats-thread');
+    const lines = t.lines || [];
+    if (threadEl) {
+      threadEl.innerHTML = lines.length
+        ? lines.map(l => {
+          const lab = l.role === 'client' ? 'Покупатель' : l.role === 'seller' ? 'Вы' : escapeHtml(l.role || '');
+          return `<div class="wb-chat-line"><span class="wb-chat-role">${lab}</span><span class="wb-chat-text">${escapeHtml(l.text)}</span></div>`;
+        }).join('')
+        : '<div class="form-hint">Нет текста сообщений в выборке событий.</div>';
+    }
+    const hint = document.getElementById('wb-chats-hint');
+    const body = document.getElementById('wb-chats-detail-body');
+    if (hint) hint.style.display = 'none';
+    if (body) body.style.display = '';
+  }
+
+  function restoreWbChatDetailForSelected() {
+    if (!wbChatSelectedId) return;
+    const sid = getWbChatsStoreId();
+    const row = wbChatsRaw.find(c => String(c.chatID || '') === String(wbChatSelectedId));
+    if (!row) return;
+    wbChatShowDetailShell(row);
+    const cached = wbChatThreadCache.get(wbChatThreadCacheKey(wbChatSelectedId, sid));
+    if (cached) {
+      applyWbChatThreadData(cached);
+      setChatStatusBar('wb-chats-status-bar', 'ok', 'Переписка загружена ранее. «Обновить переписку» — обновить с WB.');
+    } else {
+      setChatStatusBar('wb-chats-status-bar', 'info', 'Нажмите «Обновить переписку» для полной истории.');
+    }
+  }
+
   function wbChatShowDetailShell(row) {
     const hint = document.getElementById('wb-chats-hint');
     const body = document.getElementById('wb-chats-detail-body');
@@ -641,8 +705,8 @@
     const lm = row && row.lastMessage && row.lastMessage.text ? String(row.lastMessage.text) : '';
     if (threadEl) {
       threadEl.innerHTML = lm
-        ? `<div class="wb-chat-line"><span class="wb-chat-role">Список WB</span><span class="wb-chat-text">${escapeHtml(lm)}</span></div><div class="form-hint" style="margin-top:8px;">Подгружаю полную переписку…</div>`
-        : '<div class="form-hint">Подгружаю полную переписку…</div>';
+        ? `<div class="wb-chat-line"><span class="wb-chat-role">Список WB</span><span class="wb-chat-text">${escapeHtml(lm)}</span></div>${wbChatPreviewHintHtml()}`
+        : `<div class="form-hint">Нет текста в списке WB.</div>${wbChatPreviewHintHtml()}`;
     }
     const ta = document.getElementById('wb-chats-draft');
     if (ta) ta.value = '';
@@ -682,10 +746,8 @@
         const chatId = decodeURIComponent(btn.getAttribute('data-chat-id') || '');
         wbChatSelectedId = chatId;
         wbChatThreadPages = 2;
-        const row = wbChatsRaw.find(c => String(c.chatID || '') === chatId);
         renderWbChatsList();
-        wbChatShowDetailShell(row);
-        void loadWbChatThread(chatId);
+        restoreWbChatDetailForSelected();
       });
     });
   }
@@ -714,6 +776,8 @@
     const gen = ++wbChatsListFetchGen;
     const q = forceRefresh ? '?refresh=1' : '';
     const storeLabel = getStoreNameById(sid) || `ID ${sid}`;
+    const prevSelected = wbChatSelectedId;
+    const prevStore = wbChatsListStoreId;
     const wrap = document.getElementById('wb-chats-list');
     if (wrap) wrap.innerHTML = '<div class="form-hint">Загрузка списка…</div>';
     const loadMsg = `Загружаю чаты WB «${storeLabel}»… Первый запрос может занять 30–90 секунд (лимиты WB).`;
@@ -726,22 +790,35 @@
       if (Number(getWbChatsStoreId()) !== Number(sid)) return;
       wbChatsRaw = data.chats || [];
       wbChatsListStoreId = sid;
-      wbChatSelectedId = null;
-      wbChatReplySign = '';
-      renderWbChatsList();
-      const n = wbChatsRaw.length;
-      setChatStatusBar(
-        'wb-chats-status-bar',
-        n ? 'ok' : 'info',
-        n ? `Загружено чатов: ${n}. Выберите чат слева.` : 'Чатов пока нет (или пустой ответ WB).',
-      );
-      const hint = document.getElementById('wb-chats-hint');
-      const body = document.getElementById('wb-chats-detail-body');
-      if (hint) {
-        hint.style.display = '';
-        hint.textContent = 'Выберите чат слева.';
+      const keepSelection = !forceRefresh
+        && Number(prevStore) === Number(sid)
+        && prevSelected
+        && wbChatsRaw.some(c => String(c.chatID || '') === String(prevSelected));
+      if (keepSelection) {
+        wbChatSelectedId = prevSelected;
+      } else {
+        wbChatSelectedId = null;
+        wbChatReplySign = '';
       }
-      if (body) body.style.display = 'none';
+      renderWbChatsList();
+      if (wbChatSelectedId) restoreWbChatDetailForSelected();
+      const n = wbChatsRaw.length;
+      if (!wbChatSelectedId) {
+        setChatStatusBar(
+          'wb-chats-status-bar',
+          n ? 'ok' : 'info',
+          n ? `Загружено чатов: ${n}. Выберите чат слева.` : 'Чатов пока нет (или пустой ответ WB).',
+        );
+        const hint = document.getElementById('wb-chats-hint');
+        const body = document.getElementById('wb-chats-detail-body');
+        if (hint) {
+          hint.style.display = '';
+          hint.textContent = 'Выберите чат слева.';
+        }
+        if (body) body.style.display = 'none';
+      } else if (n) {
+        setChatStatusBar('wb-chats-status-bar', 'ok', `Загружено чатов: ${n}.`);
+      }
     } catch (err) {
       if (gen !== wbChatsListFetchGen) return;
       wbChatsRaw = [];
@@ -772,49 +849,21 @@
     try {
       const pages = Math.max(1, Math.min(8, wbChatThreadPages || 2));
       const path = `/wb/buyer-chats/${sid}/${encodeURIComponent(chatId)}/thread?pages=${pages}`;
-      const t = await api(path);
+      const t = await api(path, { timeoutMs: 90000 });
       if (gen !== wbChatThreadFetchGen) return;
       if (Number(getWbChatsStoreId()) !== Number(sid)) return;
       if (String(wbChatSelectedId || '') !== String(chatId)) return;
-      wbChatReplySign = (t.reply_sign || '').trim();
-      wbChatClientMessageKey = (t.client_message_key || '').trim();
-      const statusHint = document.getElementById('wb-chats-status-hint');
-      if (statusHint) {
-        if (t.already_replied) {
-          statusHint.textContent = 'На последнее сообщение покупателя уже отвечали.';
-          statusHint.style.color = '#b45309';
-        } else if (t.skip_reason === 'before_cutoff') {
-          statusHint.textContent = 'Сообщение раньше даты «отвечать с» из настроек.';
-          statusHint.style.color = '#b45309';
-        } else if (t.skip_reason === 'last_not_client') {
-          statusHint.textContent = 'Последнее сообщение не от покупателя — автоответ не нужен.';
-          statusHint.style.color = '';
-        } else {
-          statusHint.textContent = '';
-        }
-      }
-      const titleEl = document.getElementById('wb-chats-product-title');
-      if (titleEl) titleEl.textContent = t.product_title || '—';
-      const threadEl = document.getElementById('wb-chats-thread');
-      const lines = t.lines || [];
-      if (threadEl) {
-        threadEl.innerHTML = lines.length
-          ? lines.map(l => {
-            const lab = l.role === 'client' ? 'Покупатель' : l.role === 'seller' ? 'Вы' : escapeHtml(l.role || '');
-            return `<div class="wb-chat-line"><span class="wb-chat-role">${lab}</span><span class="wb-chat-text">${escapeHtml(l.text)}</span></div>`;
-          }).join('')
-          : '<div class="form-hint">Нет текста сообщений в выборке событий.</div>';
-      }
-      const hint = document.getElementById('wb-chats-hint');
-      const body = document.getElementById('wb-chats-detail-body');
-      if (hint) hint.style.display = 'none';
-      if (body) body.style.display = '';
+      const cacheKey = wbChatThreadCacheKey(chatId, sid);
+      if (cacheKey) wbChatThreadCache.set(cacheKey, t);
+      applyWbChatThreadData(t);
+      setChatStatusBar('wb-chats-status-bar', 'ok', 'Переписка загружена.');
       const ta = document.getElementById('wb-chats-draft');
       if (ta) ta.value = '';
     } catch (err) {
       if (gen !== wbChatThreadFetchGen) return;
       if (String(wbChatSelectedId || '') !== String(chatId)) return;
       toast(err.message, 'error');
+      setChatStatusBar('wb-chats-status-bar', 'error', err.message || 'Ошибка загрузки переписки');
       const threadEl = document.getElementById('wb-chats-thread');
       if (threadEl) {
         const extra = 'Можно нажать «Сгенерировать» — контекст подтянется из списка чатов. Reply-sign уже из списка WB.';
@@ -856,7 +905,11 @@
     const listMatches = sid != null && wbChatsListStoreId != null && Number(sid) === Number(wbChatsListStoreId);
     if (listMatches && wbChatsRaw.length) {
       renderWbChatsList();
-      setChatStatusBar('wb-chats-status-bar', 'ok', `Загружено чатов: ${wbChatsRaw.length}.`);
+      if (wbChatSelectedId) {
+        restoreWbChatDetailForSelected();
+      } else {
+        setChatStatusBar('wb-chats-status-bar', 'ok', `Загружено чатов: ${wbChatsRaw.length}. Выберите чат слева.`);
+      }
       return;
     }
     if (sid) {
@@ -973,6 +1026,7 @@
         wbChatsListStoreId = null;
         wbChatSelectedId = null;
         wbChatReplySign = '';
+        wbChatThreadCache.clear();
         void refreshWbChatsList(true);
       });
     }
