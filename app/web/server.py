@@ -48,7 +48,9 @@ from app.core.wb_buyer_chat import (
 from app.core.ozon_buyer_chat import (
     collect_ozon_thread_lines,
     is_ozon_buyer_chat_row,
+    ozon_chat_category,
     ozon_chat_error_message,
+    ozon_chat_matches_filter,
     ozon_chat_row_id,
     ozon_chat_type,
     ozon_feature_unavailable_user_message,
@@ -1641,7 +1643,7 @@ async def _ozon_buyer_chat_list_cached(
         return list(ent[1]), ent[2]
     client = OzonClient(client_id, api_key)
     try:
-        chats = await client.list_all_buyer_chats()
+        chats = await client.list_all_chats()
     except HttpStatusError as e:
         reason = ozon_http_skip_reason(e.status, e.body or "", feature="chat")
         if reason:
@@ -1665,7 +1667,7 @@ def _require_ozon_store_for_chats(db: Database, store_id: int) -> Store:
     return s
 
 
-async def _assert_ozon_buyer_chat_id(
+async def _find_ozon_chat_row(
     store_id: int,
     client_id: str,
     api_key: str,
@@ -1680,10 +1682,22 @@ async def _assert_ozon_buyer_chat_id(
     for row in rows:
         if ozon_chat_row_id(row) == cid:
             return row if isinstance(row, dict) else {}
-    raise HTTPException(
-        400,
-        "Это чат с поддержкой Ozon или неизвестный чат. Автоответы только для переписки с покупателями.",
-    )
+    raise HTTPException(404, "Чат не найден. Обновите список чатов.")
+
+
+async def _assert_ozon_buyer_chat_id(
+    store_id: int,
+    client_id: str,
+    api_key: str,
+    chat_id: str,
+) -> dict:
+    row = await _find_ozon_chat_row(store_id, client_id, api_key, chat_id)
+    if not is_ozon_buyer_chat_row(row):
+        raise HTTPException(
+            400,
+            "Автоответы только для переписки с покупателями (Buyer_Seller).",
+        )
+    return row
 
 
 def _ozon_chat_preview(row: dict) -> str:
@@ -1704,10 +1718,12 @@ def _ozon_chat_preview(row: dict) -> str:
 async def api_ozon_buyer_chat_list(
     store_id: int,
     refresh: bool = Query(False),
+    filter: str = Query("buyers"),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):
     s = _require_ozon_store_for_chats(db, store_id)
+    filter_kind = (filter or "buyers").strip().lower()
     try:
         rows, skip = await _ozon_buyer_chat_list_cached(
             store_id, s.client_id or "", s.api_key, force_refresh=refresh
@@ -1717,7 +1733,8 @@ async def api_ozon_buyer_chat_list(
     if skip:
         return {
             "chats": [],
-            "buyer_only": True,
+            "filter": filter_kind,
+            "buyer_only": filter_kind == "buyers",
             "unavailable": True,
             "unavailable_reason": skip,
             "message": ozon_feature_unavailable_user_message(skip, feature="chat"),
@@ -1726,7 +1743,7 @@ async def api_ozon_buyer_chat_list(
     for row in rows:
         if not isinstance(row, dict):
             continue
-        if not is_ozon_buyer_chat_row(row):
+        if not ozon_chat_matches_filter(row, filter_kind):
             continue
         cid = ozon_chat_row_id(row)
         if not cid:
@@ -1734,13 +1751,14 @@ async def api_ozon_buyer_chat_list(
         chat_obj = row.get("chat") if isinstance(row.get("chat"), dict) else {}
         chats.append({
             "chat_id": cid,
-            "chat_type": ozon_chat_type(row) or "Buyer_Seller",
+            "chat_type": ozon_chat_type(row) or "—",
+            "category": ozon_chat_category(row),
             "chat_status": chat_obj.get("chat_status"),
             "created_at": chat_obj.get("created_at"),
             "unread_count": row.get("unread_count"),
             "preview": _ozon_chat_preview(row),
         })
-    return {"chats": chats, "buyer_only": True}
+    return {"chats": chats, "filter": filter_kind, "buyer_only": filter_kind == "buyers"}
 
 
 @app.get("/api/ozon/buyer-chats/{store_id}/{chat_id}/thread")
@@ -1752,7 +1770,8 @@ async def api_ozon_buyer_chat_thread(
     _: UserRow = Depends(require_user),
 ):
     s = _require_ozon_store_for_chats(db, store_id)
-    chat_row = await _assert_ozon_buyer_chat_id(store_id, s.client_id or "", s.api_key, chat_id)
+    chat_row = await _find_ozon_chat_row(store_id, s.client_id or "", s.api_key, chat_id)
+    is_buyer = is_ozon_buyer_chat_row(chat_row)
     client = OzonClient(s.client_id or "", s.api_key)
     try:
         hist = await client.chat_history(chat_id, limit=limit)
@@ -1774,12 +1793,17 @@ async def api_ozon_buyer_chat_thread(
     eligible, skip_reason, client_msg_key, _ca = _ozon_chat_eligibility(
         db, store_id, chat_id, lines_raw, reply_from
     )
+    if not is_buyer:
+        eligible = False
+        skip_reason = "not_buyer_chat"
     if window.get("blocked"):
         eligible = False
         skip_reason = "reply_window_expired"
     return {
         "lines": lines,
         "product_title": product_title,
+        "category": ozon_chat_category(chat_row),
+        "can_reply": bool(is_buyer and eligible),
         "client_message_key": client_msg_key,
         "already_replied": skip_reason == "already_replied",
         "eligible_for_reply": eligible,

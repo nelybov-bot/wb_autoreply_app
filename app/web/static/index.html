@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
-  <link rel="stylesheet" href="/static/styles.css?v=6">
+  <link rel="stylesheet" href="/static/styles.css?v=8">
 </head>
 <body>
   <div class="bg-noise" aria-hidden="true"></div>
@@ -58,63 +58,73 @@
         </div>
       </div>
 
-      <div class="nav-menu nav-menu-wb" data-nav-group="wb">
+      <div class="nav-menu nav-menu-chats" data-nav-group="chats">
         <button type="button" class="nav-trigger" aria-haspopup="true" aria-expanded="false">
-          Wildberries
+          Чаты
           <span class="nav-caret" aria-hidden="true"></span>
         </button>
-        <div class="nav-dropdown">
+        <div class="nav-dropdown nav-dropdown-wide">
           <div class="nav-mega">
-            <div class="nav-mega-col">
-              <div class="nav-mega-title">Коммуникации</div>
+            <div class="nav-mega-col nav-mega-col-wb">
+              <div class="nav-mega-title">Wildberries</div>
               <button type="button" class="nav-dd-item" data-tab="wb-chats">Чаты с покупателями</button>
+            </div>
+            <div class="nav-mega-col nav-mega-col-ozon">
+              <div class="nav-mega-title">Ozon</div>
+              <button type="button" class="nav-dd-item" data-tab="ozon-chats" data-chat-filter="buyers">Сообщения от покупателей</button>
+              <button type="button" class="nav-dd-item" data-tab="ozon-chats" data-chat-filter="support">Новости и поддержка</button>
+              <button type="button" class="nav-dd-item" data-tab="ozon-chats" data-chat-filter="all">Все сообщения</button>
             </div>
           </div>
         </div>
       </div>
 
-      <div class="nav-menu nav-menu-ozon" data-nav-group="ozon">
+      <div class="nav-menu nav-menu-ozon-promo" data-nav-group="ozon-promo">
         <button type="button" class="nav-trigger" aria-haspopup="true" aria-expanded="false">
           Ozon
           <span class="nav-caret" aria-hidden="true"></span>
         </button>
-        <div class="nav-dropdown">
+        <div class="nav-dropdown nav-dropdown-wide">
           <div class="nav-mega">
             <div class="nav-mega-col">
-              <div class="nav-mega-title">Коммуникации</div>
-              <button type="button" class="nav-dd-item" data-tab="ozon-chats">Чаты с покупателями</button>
-              <button type="button" class="nav-dd-item" data-tab="ozon-actions">Акции и автоудаление</button>
+              <div class="nav-mega-title">Акции</div>
+              <button type="button" class="nav-dd-item" data-tab="ozon-actions" data-actions-section="list">Список акций</button>
+              <button type="button" class="nav-dd-item" data-tab="ozon-actions" data-actions-section="settings">Настройки автоудаления</button>
+              <button type="button" class="nav-dd-item" data-tab="ozon-actions" data-actions-section="manual">Удаление товаров</button>
             </div>
           </div>
         </div>
       </div>
 
-      <div class="nav-menu" data-nav-group="system">
+      <button type="button" class="nav-link" data-tab="auto">Автозапуск</button>
+
+      <div class="nav-menu nav-menu-settings" data-nav-group="settings">
         <button type="button" class="nav-trigger" aria-haspopup="true" aria-expanded="false">
-          Система
+          Настройки
           <span class="nav-caret" aria-hidden="true"></span>
         </button>
         <div class="nav-dropdown">
           <div class="nav-mega">
             <div class="nav-mega-col">
-              <div class="nav-mega-title">Автоматизация</div>
-              <button type="button" class="nav-dd-item" data-tab="auto">Автозапуск</button>
-            </div>
-            <div class="nav-mega-col">
-              <div class="nav-mega-title">Администрирование</div>
-              <button type="button" class="nav-dd-item" data-tab="settings">Настройки</button>
-              <button type="button" class="nav-dd-item" data-tab="log">Журнал событий</button>
+              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="connection">Подключение</button>
+              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="openai">OpenAI</button>
+              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="chats">Чаты</button>
+              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="telegram">Telegram</button>
+              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="ui">Интерфейс</button>
+              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="users" id="nav-settings-users">Пользователи</button>
+              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="prompts">Промпты</button>
             </div>
           </div>
         </div>
       </div>
+
+      <button type="button" class="nav-link" data-tab="log">Журнал</button>
     </div>
   </nav>
 
   <main class="main">
     <!-- Сводка -->
     <section id="panel-summary" class="panel active">
-      <p class="form-hint" style="margin:0 0 16px;">Актуальные цифры с сервера: очередь и отправки за сегодня. Исторические «всего за всё время» убраны — они сбивали с толку после деплоя.</p>
       <div class="stats-grid" id="stats-cards">
         <div class="stat-card highlight">
           <div class="value" id="stat-today">—</div>
@@ -182,7 +192,6 @@
         <div class="stores-list-wrap">
           <div class="stores-head">
             <h2 class="stores-title">Магазины</h2>
-            <div class="stores-hint">Ключи хранятся только в базе на сервере (не в Git). После деплоя на Render проверьте ключи здесь. Для сохранения между деплоями — Persistent Disk, см. DEPLOY.md.</div>
           </div>
           <div id="stores-list" class="stores-grid"></div>
         </div>
@@ -304,7 +313,6 @@
 
     <!-- Чаты WB -->
     <section id="panel-wb-chats" class="panel">
-      <p class="form-hint" style="margin: 0 0 12px;">Ключ WB из настроек магазина (в кабинете — с правом «Чат с покупателем»). При открытии вкладки список чатов подгружается сам; кнопка «Обновить список чатов» — принудительный запрос к WB (реже нажимайте при 429). Запросы к buyer-chat идут по одному; первая загрузка может занять десятки секунд. Если в кабинете право есть, а в приложении 429 — это лимит частоты WB на аккаунт (несколько магазинов, автозапуск, открытый UI), не «нет доступа». 401 — тогда проверьте ключ и категорию токена.</p>
       <div class="toolbar" style="flex-wrap:wrap;">
         <select id="wb-chats-store" title="Магазин WB"></select>
         <button type="button" class="btn btn-primary" id="btn-wb-chats-refresh">Обновить список чатов</button>
@@ -349,8 +357,12 @@
 
     <!-- Чаты Ozon -->
     <section id="panel-ozon-chats" class="panel">
-      <p class="form-hint" style="margin: 0 0 12px;">Client-Id и Api-Key из настроек магазина Ozon. Показываются только чаты с покупателями (Buyer_Seller); чаты с поддержкой Ozon (Seller_Support) скрыты и не получают автоответ. Нужны Premium Plus/Pro и право «Чат» у API-ключа. Лимит — 1 запрос/с; первая загрузка может занять минуту.</p>
-      <div class="toolbar" style="flex-wrap:wrap;">
+      <div class="segmented" id="ozon-chats-filter" role="tablist" aria-label="Тип чатов Ozon">
+        <button type="button" class="active" data-filter="buyers" role="tab">Покупатели</button>
+        <button type="button" data-filter="support" role="tab">Поддержка и новости</button>
+        <button type="button" data-filter="all" role="tab">Все сообщения</button>
+      </div>
+      <div class="toolbar" style="flex-wrap:wrap; margin-top: 12px;">
         <select id="ozon-chats-store" title="Магазин Ozon"></select>
         <button type="button" class="btn btn-primary" id="btn-ozon-chats-refresh">Обновить список чатов</button>
         <button type="button" class="btn btn-secondary" id="btn-ozon-chats-mass" title="До 50 чатов за раз: ИИ + сразу отправка в Ozon">Сгенерировать и отправить ответы по всем подходящим чатам</button>
@@ -377,15 +389,18 @@
               <div id="ozon-chats-thread" class="wb-chats-thread"></div>
             </div>
             <div class="form-hint" id="ozon-chats-status-hint"></div>
-            <div class="form-group">
-              <label>Ответ</label>
-              <textarea id="ozon-chats-draft" rows="6" style="width:100%; max-width:720px;" placeholder="Текст ответа покупателю"></textarea>
+            <div id="ozon-chats-reply-tools">
+              <div class="form-group">
+                <label>Ответ</label>
+                <textarea id="ozon-chats-draft" rows="6" style="width:100%; max-width:720px;" placeholder="Текст ответа покупателю"></textarea>
+              </div>
+              <div class="toolbar" style="flex-wrap:wrap;">
+                <button type="button" class="btn btn-secondary" id="btn-ozon-chats-load-thread">Обновить переписку</button>
+                <button type="button" class="btn btn-secondary" id="btn-ozon-chats-generate">Сгенерировать</button>
+                <button type="button" class="btn btn-primary" id="btn-ozon-chats-send">Отправить в Ozon</button>
+              </div>
             </div>
-            <div class="toolbar" style="flex-wrap:wrap;">
-              <button type="button" class="btn btn-secondary" id="btn-ozon-chats-load-thread">Обновить переписку</button>
-              <button type="button" class="btn btn-secondary" id="btn-ozon-chats-generate">Сгенерировать</button>
-              <button type="button" class="btn btn-primary" id="btn-ozon-chats-send">Отправить в Ozon</button>
-            </div>
+            <div class="form-hint" id="ozon-chats-readonly-hint" style="display:none;">Только просмотр</div>
           </div>
         </div>
       </div>
@@ -393,213 +408,228 @@
 
     <!-- Акции Ozon -->
     <section id="panel-ozon-actions" class="panel">
-      <div class="form-card form-card-wide">
-        <h2>Акции Ozon</h2>
-        <p class="form-hint" style="margin-top:0;">Ozon сам добавляет товары в часть акций (автоакции — в API это поле <code>auto_add_dates</code>). Здесь можно посмотреть акции и удалить ваши товары из выбранных или из всех автоакций с участием.</p>
-        <div class="toolbar" style="margin:12px 0; flex-wrap:wrap; gap:8px;">
-          <select id="ozon-actions-store" title="Магазин Ozon"></select>
-          <button type="button" class="btn btn-primary" id="btn-ozon-actions-load">Загрузить акции</button>
-          <button type="button" class="btn btn-secondary" id="btn-ozon-actions-remove-selected">Удалить товары из выбранных</button>
-          <button type="button" class="btn btn-secondary" id="btn-ozon-actions-auto-remove">Автоудаление сейчас</button>
+      <div class="ozon-actions-layout">
+        <div class="form-card form-card-wide" id="ozon-actions-list">
+          <h2>Список акций</h2>
+          <div class="toolbar" style="margin:12px 0; flex-wrap:wrap; gap:8px;">
+            <select id="ozon-actions-store" title="Магазин Ozon"></select>
+            <button type="button" class="btn btn-primary" id="btn-ozon-actions-load">Загрузить акции</button>
+          </div>
+          <div id="ozon-actions-status" class="form-hint" role="status">Выберите магазин Ozon и нажмите «Загрузить акции».</div>
+          <div class="progress-wrap" id="ozon-actions-loading" aria-live="polite" hidden>
+            <div class="progress-bar" role="progressbar"></div>
+            <span class="progress-label">Загрузка…</span>
+          </div>
+          <div class="items-table-wrap ozon-actions-table-wrap" style="margin-top:12px;">
+            <table class="items-table ozon-actions-table" id="ozon-actions-table">
+              <thead>
+                <tr>
+                  <th class="col-check"><input type="checkbox" id="ozon-actions-check-all" title="Выбрать все"></th>
+                  <th class="col-id">ID</th>
+                  <th class="col-title">Название</th>
+                  <th class="col-type">Тип</th>
+                  <th class="col-period">Период</th>
+                  <th class="col-count">Товаров</th>
+                  <th class="col-part">Участие</th>
+                </tr>
+              </thead>
+              <tbody id="ozon-actions-tbody"></tbody>
+            </table>
+          </div>
         </div>
-        <div class="form-group">
-          <label class="checkbox-row"><input type="checkbox" id="ozon-actions-only-auto" checked> Только автоакции (Ozon сам добавляет товары)</label>
-          <label style="margin-top:8px;">ID акций для отслеживания (через запятую, необязательно)</label>
-          <input type="text" id="ozon-actions-watched-ids" placeholder="71342, 66011">
-          <small class="form-hint">Если пусто — автоудаление берёт все автоакции, где есть ваши товары. Если указаны ID — только эти акции (при ручном «Автоудаление сейчас» и в слоте автозапуска).</small>
-          <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-actions-save-settings" style="margin-top:10px;">Сохранить настройки акций</button>
+        <div class="form-card form-card-wide" id="ozon-actions-settings">
+          <h2>Настройки автоудаления</h2>
+          <div class="form-group">
+            <label class="checkbox-row"><input type="checkbox" id="ozon-actions-only-auto" checked> Только автоакции (Ozon сам добавляет товары)</label>
+            <label style="margin-top:8px;">ID акций для отслеживания (через запятую, необязательно)</label>
+            <input type="text" id="ozon-actions-watched-ids" placeholder="71342, 66011">
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-actions-save-settings" style="margin-top:10px;">Сохранить</button>
+          </div>
         </div>
-        <div id="ozon-actions-status" class="form-hint" role="status">Выберите магазин Ozon и нажмите «Загрузить акции».</div>
-        <div class="progress-wrap" id="ozon-actions-loading" aria-live="polite" hidden>
-          <div class="progress-bar" role="progressbar"></div>
-          <span class="progress-label">Загрузка…</span>
-        </div>
-        <div class="items-table-wrap ozon-actions-table-wrap" style="margin-top:12px;">
-          <table class="items-table ozon-actions-table" id="ozon-actions-table">
-            <thead>
-              <tr>
-                <th class="col-check"><input type="checkbox" id="ozon-actions-check-all" title="Выбрать все"></th>
-                <th class="col-id">ID</th>
-                <th class="col-title">Название</th>
-                <th class="col-type">Тип</th>
-                <th class="col-period">Период</th>
-                <th class="col-count">Товаров</th>
-                <th class="col-part">Участие</th>
-              </tr>
-            </thead>
-            <tbody id="ozon-actions-tbody"></tbody>
-          </table>
+        <div class="form-card form-card-wide" id="ozon-actions-manual">
+          <h2>Удаление товаров</h2>
+          <div class="toolbar" style="flex-wrap:wrap; gap:8px;">
+            <button type="button" class="btn btn-secondary" id="btn-ozon-actions-remove-selected">Удалить товары из выбранных акций</button>
+            <button type="button" class="btn btn-secondary" id="btn-ozon-actions-auto-remove">Автоудаление сейчас</button>
+          </div>
         </div>
       </div>
     </section>
 
     <!-- Автозапуск -->
     <section id="panel-auto" class="panel">
-      <div class="form-card form-card-wide auto-card">
-        <h2>Автозапуск</h2>
-        <div class="form-group">
-          <label class="checkbox-row"><input type="checkbox" id="auto-enabled"> Включить автозапуск</label>
-          <small class="form-hint">Цикл: Загрузить новые → Сгенерировать → Отправить. За один слот берётся один магазин из отмеченных ниже (по очереди), чтобы не дергать API всех сразу. Чаты WB в слоте — только для этого же магазина (если это WB и есть ключ). Планировщик живёт внутри запущенного веб-сервера: на Render при «засыпании» инстанса слот по времени может не сработать — нужен постоянно работающий процесс или режим «по интервалу» после пробуждения.</small>
-        </div>
-        <div class="form-group">
-          <label>Режим расписания</label>
-          <select id="auto-schedule-mode">
-            <option value="slots">По времени (слоты)</option>
-            <option value="interval">По интервалу (каждые N часов)</option>
-          </select>
-        </div>
-        <div class="form-group" id="auto-slots-wrap">
-          <label>Слоты времени (MSK)</label>
-          <input type="text" id="auto-slots" placeholder="09:00, 13:30, 21:00">
-          <small class="form-hint">Можно несколько, через запятую. Формат строго <strong>ЧЧ:ММ</strong> (например 09:00), иначе слот не сохранится.</small>
-        </div>
-        <div class="form-group" id="auto-interval-wrap" style="display:none;">
-          <label>Интервал запуска</label>
-          <select id="auto-interval-hours">
-            <option value="1">Каждый 1 час</option>
-            <option value="2">Каждые 2 часа</option>
-            <option value="3">Каждые 3 часа</option>
-            <option value="4">Каждые 4 часа</option>
-            <option value="6">Каждые 6 часов</option>
-            <option value="8">Каждые 8 часов</option>
-            <option value="12">Каждые 12 часов</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Проверять в цикле</label>
-          <label class="checkbox-row"><input type="checkbox" id="auto-run-reviews" checked> Отзывы</label>
-          <label class="checkbox-row"><input type="checkbox" id="auto-run-questions" checked> Вопросы</label>
-          <label class="checkbox-row"><input type="checkbox" id="auto-run-wb-chats"> Чаты WB</label>
-          <label class="checkbox-row"><input type="checkbox" id="auto-run-ozon-chats"> Чаты Ozon</label>
-          <label class="checkbox-row"><input type="checkbox" id="auto-run-ozon-actions-remove"> Удаление из автоакций Ozon</label>
-          <small class="form-hint" style="display:block;margin-top:6px;">Чаты: автоответ, если последнее сообщение от покупателя не старше N дней (в «Настройки», по умолчанию 3), до 5 чатов за слот. Акции: удаление из автоакций Ozon. Нужны ключи магазина; для чатов ещё OpenAI.</small>
-        </div>
-        <div class="form-group" style="margin-top: 12px;">
-          <label>Магазины для авто</label>
-          <div id="auto-store-list" class="auto-store-list"></div>
-          <small class="form-hint">Выбери конкретные магазины, без “все подряд”.</small>
-        </div>
-        <div class="toolbar" style="margin: 10px 0 0; padding: 10px;">
-          <button type="button" class="btn btn-primary btn-sm" id="btn-save-auto">Сохранить автозапуск</button>
-          <button type="button" class="btn btn-secondary btn-sm" id="btn-stop-auto">Остановить сейчас</button>
-        </div>
-        <div class="form-group" style="margin-top:10px;">
-          <label>Статус автозапуска</label>
-          <div class="form-hint" id="auto-status-text">—</div>
+      <div class="auto-layout">
+        <h2 class="auto-page-title">Автозапуск</h2>
+        <div class="auto-grid">
+          <div class="form-card auto-card-section">
+            <h3>Включение и расписание</h3>
+            <div class="form-group">
+              <label class="checkbox-row"><input type="checkbox" id="auto-enabled"> Включить автозапуск</label>
+            </div>
+            <div class="form-group">
+              <label>Режим расписания</label>
+              <select id="auto-schedule-mode">
+                <option value="slots">По времени (слоты)</option>
+                <option value="interval">По интервалу (каждые N часов)</option>
+              </select>
+            </div>
+            <div class="form-group" id="auto-slots-wrap">
+              <label>Слоты времени (MSK)</label>
+              <input type="text" id="auto-slots" placeholder="09:00, 13:30, 21:00">
+            </div>
+            <div class="form-group" id="auto-interval-wrap" style="display:none;">
+              <label>Интервал запуска</label>
+              <select id="auto-interval-hours">
+                <option value="1">Каждый 1 час</option>
+                <option value="2">Каждые 2 часа</option>
+                <option value="3">Каждые 3 часа</option>
+                <option value="4">Каждые 4 часа</option>
+                <option value="6">Каждые 6 часов</option>
+                <option value="8">Каждые 8 часов</option>
+                <option value="12">Каждые 12 часов</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-card auto-card-section">
+            <h3>Что запускать в цикле</h3>
+            <label class="checkbox-row"><input type="checkbox" id="auto-run-reviews" checked> Отзывы</label>
+            <label class="checkbox-row"><input type="checkbox" id="auto-run-questions" checked> Вопросы</label>
+            <label class="checkbox-row"><input type="checkbox" id="auto-run-wb-chats"> Чаты WB</label>
+            <label class="checkbox-row"><input type="checkbox" id="auto-run-ozon-chats"> Чаты Ozon</label>
+            <label class="checkbox-row"><input type="checkbox" id="auto-run-ozon-actions-remove"> Удаление из автоакций Ozon</label>
+          </div>
+          <div class="form-card auto-card-section auto-card-stores">
+            <h3>Магазины для авто</h3>
+            <div id="auto-store-list" class="auto-store-list"></div>
+          </div>
+          <div class="form-card auto-card-section">
+            <h3>Статус и управление</h3>
+            <div class="form-group">
+              <label>Статус</label>
+              <div class="form-hint" id="auto-status-text">—</div>
+            </div>
+            <div class="toolbar" style="margin: 0; padding: 0;">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-save-auto">Сохранить автозапуск</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-stop-auto">Остановить сейчас</button>
+            </div>
+          </div>
         </div>
       </div>
     </section>
 
     <!-- Настройки -->
     <section id="panel-settings" class="panel">
-      <div class="settings-layout">
-        <div class="settings-col">
-          <div class="form-card">
-            <h2>Подключение</h2>
-            <div class="form-group">
-              <label>Адрес API (ПК)</label>
-              <input type="url" id="setting-api_base" placeholder="http://192.168.1.5:8000" autocomplete="off">
-              <small class="form-hint">С телефона или другого устройства укажи IP своего ПК. Пусто — запросы на этот же адрес.</small>
-            </div>
-            <div class="form-group">
-              <label>Пользователь</label>
-              <div class="form-hint" id="auth-user-label">—</div>
-              <small class="form-hint">Кнопка «Выйти» теперь есть в шапке.</small>
-            </div>
-            <h2 style="margin-top: 22px;">OpenAI</h2>
-            <div class="form-group">
-              <label>API-ключ</label>
-              <input type="password" id="setting-openai_key" placeholder="sk-...">
-            </div>
-            <h2 style="margin-top: 22px;">Чаты с покупателями</h2>
-            <div class="form-group">
-              <label>Отвечать на сообщения с даты</label>
-              <input type="date" id="setting-buyer_chat_reply_from_date">
-              <small class="form-hint">Пусто — без ограничения по дате. Применяется к ручной массовой обработке и проверке в UI (MSK).</small>
-            </div>
-            <div class="form-group">
-              <label>Автоответ в чатах: только свежие сообщения (дней)</label>
-              <input type="number" id="setting-buyer_chat_auto_max_age_days" min="1" max="30" step="1" placeholder="3">
-              <small class="form-hint">Только для автозапуска WB/Ozon: последнее сообщение покупателя не старше N дней (по умолчанию 3). Старые чаты пропускаются без генерации и отправки.</small>
-            </div>
-            <h2 style="margin-top: 22px;">Telegram</h2>
-            <div class="form-group">
-              <label>Токен бота</label>
-              <input type="password" id="setting-telegram_bot_token" placeholder="токен бота">
-            </div>
-            <div class="form-group">
-              <label>ID чата</label>
-              <input type="text" id="setting-telegram_chat_id" placeholder="chat_id">
-            </div>
-            <div class="form-group">
-              <label class="checkbox-row"><input type="checkbox" id="setting-telegram_enabled"> Включить Telegram-уведомления</label>
-            </div>
-            <button type="button" class="btn btn-primary" id="btn-save-settings">Сохранить настройки</button>
-          </div>
-
-          <div class="form-card" style="margin-top: 18px;">
-            <h2>Интерфейс</h2>
-            <div class="form-group">
-              <label class="checkbox-row"><input type="checkbox" id="ui-compact"> Компактный режим</label>
-              <small class="form-hint">Меньше отступов и высоты элементов.</small>
-            </div>
-            <div class="form-group">
-              <label class="checkbox-row"><input type="checkbox" id="ui-dim-bg"> Приглушить фон</label>
-              <small class="form-hint">Менее яркий градиент — легче читать таблицы.</small>
-            </div>
-            <div class="form-group">
-              <label class="checkbox-row"><input type="checkbox" id="ui-reduce-motion"> Уменьшить анимации</label>
-              <small class="form-hint">Меньше “прыжков” и эффектов.</small>
-            </div>
-            <div class="form-group">
-              <label class="checkbox-row"><input type="checkbox" id="ui-bg-motion"> Движение фона</label>
-              <small class="form-hint">Фон чуть “плывёт” при скролле.</small>
-            </div>
-            <div class="form-group">
-              <label class="checkbox-row"><input type="checkbox" id="theme-dark"> Тёмная тема</label>
-              <small class="form-hint">Читаемо в любое время.</small>
-            </div>
-            <div class="form-group">
-              <label>Длительность тостов</label>
-              <select id="ui-toast-duration">
-                <option value="2500">2.5 сек</option>
-                <option value="4000">4 сек</option>
-                <option value="7000">7 сек</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="checkbox-row"><input type="checkbox" id="ui-confirm-danger"> Подтверждать удаления</label>
-              <small class="form-hint">Для магазинов/пользователей и других опасных действий.</small>
-            </div>
-            <div class="toolbar" style="margin: 10px 0 0; padding: 10px;">
-              <button type="button" class="btn btn-secondary btn-sm" id="ui-reset">Сбросить UI</button>
-            </div>
-          </div>
-
+      <div class="settings-panel">
+        <div class="segmented settings-segments" id="settings-filter" role="tablist" aria-label="Разделы настроек">
+          <button type="button" class="active" data-settings-section="connection" role="tab">Подключение</button>
+          <button type="button" data-settings-section="openai" role="tab">OpenAI</button>
+          <button type="button" data-settings-section="chats" role="tab">Чаты</button>
+          <button type="button" data-settings-section="telegram" role="tab">Telegram</button>
+          <button type="button" data-settings-section="ui" role="tab">Интерфейс</button>
+          <button type="button" data-settings-section="users" id="settings-seg-users" role="tab">Пользователи</button>
+          <button type="button" data-settings-section="prompts" role="tab">Промпты</button>
         </div>
 
-        <div class="settings-col">
-          <div class="form-card">
-            <h2>Пользователи</h2>
-            <div id="users-admin-only" style="display:none;">
-              <div class="form-group" style="margin-top: 12px;">
-                <label>Создать гостя</label>
-                <div style="display:grid; grid-template-columns: 1fr 1fr auto; gap: 10px;">
-                  <input type="text" id="new-user-username" placeholder="логин">
-                  <input type="password" id="new-user-password" placeholder="пароль">
-                  <button type="button" class="btn btn-primary" id="btn-create-user">Создать</button>
-                </div>
-                <small class="form-hint">Пользователь будет с ролью guest.</small>
-              </div>
-              <div id="users-list" class="stores-grid" style="margin-top: 10px;"></div>
-            </div>
-            <div id="users-no-access" class="form-hint">Доступно только администратору.</div>
+        <div id="settings-section-connection" class="settings-section form-card">
+          <h2>Подключение</h2>
+          <div class="form-group">
+            <label>Адрес API</label>
+            <input type="url" id="setting-api_base" placeholder="http://192.168.1.5:8000" autocomplete="off">
           </div>
+          <div class="form-group">
+            <label>Пользователь</label>
+            <div class="form-hint" id="auth-user-label">—</div>
+          </div>
+        </div>
 
-          <div class="form-card" style="margin-top: 18px;">
-            <h2>Промпты</h2>
-            <div id="prompts-list"></div>
+        <div id="settings-section-openai" class="settings-section form-card" hidden>
+          <h2>OpenAI</h2>
+          <div class="form-group">
+            <label>API-ключ</label>
+            <input type="password" id="setting-openai_key" placeholder="sk-...">
           </div>
+          <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
+        </div>
+
+        <div id="settings-section-chats" class="settings-section form-card" hidden>
+          <h2>Чаты</h2>
+          <div class="form-group">
+            <label>Отвечать на сообщения с даты</label>
+            <input type="date" id="setting-buyer_chat_reply_from_date">
+          </div>
+          <div class="form-group">
+            <label>Автоответ: только сообщения не старше (дней)</label>
+            <input type="number" id="setting-buyer_chat_auto_max_age_days" min="1" max="30" step="1" placeholder="3">
+          </div>
+          <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
+        </div>
+
+        <div id="settings-section-telegram" class="settings-section form-card" hidden>
+          <h2>Telegram</h2>
+          <div class="form-group">
+            <label>Токен бота</label>
+            <input type="password" id="setting-telegram_bot_token" placeholder="токен бота">
+          </div>
+          <div class="form-group">
+            <label>ID чата</label>
+            <input type="text" id="setting-telegram_chat_id" placeholder="chat_id">
+          </div>
+          <div class="form-group">
+            <label class="checkbox-row"><input type="checkbox" id="setting-telegram_enabled"> Уведомления в Telegram</label>
+          </div>
+          <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
+        </div>
+
+        <div id="settings-section-ui" class="settings-section form-card" hidden>
+          <h2>Интерфейс</h2>
+          <div class="form-group">
+            <label class="checkbox-row"><input type="checkbox" id="ui-compact"> Компактный режим</label>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-row"><input type="checkbox" id="ui-dim-bg"> Приглушить фон</label>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-row"><input type="checkbox" id="ui-reduce-motion"> Уменьшить анимации</label>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-row"><input type="checkbox" id="ui-bg-motion"> Движение фона</label>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-row"><input type="checkbox" id="theme-dark"> Тёмная тема</label>
+          </div>
+          <div class="form-group">
+            <label>Длительность уведомлений</label>
+            <select id="ui-toast-duration">
+              <option value="2500">2.5 сек</option>
+              <option value="4000">4 сек</option>
+              <option value="7000">7 сек</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-row"><input type="checkbox" id="ui-confirm-danger"> Подтверждать удаления</label>
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" id="ui-reset">Сбросить</button>
+        </div>
+
+        <div id="settings-section-users" class="settings-section form-card" hidden>
+          <h2>Пользователи</h2>
+          <div id="users-admin-only" style="display:none;">
+            <div class="form-group" style="margin-top: 12px;">
+              <label>Новый пользователь</label>
+              <div style="display:grid; grid-template-columns: 1fr 1fr auto; gap: 10px;">
+                <input type="text" id="new-user-username" placeholder="логин">
+                <input type="password" id="new-user-password" placeholder="пароль">
+                <button type="button" class="btn btn-primary" id="btn-create-user">Создать</button>
+              </div>
+            </div>
+            <div id="users-list" class="stores-grid" style="margin-top: 10px;"></div>
+          </div>
+          <div id="users-no-access" class="form-hint">Только для администратора</div>
+        </div>
+
+        <div id="settings-section-prompts" class="settings-section form-card" hidden>
+          <h2>Промпты</h2>
+          <div id="prompts-list"></div>
         </div>
       </div>
     </section>
@@ -693,6 +723,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=14"></script>
+  <script src="/static/app.js?v=16"></script>
 </body>
 </html>

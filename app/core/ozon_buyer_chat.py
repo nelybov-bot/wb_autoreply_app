@@ -124,7 +124,31 @@ def is_ozon_buyer_chat_row(row: dict) -> bool:
 
 def is_ozon_support_chat_row(row: dict) -> bool:
     ct = _norm_ozon_chat_type(ozon_chat_type(row))
-    return bool(ct) and not is_ozon_buyer_chat_row(row)
+    if not ct:
+        return False
+    if ct in ("seller_support", "seller_support_chat"):
+        return True
+    if "support" in ct and "buyer" not in ct:
+        return True
+    return ct in ("crm", "notification", "news") or "news" in ct
+
+
+def ozon_chat_category(row: dict) -> str:
+    """buyer | support | other — для UI и фильтров."""
+    if is_ozon_buyer_chat_row(row):
+        return "buyer"
+    if is_ozon_support_chat_row(row):
+        return "support"
+    return "other"
+
+
+def ozon_chat_matches_filter(row: dict, filter_kind: str) -> bool:
+    kind = (filter_kind or "buyers").strip().lower()
+    if kind in ("all", "everything"):
+        return True
+    if kind in ("support", "news"):
+        return ozon_chat_category(row) == "support"
+    return is_ozon_buyer_chat_row(row)
 
 
 def _parse_ozon_iso(iso: str) -> Optional[dt.datetime]:

@@ -170,19 +170,19 @@ class OzonClient:
                 out[sku_id] = name
         return out
 
-    async def list_buyer_chats(
+    async def list_chats(
         self,
         *,
         limit: int = 30,
         unread_only: bool = False,
         chat_status: str = "Opened",
+        chat_type: Optional[str] = None,
         cursor: Optional[str] = None,
     ) -> dict:
-        """POST /v3/chat/list — чаты с покупателями (Buyer_Seller)."""
-        filt: Dict[str, Any] = {
-            "chat_type": "Buyer_Seller",
-            "chat_status": chat_status,
-        }
+        """POST /v3/chat/list — все чаты или с фильтром chat_type."""
+        filt: Dict[str, Any] = {"chat_status": chat_status}
+        if chat_type:
+            filt["chat_type"] = chat_type
         if unread_only:
             filt["unread_only"] = True
         body: Dict[str, Any] = {
@@ -194,6 +194,52 @@ class OzonClient:
         data = await self._request("POST", "/v3/chat/list", json_body=body)
         return data if isinstance(data, dict) else {}
 
+    async def list_buyer_chats(
+        self,
+        *,
+        limit: int = 30,
+        unread_only: bool = False,
+        chat_status: str = "Opened",
+        cursor: Optional[str] = None,
+    ) -> dict:
+        """POST /v3/chat/list — только Buyer_Seller."""
+        return await self.list_chats(
+            limit=limit,
+            unread_only=unread_only,
+            chat_status=chat_status,
+            chat_type="Buyer_Seller",
+            cursor=cursor,
+        )
+
+    async def list_all_chats(
+        self,
+        *,
+        unread_only: bool = False,
+        chat_status: str = "Opened",
+        max_pages: int = 20,
+    ) -> List[dict]:
+        """Все чаты магазина (без фильтра по типу)."""
+        rows: List[dict] = []
+        cursor: Optional[str] = None
+        for _ in range(max(1, max_pages)):
+            block = await self.list_chats(
+                limit=100,
+                unread_only=unread_only,
+                chat_status=chat_status,
+                cursor=cursor,
+            )
+            chunk = block.get("chats") or []
+            if isinstance(chunk, list):
+                rows.extend(chunk)
+            has_next = block.get("has_next")
+            if has_next in (False, "false", 0, "0", None):
+                break
+            nxt = block.get("cursor")
+            if not nxt:
+                break
+            cursor = str(nxt)
+        return [r for r in rows if isinstance(r, dict)]
+
     async def list_all_buyer_chats(
         self,
         *,
@@ -204,10 +250,11 @@ class OzonClient:
         rows: List[dict] = []
         cursor: Optional[str] = None
         for _ in range(max(1, max_pages)):
-            block = await self.list_buyer_chats(
+            block = await self.list_chats(
                 limit=100,
                 unread_only=unread_only,
                 chat_status=chat_status,
+                chat_type="Buyer_Seller",
                 cursor=cursor,
             )
             chunk = block.get("chats") or []

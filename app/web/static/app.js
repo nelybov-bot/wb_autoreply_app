@@ -142,17 +142,19 @@
     const canSettings = currentUser && (currentUser.role === 'admin' || (currentUser.permissions && currentUser.permissions.includes('view_settings')));
     const canLog = currentUser && (currentUser.role === 'admin' || (currentUser.permissions && currentUser.permissions.includes('view_log')));
     const canOpsLog = currentUser && (currentUser.role === 'admin' || (currentUser.permissions && currentUser.permissions.includes('view_ops_log')));
-    document.querySelectorAll('.nav-dd-item[data-tab="settings"], .nav-dd-item[data-tab="auto"]').forEach(el => {
+    const isAdmin = currentUser && currentUser.role === 'admin';
+    document.querySelectorAll('.nav-link[data-tab="auto"]').forEach(el => {
       el.style.display = canSettings ? '' : 'none';
     });
-    document.querySelectorAll('.nav-dd-item[data-tab="log"]').forEach(el => {
+    document.querySelectorAll('.nav-menu-settings').forEach(el => {
+      el.style.display = canSettings ? '' : 'none';
+    });
+    document.querySelectorAll('.nav-link[data-tab="log"]').forEach(el => {
       el.style.display = (canLog || canOpsLog) ? '' : 'none';
     });
-    const systemMenu = document.querySelector('.nav-menu[data-nav-group="system"]');
-    if (systemMenu) {
-      const visibleItems = systemMenu.querySelectorAll('.nav-dd-item:not([style*="display: none"])');
-      systemMenu.style.display = visibleItems.length ? '' : 'none';
-    }
+    document.querySelectorAll('#nav-settings-users, #settings-seg-users').forEach(el => {
+      el.style.display = isAdmin ? '' : 'none';
+    });
     const panelSettings = document.getElementById('panel-settings');
     const panelAuto = document.getElementById('panel-auto');
     const panelLog = document.getElementById('panel-log');
@@ -161,13 +163,52 @@
     if (panelLog) panelLog.style.display = (canLog || canOpsLog) ? '' : 'none';
   }
 
-  function setNavActive(tabId) {
-    document.querySelectorAll('.nav-link[data-tab], .nav-dd-item[data-tab]').forEach(el => {
+  let ozonChatsFilter = 'buyers';
+  let ozonActionsSection = 'list';
+  let settingsSection = 'connection';
+
+  function setNavActive(tabId, opts = {}) {
+    const chatFilter = opts.chatFilter || ozonChatsFilter;
+    const actionsSection = opts.actionsSection || ozonActionsSection;
+    const settingsSec = opts.settingsSection || settingsSection;
+
+    document.querySelectorAll('.nav-link[data-tab]').forEach(el => {
       el.classList.toggle('active', el.getAttribute('data-tab') === tabId);
     });
+
+    document.querySelectorAll('.nav-dd-item[data-tab]').forEach(el => {
+      const matchTab = el.getAttribute('data-tab') === tabId;
+      const cf = el.getAttribute('data-chat-filter') || '';
+      const as = el.getAttribute('data-actions-section') || '';
+      const ss = el.getAttribute('data-settings-section') || '';
+      let active = false;
+      if (tabId === 'ozon-chats' && cf) {
+        active = matchTab && cf === chatFilter;
+      } else if (tabId === 'ozon-actions' && as) {
+        active = matchTab && as === actionsSection;
+      } else if (tabId === 'settings' && ss) {
+        active = matchTab && ss === settingsSec;
+      } else {
+        active = matchTab && !cf && !as && !ss;
+      }
+      el.classList.toggle('active', active);
+    });
+
     document.querySelectorAll('.nav-menu').forEach(menu => {
-      const hit = menu.querySelector(`.nav-dd-item[data-tab="${tabId}"]`);
-      menu.classList.toggle('active', !!hit);
+      const hit = [...menu.querySelectorAll('.nav-dd-item[data-tab]')].some(el => {
+        if (el.getAttribute('data-tab') !== tabId) return false;
+        const cf = el.getAttribute('data-chat-filter') || '';
+        const as = el.getAttribute('data-actions-section') || '';
+        const ss = el.getAttribute('data-settings-section') || '';
+        if (tabId === 'ozon-chats' && cf) return cf === chatFilter;
+        if (tabId === 'ozon-actions' && as) return as === actionsSection;
+        if (tabId === 'settings' && ss) return ss === settingsSec;
+        return !cf && !as && !ss;
+      });
+      const chatsActive = menu.classList.contains('nav-menu-chats') && (tabId === 'wb-chats' || tabId === 'ozon-chats');
+      const ozonPromoActive = menu.classList.contains('nav-menu-ozon-promo') && tabId === 'ozon-actions';
+      const settingsActive = menu.classList.contains('nav-menu-settings') && tabId === 'settings';
+      menu.classList.toggle('active', hit || chatsActive || ozonPromoActive || settingsActive);
     });
   }
 
@@ -180,13 +221,43 @@
     });
   }
 
-  function activatePanel(tabId) {
+  function scrollToOzonActionsSection(section) {
+    const map = { list: 'ozon-actions-list', settings: 'ozon-actions-settings', manual: 'ozon-actions-manual' };
+    const id = map[section] || map.list;
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function syncSettingsSectionUI() {
+    const isAdmin = currentUser && currentUser.role === 'admin';
+    if (settingsSection === 'users' && !isAdmin) settingsSection = 'connection';
+    document.querySelectorAll('#settings-filter [data-settings-section]').forEach(btn => {
+      if (btn.style.display === 'none') return;
+      btn.classList.toggle('active', btn.getAttribute('data-settings-section') === settingsSection);
+    });
+    document.querySelectorAll('.settings-section').forEach(sec => {
+      const id = sec.id.replace('settings-section-', '');
+      sec.hidden = id !== settingsSection;
+    });
+  }
+
+  function activatePanel(tabId, opts = {}) {
     if (!tabId) return;
     const panel = document.getElementById('panel-' + tabId);
     if (!panel || panel.style.display === 'none') return;
+    if (opts.chatFilter) {
+      ozonChatsFilter = opts.chatFilter;
+      syncOzonChatsFilterUI();
+    }
+    if (opts.actionsSection) {
+      ozonActionsSection = opts.actionsSection;
+    }
+    if (opts.settingsSection) {
+      settingsSection = opts.settingsSection;
+    }
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     panel.classList.add('active');
-    setNavActive(tabId);
+    setNavActive(tabId, opts);
     closeNavMenus();
     if (tabId === 'summary') loadStats();
     if (tabId === 'stores') loadStores();
@@ -194,16 +265,32 @@
     if (tabId === 'questions') { loadQuestions(); resumePanelTask('questions'); }
     if (tabId === 'wb-chats') loadWbChatsPanel();
     if (tabId === 'ozon-chats') loadOzonChatsPanel();
-    if (tabId === 'ozon-actions') loadOzonActionsPanel();
+    if (tabId === 'ozon-actions') {
+      loadOzonActionsPanel();
+      if (opts.actionsSection) {
+        setTimeout(() => scrollToOzonActionsSection(ozonActionsSection), 80);
+      }
+    }
     if (tabId === 'auto') loadAutoSchedulePanel();
-    if (tabId === 'settings') loadSettings();
+    if (tabId === 'settings') {
+      syncSettingsSectionUI();
+      loadSettings();
+    }
     if (tabId === 'log') loadLog();
   }
 
   function wireAppNav() {
     document.querySelectorAll('.nav-link[data-tab], .nav-dd-item[data-tab]').forEach(el => {
       el.addEventListener('click', () => {
-        activatePanel(el.getAttribute('data-tab'));
+        const tab = el.getAttribute('data-tab');
+        const chatFilter = el.getAttribute('data-chat-filter') || '';
+        const actionsSection = el.getAttribute('data-actions-section') || '';
+        const settingsSec = el.getAttribute('data-settings-section') || '';
+        activatePanel(tab, {
+          chatFilter: chatFilter || undefined,
+          actionsSection: actionsSection || undefined,
+          settingsSection: settingsSec || undefined,
+        });
       });
     });
     document.querySelectorAll('.nav-menu').forEach(menu => {
@@ -715,7 +802,7 @@
   }
 
   function wbChatPreviewHintHtml() {
-    return '<div class="form-hint" style="margin-top:8px;">Показано последнее сообщение из списка WB. Нажмите «Обновить переписку» для полной истории.</div>';
+    return '';
   }
 
   function applyWbChatThreadData(t) {
@@ -1145,6 +1232,7 @@
   // ---- Ozon buyer chats ----
   let ozonChatsRaw = [];
   let ozonChatsListStoreId = null;
+  let ozonChatsListFilter = null;
   let ozonChatsSuppressSelectChange = false;
   let ozonChatSelectedId = null;
   let ozonChatClientMessageKey = '';
@@ -1167,6 +1255,21 @@
     return escapeHtml(role || '');
   }
 
+  function ozonChatCategoryLabel(cat) {
+    if (cat === 'buyer') return 'Покупатель';
+    if (cat === 'support') return 'Поддержка';
+    return 'Другое';
+  }
+
+  function syncOzonChatsFilterUI() {
+    document.querySelectorAll('#ozon-chats-filter [data-filter]').forEach(btn => {
+      btn.classList.toggle('active', btn.getAttribute('data-filter') === ozonChatsFilter);
+    });
+    const buyersOnly = ozonChatsFilter === 'buyers';
+    const massBtn = document.getElementById('btn-ozon-chats-mass');
+    if (massBtn) massBtn.style.display = buyersOnly ? '' : 'none';
+  }
+
   function renderOzonChatsList() {
     const wrap = document.getElementById('ozon-chats-list');
     if (!wrap) return;
@@ -1179,7 +1282,9 @@
       const enc = encodeURIComponent(id);
       const active = ozonChatSelectedId === id ? 'wb-chat-item active' : 'wb-chat-item';
       const preview = escapeHtml(c.preview || '—');
-      return `<button type="button" class="${active}" data-chat-id="${enc}"><div class="wb-chat-item-name">Чат ${escapeHtml(id.slice(0, 8))}…</div><div class="wb-chat-item-preview">${preview}</div></button>`;
+      const cat = ozonChatCategoryLabel(c.category);
+      const typeHint = c.chat_type ? ` · ${escapeHtml(String(c.chat_type))}` : '';
+      return `<button type="button" class="${active}" data-chat-id="${enc}"><div class="wb-chat-item-name">${escapeHtml(cat)}${typeHint}</div><div class="wb-chat-item-preview">${preview}</div></button>`;
     }).join('');
     wrap.querySelectorAll('.wb-chat-item').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -1206,6 +1311,10 @@
     if (statusHint) statusHint.textContent = '';
     const sendBtn = document.getElementById('btn-ozon-chats-send');
     if (sendBtn) sendBtn.disabled = false;
+    const replyTools = document.getElementById('ozon-chats-reply-tools');
+    const readonlyHint = document.getElementById('ozon-chats-readonly-hint');
+    if (replyTools) replyTools.style.display = ozonChatsFilter === 'buyers' ? '' : 'none';
+    if (readonlyHint) readonlyHint.style.display = ozonChatsFilter === 'buyers' ? 'none' : '';
   }
 
   async function refreshOzonChatsList(forceRefresh = true) {
@@ -1232,7 +1341,10 @@
       return;
     }
     const gen = ++ozonChatsListFetchGen;
-    const q = forceRefresh ? '?refresh=1' : '';
+    const filter = ozonChatsFilter || 'buyers';
+    const qParts = [`filter=${encodeURIComponent(filter)}`];
+    if (forceRefresh) qParts.push('refresh=1');
+    const q = '?' + qParts.join('&');
     const storeLabel = getStoreNameById(sid) || `ID ${sid}`;
     const wrap = document.getElementById('ozon-chats-list');
     if (wrap) wrap.innerHTML = '<div class="form-hint">Загрузка списка…</div>';
@@ -1246,6 +1358,7 @@
       if (Number(getOzonChatsStoreId()) !== Number(sid)) return;
       ozonChatsRaw = data.chats || [];
       ozonChatsListStoreId = sid;
+      ozonChatsListFilter = filter;
       ozonChatSelectedId = null;
       renderOzonChatsList();
       if (data.unavailable) {
@@ -1305,10 +1418,18 @@
       }
       const statusHint = document.getElementById('ozon-chats-status-hint');
       const sendBtn = document.getElementById('btn-ozon-chats-send');
-      const replyBlocked = !!t.reply_window_blocked;
+      const replyTools = document.getElementById('ozon-chats-reply-tools');
+      const readonlyHint = document.getElementById('ozon-chats-readonly-hint');
+      const canReply = !!t.can_reply && t.category === 'buyer';
+      const replyBlocked = !!t.reply_window_blocked || !canReply;
+      if (replyTools) replyTools.style.display = canReply ? '' : 'none';
+      if (readonlyHint) readonlyHint.style.display = canReply ? 'none' : '';
       if (sendBtn) sendBtn.disabled = replyBlocked;
       if (statusHint) {
-        if (replyBlocked) {
+        if (!canReply) {
+          statusHint.textContent = 'Только просмотр';
+          statusHint.style.color = '#64748b';
+        } else if (replyBlocked) {
           statusHint.textContent = t.reply_window_reason || 'Окно ответа Ozon закрыто — отправка недоступна.';
           statusHint.style.color = '#b91c1c';
         } else if (t.reply_window_warning) {
@@ -1340,6 +1461,7 @@
   }
 
   async function loadOzonChatsPanel() {
+    syncOzonChatsFilterUI();
     const gen = ++ozonChatsPanelGen;
     if (!stores.length) {
       setChatStatusBar('ozon-chats-status-bar', 'loading', 'Подготавливаю список магазинов…');
@@ -1369,7 +1491,8 @@
       renderOzonChatsList();
       return;
     }
-    if (sid != null && ozonChatsListStoreId != null && Number(sid) === Number(ozonChatsListStoreId) && ozonChatsRaw.length) {
+    if (sid != null && ozonChatsListStoreId != null && Number(sid) === Number(ozonChatsListStoreId)
+        && ozonChatsListFilter === ozonChatsFilter && ozonChatsRaw.length) {
       renderOzonChatsList();
       setChatStatusBar('ozon-chats-status-bar', 'ok', `Загружено чатов: ${ozonChatsRaw.length}.`);
       return;
@@ -1464,10 +1587,23 @@
         if (ozonChatsSuppressSelectChange) return;
         ozonChatsRaw = [];
         ozonChatsListStoreId = null;
+        ozonChatsListFilter = null;
         ozonChatSelectedId = null;
         void refreshOzonChatsList();
       });
     }
+    document.querySelectorAll('#ozon-chats-filter [data-filter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const f = btn.getAttribute('data-filter') || 'buyers';
+        if (f === ozonChatsFilter) return;
+        ozonChatsFilter = f;
+        ozonChatsListFilter = null;
+        ozonChatSelectedId = null;
+        syncOzonChatsFilterUI();
+        setNavActive('ozon-chats', { chatFilter: f });
+        void refreshOzonChatsList(false);
+      });
+    });
     document.getElementById('btn-ozon-chats-refresh')?.addEventListener('click', () => {
       retryStoresLoad();
       setChatStatusBar('ozon-chats-status-bar', 'loading', 'Запрос к Ozon…');
@@ -2056,6 +2192,7 @@
 
   // ---- Settings ----
   async function loadSettings() {
+    syncSettingsSectionUI();
     const apiBaseEl = document.getElementById('setting-api_base');
     if (apiBaseEl) apiBaseEl.value = localStorage.getItem(STORAGE_API_BASE) || '';
     // UI prefs
@@ -2222,7 +2359,21 @@
     });
   }
 
-  document.getElementById('btn-save-settings').addEventListener('click', async () => {
+  function wireSettingsPanel() {
+    if (wireSettingsPanel._done) return;
+    wireSettingsPanel._done = true;
+    document.querySelectorAll('#settings-filter [data-settings-section]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const sec = btn.getAttribute('data-settings-section') || 'connection';
+        if (sec === settingsSection) return;
+        settingsSection = sec;
+        syncSettingsSectionUI();
+        setNavActive('settings', { settingsSection: sec });
+      });
+    });
+  }
+
+  async function saveServerSettings() {
     const body = {
       openai_key: document.getElementById('setting-openai_key').value,
       telegram_bot_token: document.getElementById('setting-telegram_bot_token').value,
@@ -2231,12 +2382,18 @@
       buyer_chat_reply_from_date: document.getElementById('setting-buyer_chat_reply_from_date')?.value || '',
       buyer_chat_auto_max_age_days: String(parseInt(document.getElementById('setting-buyer_chat_auto_max_age_days')?.value || '3', 10) || 3),
     };
-    try {
-      await api('/settings', { method: 'POST', body: JSON.stringify(body) });
-      toast('Настройки сохранены');
-    } catch (err) {
-      toast(err.message, 'error');
-    }
+    await api('/settings', { method: 'POST', body: JSON.stringify(body) });
+    toast('Сохранено');
+  }
+
+  document.querySelectorAll('.btn-save-server-settings').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        await saveServerSettings();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
   });
 
   // ---- Log ----
@@ -2509,6 +2666,7 @@
     migrateUiPrefsIfNeeded();
     applyUiPrefs();
     wireUiPrefs();
+    wireSettingsPanel();
     syncBgParallaxListener();
     ensureAutoStatusPolling();
     if (!me) {
