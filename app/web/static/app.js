@@ -78,19 +78,33 @@
   async function api(path, options = {}) {
     const base = getApiBase();
     const url = path.startsWith('http') ? path : (base ? base + '/api' + path : API + path);
+    const timeoutMs = Number(options.timeoutMs) || 0;
+    const { timeoutMs: _timeoutMs, ...fetchOptions } = options;
+    let timer = null;
+    let controller = null;
+    if (timeoutMs > 0 && !fetchOptions.signal) {
+      controller = new AbortController();
+      fetchOptions.signal = controller.signal;
+      timer = setTimeout(() => controller.abort(), timeoutMs);
+    }
     let res;
     try {
       res = await fetch(url, {
-        ...options,
+        ...fetchOptions,
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          ...options.headers,
+          ...fetchOptions.headers,
         },
       });
     } catch (e) {
+      if (e && e.name === 'AbortError') {
+        throw new Error('Превышено время ожидания ответа сервера. На Render первый запрос после простоя может занять до минуты — подождите и нажмите «Обновить» ещё раз.');
+      }
       const baseHint = base ? `\nПроверь «Адрес API (ПК)»: сейчас = ${base}` : '';
       throw new Error('Не удалось подключиться к серверу (Failed to fetch).' + baseHint + '\nЧастые причины: неверный адрес API, CORS, смешанный контент (http/https), сервер спит на Render.');
+    } finally {
+      if (timer) clearTimeout(timer);
     }
     if (!res.ok) {
       const text = await res.text();
@@ -252,10 +266,13 @@
   let stores = [];
   let storesLoadPromise = null;
 
-  async function ensureStoresLoaded() {
-    if (stores.length) return stores;
+  async function ensureStoresLoaded(opts = {}) {
+    const force = !!opts.force;
+    const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 45000;
+    if (!force && stores.length) return stores;
+    if (force) invalidateStoresCache();
     if (!storesLoadPromise) {
-      storesLoadPromise = api('/stores')
+      storesLoadPromise = api('/stores', { timeoutMs })
         .then(list => {
           stores = Array.isArray(list) ? list : [];
           return stores;
@@ -266,6 +283,10 @@
         });
     }
     return storesLoadPromise;
+  }
+
+  function retryStoresLoad() {
+    storesLoadPromise = null;
   }
 
   function selectFirstStoreOption(sel) {
@@ -353,6 +374,7 @@
       await api('/stores', { method: 'POST', body: JSON.stringify(body) });
       toast('Магазин добавлен');
       e.target.reset();
+      invalidateStoresCache();
       loadStores();
       fillStoreSelects();
     } catch (err) {
@@ -423,6 +445,7 @@
       await api(`/stores/${storeId}`, { method: 'PATCH', body: JSON.stringify(body) });
       toast('Магазин обновлён');
       document.getElementById('modal-store').classList.remove('visible');
+      invalidateStoresCache();
       loadStores();
       fillStoreSelects();
     } catch (err) {
@@ -445,6 +468,7 @@
     try {
       await api(`/stores/${storeId}`, { method: 'DELETE' });
       toast('Магазин удалён');
+      invalidateStoresCache();
       loadStores();
       fillStoreSelects();
     } catch (err) {
@@ -459,7 +483,6 @@
 
   async function loadStores() {
     try {
-      invalidateStoresCache();
       await ensureStoresLoaded();
       renderStores();
     } catch (err) {
@@ -668,8 +691,16 @@
   }
 
   async function refreshWbChatsList(forceRefresh = true) {
-    await ensureStoresLoaded().catch(() => {});
-    fillStoreSelects();
+    try {
+      await ensureStoresLoaded();
+      fillStoreSelects();
+    } catch (err) {
+      if (!getWbChatsStoreId()) {
+        setChatStatusBar('wb-chats-status-bar', 'error', err.message || 'Не удалось загрузить магазины');
+        setPanelLoading('wb-chats-loading', false);
+        return;
+      }
+    }
     const sid = getWbChatsStoreId();
     if (!sid) {
       const wrap = document.getElementById('wb-chats-list');
@@ -690,7 +721,7 @@
     setPanelLoading('wb-chats-loading', true, loadMsg);
     setChatToolbarBusy('wb-chats', true);
     try {
-      const data = await api(`/wb/buyer-chats/${sid}${q}`);
+      const data = await api(`/wb/buyer-chats/${sid}${q}`, { timeoutMs: 120000 });
       if (gen !== wbChatsListFetchGen) return;
       if (Number(getWbChatsStoreId()) !== Number(sid)) return;
       wbChatsRaw = data.chats || [];
@@ -803,10 +834,18 @@
 
   async function loadWbChatsPanel() {
     const gen = ++wbChatsPanelGen;
-    setChatStatusBar('wb-chats-status-bar', 'loading', 'Подготавливаю список магазинов…');
+    if (!stores.length) {
+      setChatStatusBar('wb-chats-status-bar', 'loading', 'Подготавливаю список магазинов…');
+    }
     try {
       await ensureStoresLoaded();
     } catch (e) {
+      if (gen !== wbChatsPanelGen) return;
+      const sidFallback = getWbChatsStoreId();
+      if (sidFallback) {
+        await refreshWbChatsList(false);
+        return;
+      }
       setChatStatusBar('wb-chats-status-bar', 'error', (e && e.message) ? e.message : 'Не удалось загрузить магазины');
       return;
     }
@@ -940,6 +979,7 @@
     const b1 = document.getElementById('btn-wb-chats-refresh');
     if (b1) {
       b1.addEventListener('click', () => {
+        retryStoresLoad();
         setChatStatusBar('wb-chats-status-bar', 'loading', 'Запрос к WB… подождите, первый ответ может занять до 1–2 минут.');
         setPanelLoading('wb-chats-loading', true, 'Запрос к WB…');
         void refreshWbChatsList(true);
