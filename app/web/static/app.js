@@ -922,7 +922,12 @@
       const id = String(c.chatID || '');
       const enc = encodeURIComponent(id);
       const name = escapeHtml(c.clientName || 'Покупатель');
-      const raw = c.lastMessage && c.lastMessage.text ? String(c.lastMessage.text) : '';
+      let raw = c.lastMessage && c.lastMessage.text ? String(c.lastMessage.text) : '';
+      if (!raw && c.lastMessage && c.lastMessage.attachments) {
+        const att = c.lastMessage.attachments;
+        const imgs = att && att.images;
+        if (Array.isArray(imgs) && imgs.length) raw = imgs.length === 1 ? '[Фото]' : `[Фото: ${imgs.length}]`;
+      }
       const lm = escapeHtml(raw.slice(0, 140)) || '—';
       const active = wbChatSelectedId === id ? 'wb-chat-item active' : 'wb-chat-item';
       return `<button type="button" class="${active}" data-chat-id="${enc}"><div class="wb-chat-item-name">${name}</div><div class="wb-chat-item-preview">${lm}</div></button>`;
@@ -970,8 +975,13 @@
     setChatStatusBar('wb-chats-status-bar', 'loading', loadMsg);
     setPanelLoading('wb-chats-loading', true, loadMsg);
     setChatToolbarBusy('wb-chats', true);
+    const safetyClear = setTimeout(() => {
+      if (gen !== wbChatsListFetchGen) return;
+      setPanelLoading('wb-chats-loading', false);
+      setChatToolbarBusy('wb-chats', false);
+    }, 95000);
     try {
-      const data = await api(`/wb/buyer-chats/${sid}${q}`, { timeoutMs: 120000 });
+      const data = await api(`/wb/buyer-chats/${sid}${q}`, { timeoutMs: 90000 });
       if (gen !== wbChatsListFetchGen) return;
       if (Number(getWbChatsStoreId()) !== Number(sid)) return;
       wbChatsRaw = data.chats || [];
@@ -989,11 +999,12 @@
       renderWbChatsList();
       if (wbChatSelectedId) restoreWbChatDetailForSelected();
       const n = wbChatsRaw.length;
+      const staleHint = data.stale && data.warning ? String(data.warning) : '';
       if (!wbChatSelectedId) {
         setChatStatusBar(
           'wb-chats-status-bar',
-          n ? 'ok' : 'info',
-          n ? `Загружено чатов: ${n}. Выберите чат слева.` : 'Чатов пока нет (или пустой ответ WB).',
+          staleHint ? 'info' : (n ? 'ok' : 'info'),
+          staleHint || (n ? `Загружено чатов: ${n}. Выберите чат слева.` : 'Чатов пока нет (или пустой ответ WB).'),
         );
         const hint = document.getElementById('wb-chats-hint');
         const body = document.getElementById('wb-chats-detail-body');
@@ -1003,7 +1014,11 @@
         }
         if (body) body.style.display = 'none';
       } else if (n) {
-        setChatStatusBar('wb-chats-status-bar', 'ok', `Загружено чатов: ${n}.`);
+        setChatStatusBar(
+          'wb-chats-status-bar',
+          staleHint ? 'info' : 'ok',
+          staleHint || `Загружено чатов: ${n}.`,
+        );
       }
     } catch (err) {
       if (gen !== wbChatsListFetchGen) return;
@@ -1018,6 +1033,7 @@
       setChatStatusBar('wb-chats-status-bar', 'error', err.message || 'Ошибка загрузки чатов WB');
       toast(err.message, 'error');
     } finally {
+      clearTimeout(safetyClear);
       if (gen === wbChatsListFetchGen) {
         setPanelLoading('wb-chats-loading', false);
         setChatToolbarBusy('wb-chats', false);

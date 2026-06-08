@@ -8,8 +8,9 @@
 429 с длинным Retry-After бывает и при корректном ключе с «Чат с покупателем»: перегруз по частоте
 (несколько магазинов в приложении, автозапуск, UI) и отдельные лимиты WB на аккаунт.
 
-Сериализация: один asyncio.Lock на весь цикл «запрос → при 429 пауза → повтор».
-После 429 пауза берётся из Retry-After / X-Ratelimit-Retry (не обрезается до ~35 с).
+Сериализация: asyncio.Lock только на сам HTTP-запрос; пауза после 429 — вне lock,
+чтобы список чатов не зависал, пока автозапуск ждёт лимит WB.
+После 429 пауза из Retry-After / X-Ratelimit-Retry, с разумным потолком (по умолчанию 120 с).
 """
 from __future__ import annotations
 
@@ -63,14 +64,14 @@ _wb_buyer_rl = RateLimiter(0.9)
 _wb_buyer_serial = asyncio.Lock()
 
 
-def _wb_buyer_429_sleep_seconds(headers: Any) -> tuple[int, str]:
+def _wb_buyer_429_sleep_seconds(headers: Any, *, max_sleep: int = 120) -> tuple[int, str]:
     """
     Пауза после 429 по заголовкам WB.
 
-    Раньше паузу искусственно резали до ~40 с; WB мог отдавать Retry-After на тысячи секунд —
-    просыпались рано и снова получали 429.
+    WB может отдавать Retry-After на тысячи секунд — не спим так долго: иначе UI и автозапуск
+  блокируют друг друга. max_sleep задаётся вызывающим (для /chats — короче).
     """
-    max_sleep = 7200  # один sleep не дольше 2 ч (воркер не «мёртвый» навсегда)
+    max_sleep = max(8, min(int(max_sleep), 7200))
     min_sleep = 8
     default = 28
     now = time.time()
@@ -119,10 +120,16 @@ class WbBuyerChatClient:
             "User-Agent": USER_AGENT,
         }
 
-    async def _http_get_json(self, path: str, *, params: Optional[dict] = None) -> Any:
+    async def _http_get_json(
+        self,
+        path: str,
+        *,
+        params: Optional[dict] = None,
+        max_429_sleep: int = 120,
+    ) -> Any:
         url = BASE + path
-        async with _wb_buyer_serial:
-            for attempt in range(3):
+        for attempt in range(3):
+            async with _wb_buyer_serial:
                 await _wb_buyer_rl.wait()
                 connector = aiohttp.TCPConnector(force_close=True, family=socket.AF_INET)
                 async with aiohttp.ClientSession(timeout=self.timeout, connector=connector) as s:
@@ -130,42 +137,48 @@ class WbBuyerChatClient:
                         txt = await resp.text()
                         st = resp.status
                         hdrs = resp.headers
-                if st == 429 and attempt < 2:
-                    wait, why = _wb_buyer_429_sleep_seconds(hdrs)
-                    if wait >= 180:
-                        log.warning(
-                            "WB buyer-chat GET %s: 429, пауза %ss (%s), попытка %s/3. "
-                            "Долгую паузу задаёт WB; при персональном ключе с «Чат» это часто суммарная "
-                            "нагрузка (несколько магазинов, автозапуск, вкладка чатов) и лимит на аккаунт.",
-                            path,
-                            wait,
-                            why,
-                            attempt + 1,
-                        )
-                    else:
-                        log.warning(
-                            "WB buyer-chat GET %s: 429, пауза %ss (%s), попытка %s/3",
-                            path,
-                            wait,
-                            why,
-                            attempt + 1,
-                        )
-                    await asyncio.sleep(wait)
-                    continue
-                if st >= 400:
-                    raise HttpStatusError(st, txt)
-                if st == 204 or not txt:
-                    return None
-                try:
-                    return json.loads(txt)
-                except Exception as e:
-                    log.warning("WB buyer-chat invalid JSON: %s", e)
-                    raise HttpStatusError(502, f"Invalid JSON: {str(e)[:200]}") from e
+            if st == 429 and attempt < 2:
+                wait, why = _wb_buyer_429_sleep_seconds(hdrs, max_sleep=max_429_sleep)
+                if wait >= 60:
+                    log.warning(
+                        "WB buyer-chat GET %s: 429, пауза %ss (%s), попытка %s/3. "
+                        "Пауза вне lock — другие запросы (список чатов) не блокируются.",
+                        path,
+                        wait,
+                        why,
+                        attempt + 1,
+                    )
+                else:
+                    log.warning(
+                        "WB buyer-chat GET %s: 429, пауза %ss (%s), попытка %s/3",
+                        path,
+                        wait,
+                        why,
+                        attempt + 1,
+                    )
+                await asyncio.sleep(wait)
+                continue
+            if st >= 400:
+                raise HttpStatusError(st, txt)
+            if st == 204 or not txt:
+                return None
+            try:
+                return json.loads(txt)
+            except Exception as e:
+                log.warning("WB buyer-chat invalid JSON: %s", e)
+                raise HttpStatusError(502, f"Invalid JSON: {str(e)[:200]}") from e
+        raise HttpStatusError(429, "WB buyer-chat: 429 после повторов")
 
-    async def _http_post_multipart(self, path: str, form: aiohttp.FormData) -> Any:
+    async def _http_post_multipart(
+        self,
+        path: str,
+        form: aiohttp.FormData,
+        *,
+        max_429_sleep: int = 120,
+    ) -> Any:
         url = BASE + path
-        async with _wb_buyer_serial:
-            for attempt in range(3):
+        for attempt in range(3):
+            async with _wb_buyer_serial:
                 await _wb_buyer_rl.wait()
                 connector = aiohttp.TCPConnector(force_close=True, family=socket.AF_INET)
                 async with aiohttp.ClientSession(timeout=self.timeout, connector=connector) as s:
@@ -173,41 +186,32 @@ class WbBuyerChatClient:
                         txt = await resp.text()
                         st = resp.status
                         hdrs = resp.headers
-                if st == 429 and attempt < 2:
-                    wait, why = _wb_buyer_429_sleep_seconds(hdrs)
-                    if wait >= 180:
-                        log.warning(
-                            "WB buyer-chat POST %s: 429, пауза %ss (%s), попытка %s/3. "
-                            "Долгую паузу задаёт WB; при персональном ключе с «Чат» это часто суммарная "
-                            "нагрузка (несколько магазинов, автозапуск, вкладка чатов) и лимит на аккаунт.",
-                            path,
-                            wait,
-                            why,
-                            attempt + 1,
-                        )
-                    else:
-                        log.warning(
-                            "WB buyer-chat POST %s: 429, пауза %ss (%s), попытка %s/3",
-                            path,
-                            wait,
-                            why,
-                            attempt + 1,
-                        )
-                    await asyncio.sleep(wait)
-                    continue
-                if st >= 400:
-                    raise HttpStatusError(st, txt)
-                if not txt:
-                    return {}
-                try:
-                    return json.loads(txt)
-                except Exception as e:
-                    log.warning("WB buyer-chat send: invalid JSON: %s", e)
-                    return {}
+            if st == 429 and attempt < 2:
+                wait, why = _wb_buyer_429_sleep_seconds(hdrs, max_sleep=max_429_sleep)
+                if wait >= 60:
+                    log.warning(
+                        "WB buyer-chat POST %s: 429, пауза %ss (%s), попытка %s/3",
+                        path,
+                        wait,
+                        why,
+                        attempt + 1,
+                    )
+                await asyncio.sleep(wait)
+                continue
+            if st >= 400:
+                raise HttpStatusError(st, txt)
+            if not txt:
+                return {}
+            try:
+                return json.loads(txt)
+            except Exception as e:
+                log.warning("WB buyer-chat send: invalid JSON: %s", e)
+                return {}
+        raise HttpStatusError(429, "WB buyer-chat: 429 после повторов")
 
     async def list_chats(self) -> list[dict]:
         async def _do():
-            data = await self._http_get_json("/api/v1/seller/chats")
+            data = await self._http_get_json("/api/v1/seller/chats", max_429_sleep=35)
             if not isinstance(data, dict):
                 return []
             api_errs = data.get("errors")
@@ -327,6 +331,67 @@ def _event_text(ev: dict) -> str:
     if isinstance(msg, dict):
         return str(msg.get("text") or "").strip()
     return ""
+
+
+def _attachment_labels(msg: dict) -> List[str]:
+    """Подписи вложений для отображения и контекста ИИ (фото без текста не теряются)."""
+    if not isinstance(msg, dict):
+        return []
+    att = msg.get("attachments")
+    if not isinstance(att, dict):
+        return []
+    labels: List[str] = []
+    images = att.get("images")
+    if isinstance(images, list):
+        n = sum(1 for x in images if isinstance(x, dict))
+        if n == 1:
+            labels.append("[Фото от покупателя]")
+        elif n > 1:
+            labels.append(f"[Фото: {n} шт.]")
+    files = att.get("files")
+    if isinstance(files, list):
+        names: List[str] = []
+        for f in files:
+            if not isinstance(f, dict):
+                continue
+            name = str(f.get("name") or "").strip()
+            if name:
+                names.append(name)
+        if names:
+            labels.append("[Файл: " + ", ".join(names[:3]) + "]")
+        elif files:
+            labels.append(f"[Файлы: {len(files)} шт.]")
+    return labels
+
+
+def _event_display_text(ev: dict) -> str:
+    """Текст сообщения + пометки о фото/файлах (для переписки и ИИ)."""
+    msg = ev.get("message")
+    if not isinstance(msg, dict):
+        return _event_text(ev)
+    text = str(msg.get("text") or "").strip()
+    labels = _attachment_labels(msg)
+    parts: List[str] = []
+    if text:
+        parts.append(text)
+    parts.extend(labels)
+    return "\n".join(parts)
+
+
+def _messages_match_preview(preview: str, line: str) -> bool:
+    """Сопоставление lastMessage из списка чатов со строкой переписки (текст + вложения)."""
+    p = (preview or "").strip()
+    l = (line or "").strip()
+    if not p or not l:
+        return False
+    if p == l:
+        return True
+    first_line = l.split("\n", 1)[0].strip()
+    if p == first_line:
+        return True
+    if l.startswith(p):
+        return True
+    return False
 
 
 def format_wb_seller_outgoing(message: str) -> str:
@@ -450,7 +515,8 @@ def _resolve_last_message_role(
                 continue
             if int(ev.get("addTimestamp") or 0) != ts:
                 continue
-            if text and _event_text(ev) != text:
+            display = _event_display_text(ev)
+            if text and not _messages_match_preview(text, display):
                 continue
             role = _event_role(ev)
             if role in ("client", "seller"):
@@ -479,7 +545,7 @@ def collect_thread_lines(events: List[dict], chat_id: str) -> List[Tuple[str, st
             continue
         if str(ev.get("eventType") or "") != "message":
             continue
-        text = _event_text(ev)
+        text = _event_display_text(ev)
         if not text:
             continue
         role = role_from_prefixed_text(text) or _event_role(ev)
@@ -502,10 +568,14 @@ def fallback_line_from_chat_row(
     if not isinstance(lm, dict):
         return []
     t = str(lm.get("text") or "").strip()
-    if not t:
-        return []
     ts = int(lm.get("addTimestamp") or 0)
     cid = str(chat_row.get("chatID") or "").strip()
+    if not t and events and cid:
+        lines = collect_thread_lines(events, cid)
+        if lines:
+            return lines
+    if not t:
+        return []
     role = role_from_prefixed_text(t) or _resolve_last_message_role(lm, chat_row, events, cid)
     return [(role, t, ts, str(ts))]
 
@@ -524,10 +594,12 @@ def build_wb_thread_lines(
     if not isinstance(lm, dict):
         return lines
     text = str(lm.get("text") or "").strip()
-    if not text:
-        return lines
     ts = int(lm.get("addTimestamp") or 0)
-    if any(abs(ts - ts_) <= 3000 and t.strip() == text for _, t, ts_, __ in lines):
+    if text and any(
+        abs(ts - ts_) <= 3000 and _messages_match_preview(text, t) for _, t, ts_, __ in lines
+    ):
+        return lines
+    if not text:
         return lines
     role = role_from_prefixed_text(text) or _resolve_last_message_role(lm, chat_row, events, cid)
     lines = list(lines)

@@ -419,7 +419,7 @@ AUTO_LAST_RUN_KEY = "auto_schedule_last_run_at"
 TELEGRAM_REPORT_ENABLED = "telegram_report_enabled"
 TELEGRAM_REPORT_INTERVAL = "telegram_report_interval"
 TELEGRAM_REPORT_LAST_SENT = "telegram_report_last_sent"
-_WB_CHAT_LIST_TTL_S = 55.0
+_WB_CHAT_LIST_TTL_S = 300.0
 _OZON_CHAT_LIST_TTL_S = 55.0
 _wb_chat_list_cache: dict[int, tuple[float, list]] = {}
 _ozon_chat_list_cache: dict[int, tuple[float, list, Optional[str]]] = {}
@@ -1827,17 +1827,36 @@ async def api_wb_buyer_chat_list(
     _: UserRow = Depends(require_user),
 ):
     s = _require_wb_store_for_chats(db, store_id)
+    sid = int(store_id)
+    stale_ent = _wb_chat_list_cache.get(sid)
     try:
         chats = await asyncio.wait_for(
             _wb_buyer_chat_list_cached(store_id, s.api_key, force_refresh=refresh),
-            timeout=120.0,
+            timeout=90.0,
         )
     except asyncio.TimeoutError:
+        if stale_ent and stale_ent[1]:
+            return {
+                "chats": list(stale_ent[1]),
+                "stale": True,
+                "warning": (
+                    "WB не ответил за 90 с (лимит API или автозапуск). Показан сохранённый список — "
+                    "нажмите «Обновить список чатов» через 1–2 мин."
+                ),
+            }
         raise HTTPException(
             504,
-            "WB чаты: таймаут 120 с. WB buyer-chat отвечает медленно или 429 — подождите 1–2 мин и нажмите «Обновить».",
+            "WB чаты: таймаут 90 с. WB buyer-chat отвечает медленно или 429 — подождите 1–2 мин и нажмите «Обновить».",
         ) from None
     except HttpStatusError as e:
+        if e.status == 429 and stale_ent and stale_ent[1]:
+            return {
+                "chats": list(stale_ent[1]),
+                "stale": True,
+                "warning": (
+                    "WB: лимит запросов (429). Показан сохранённый список чатов — повторите обновление позже."
+                ),
+            }
         raise _wb_chat_http_error(e) from e
     return {"chats": chats}
 
