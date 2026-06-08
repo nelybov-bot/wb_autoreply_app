@@ -1,8 +1,10 @@
 """Ozon: важные уведомления из чатов поддержки (штрафы, ИС, блокировки)."""
 from __future__ import annotations
 
+import html
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..db import Database
@@ -28,24 +30,36 @@ DEFAULT_PROMPT = (
 )
 
 DEFAULT_TELEGRAM_TEMPLATE = (
-    "⚠️ Ozon: важное уведомление\n"
-    "Магазин: {store_name}\n"
-    "Тип: {threat_type}\n"
-    "Сумма: {amount}\n"
-    "Товар: {product_ref}\n"
-    "{summary}\n\n"
-    "Действия: {action_needed}\n"
-    "Чат: {chat_type}\n"
-    "Дата: {message_at}\n\n"
-    "Текст:\n{message_text}"
+    "⚠️ <b>{telegram_title}</b>\n\n"
+    "🏪 <b>Магазин:</b> {store_name}\n"
+    "{optional_threat_type}"
+    "📅 <b>Срок:</b> {deadline}\n"
+    "⚡ <b>Последствия:</b> {consequence}\n"
+    "{optional_amount}{optional_product}"
+    "\n{summary}\n\n"
+    "✅ <b>Действия:</b> {action_needed}\n"
+    "🕐 {message_at} · {chat_type}"
 )
+
+_TITLE_RULES: list[tuple[str, str]] = [
+    (r"сертификат|документ.{0,20}качеств", "Запрос сертификата качества"),
+    (r"интеллектуальн|правообладател", "Нарушение интеллектуальной собственности"),
+    (r"фальсификат|подделк", "Подозрение в фальсификации"),
+    (r"блокиров|скрыть.{0,15}площадк|снять с продаж", "Угроза снятия с продажи"),
+    (r"штраф", "Штраф от Ozon"),
+]
 
 JSON_SUFFIX = (
     " Ответь строго одним JSON-объектом, без текста до или после. "
-    'Формат: {"important": true или false, "threat_type": "краткий тип или —", '
-    '"amount": "сумма штрафа или —", "product_ref": "товар/SKU/артикул или —", '
-    '"summary": "краткая сводка 1–3 предложения", '
-    '"action_needed": "что проверить или сделать, чтобы избежать штрафа"}'
+    'Формат: {"important": true или false, '
+    '"telegram_title": "заголовок 3–6 слов, напр. Запрос сертификата качества", '
+    '"threat_type": "тип до 40 символов или —", '
+    '"deadline": "срок, напр. 7 дней или 15.06.2026 или —", '
+    '"consequence": "до 50 символов, напр. скрытие товара с площадки или —", '
+    '"amount": "сумма штрафа или —", '
+    '"product_ref": "SKU и краткое название или —", '
+    '"summary": "одно короткое предложение, до 120 символов", '
+    '"action_needed": "одна короткая фраза до 100 символов, без путей меню целиком"}'
 )
 
 
@@ -61,9 +75,148 @@ def ozon_alerts_from_date(db: Database):
     return parse_reply_from_date(db.get_setting(SETTING_FROM_DATE) or "")
 
 
+def _dash(val: str) -> bool:
+    v = (val or "").strip()
+    return not v or v in ("—", "-", "нет", "не указано")
+
+
+def _truncate_text(val: str, max_len: int) -> str:
+    s = re.sub(r"\s+", " ", (val or "").strip())
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 1].rstrip() + "…"
+
+
+def _escape_tg(val: str) -> str:
+    return html.escape((val or "—").strip() or "—")
+
+
+def _optional_html_line(label: str, value: str, emoji: str = "") -> str:
+    if _dash(value):
+        return ""
+    return f"{emoji}<b>{label}:</b> {_escape_tg(value)}\n"
+
+
+def _template_uses_html(template: str) -> bool:
+    return bool(re.search(r"</?[bi]>|<code>|<pre>", template or "", re.I))
+
+
+def is_legacy_telegram_template(template: str) -> bool:
+    """Старый шаблон с полным текстом Ozon — заменяем на компактный."""
+    t = (template or "").strip()
+    if not t:
+        return False
+    if "{message_text}" in t:
+        return True
+    if "Ozon: важное уведомление" in t:
+        return True
+    if "Текст:" in t and not _template_uses_html(t):
+        return True
+    return False
+
+
 def get_telegram_template(db: Database) -> str:
     t = (db.get_setting(SETTING_TEMPLATE) or "").strip()
-    return t or DEFAULT_TELEGRAM_TEMPLATE
+    if not t or is_legacy_telegram_template(t):
+        return DEFAULT_TELEGRAM_TEMPLATE
+    return t
+
+
+def _strip_urls(text: str) -> str:
+    return re.sub(r"https?://\S+", "", text or "").strip()
+
+
+def _infer_title(blob: str, threat_type: str, telegram_title: str) -> str:
+    title = (telegram_title or "").strip()
+    if title and not _dash(title) and len(title) <= 60:
+        return title
+    low = (blob + " " + threat_type).lower()
+    for pattern, label in _TITLE_RULES:
+        if re.search(pattern, low):
+            return label
+    if threat_type and not _dash(threat_type):
+        return _truncate_text(threat_type, 50)
+    return "Важное уведомление Ozon"
+
+
+def _infer_deadline(blob: str, deadline: str) -> str:
+    if deadline and not _dash(deadline):
+        return _truncate_text(deadline, 40)
+    m = re.search(r"в течение\s+(\d+)\s+дн", blob, re.IGNORECASE)
+    if m:
+        n = int(m.group(1))
+        word = "день" if n % 10 == 1 and n % 100 != 11 else (
+            "дня" if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14) else "дней"
+        )
+        return f"{n} {word}"
+    m = re.search(r"до\s+(\d{1,2}[.\-/]\d{1,2}(?:[.\-/]\d{2,4})?)", blob, re.IGNORECASE)
+    if m:
+        return f"до {m.group(1)}"
+    return "—"
+
+
+def _infer_consequence(blob: str, consequence: str) -> str:
+    if consequence and not _dash(consequence):
+        return _truncate_text(consequence, 60)
+    low = blob.lower()
+    if re.search(r"скрыть|скроем|скрыти", low):
+        return "скрытие товара с площадки"
+    if re.search(r"снять с продаж|сняти", low):
+        return "снятие с продажи"
+    if re.search(r"блокиров", low):
+        return "блокировка товара"
+    if re.search(r"штраф", low):
+        return "штраф"
+    return "—"
+
+
+def _shorten_product_ref(ref: str) -> str:
+    s = _strip_urls((ref or "").strip())
+    m = re.match(r"^(\d+)\s*[\(—\-]?\s*(.+)$", s)
+    if m:
+        sku, name = m.group(1), m.group(2).rstrip(")").strip()
+        name = _truncate_text(name, 45)
+        return f"{sku} — {name}"
+    return _truncate_text(s, 70)
+
+
+def _shorten_action(action: str, blob: str) -> str:
+    a = _strip_urls((action or "").strip())
+    if len(a) <= 110:
+        return a
+    low = (a + " " + blob).lower()
+    if "сертификат" in low or "документ" in low and "качеств" in low:
+        return "Загрузить сертификат в «Товары → Сертификаты» и привязать к товару"
+    if "удал" in low or "снять" in low:
+        return "Срочно выполнить требование Ozon по товару"
+    return _truncate_text(a, 110)
+
+
+def _shorten_summary(summary: str, blob: str) -> str:
+    s = _strip_urls((summary or "").strip())
+    if len(s) <= 140:
+        return s
+    low = blob.lower()
+    if "сертификат" in low or ("документ" in low and "качеств" in low):
+        return "Покупатель запросил документ качества — нужно загрузить в ЛК."
+    return _truncate_text(s, 140)
+
+
+def normalize_alert_for_telegram(parsed: dict, message_text: str) -> dict:
+    """Сжимает поля ИИ + эвристики для короткого Telegram-сообщения."""
+    blob = _strip_urls((message_text or "") + "\n" + (parsed.get("summary") or ""))
+    threat_type = str(parsed.get("threat_type") or "—").strip() or "—"
+    out = dict(parsed)
+    out["telegram_title"] = _infer_title(
+        blob, threat_type, str(parsed.get("telegram_title") or "")
+    )
+    out["threat_type"] = _truncate_text(threat_type, 45) if not _dash(threat_type) else "—"
+    out["deadline"] = _infer_deadline(blob, str(parsed.get("deadline") or ""))
+    out["consequence"] = _infer_consequence(blob, str(parsed.get("consequence") or ""))
+    out["product_ref"] = _shorten_product_ref(str(parsed.get("product_ref") or ""))
+    out["summary"] = _shorten_summary(str(parsed.get("summary") or ""), blob)
+    out["action_needed"] = _shorten_action(str(parsed.get("action_needed") or ""), blob)
+    return out
 
 
 def render_telegram_message(
@@ -78,19 +231,57 @@ def render_telegram_message(
     product_ref: str,
     summary: str,
     action_needed: str,
-) -> str:
+    telegram_title: str = "",
+    deadline: str = "",
+    consequence: str = "",
+) -> Tuple[str, Optional[str]]:
+    """Текст для Telegram и parse_mode (HTML) или None."""
     template = get_telegram_template(db)
-    return template.format(
-        store_name=(store_name or "—").strip(),
-        chat_type=(chat_type or "—").strip(),
-        message_at=(message_at or "—").strip(),
-        message_text=(message_text or "—").strip()[:2000],
-        threat_type=(threat_type or "—").strip(),
-        amount=(amount or "—").strip(),
-        product_ref=(product_ref or "—").strip(),
-        summary=(summary or "—").strip(),
-        action_needed=(action_needed or "—").strip(),
+    use_html = _template_uses_html(template)
+    esc = _escape_tg if use_html else (lambda s: (s or "—").strip() or "—")
+
+    title = _truncate_text(telegram_title or "Важное уведомление Ozon", 60)
+    threat_short = _truncate_text(threat_type, 45) if not _dash(threat_type) else ""
+    known_titles = {label for _, label in _TITLE_RULES}
+    show_type = bool(
+        threat_short
+        and title not in known_titles
+        and threat_short.lower() not in (title or "").lower()
+        and len(threat_short) <= 45
     )
+    ctx = {
+        "store_name": esc(store_name),
+        "chat_type": esc(chat_type),
+        "message_at": esc(message_at),
+        "message_text": esc(_truncate_text(message_text, 200)),
+        "message_text_short": esc(_truncate_text(message_text, 80)),
+        "threat_type": esc(threat_short or "—"),
+        "amount": esc(amount),
+        "product_ref": esc(product_ref),
+        "summary": esc(summary),
+        "action_needed": esc(action_needed),
+        "telegram_title": esc(title),
+        "deadline": esc(deadline if not _dash(deadline) else "—"),
+        "consequence": esc(consequence if not _dash(consequence) else "—"),
+        "optional_threat_type": (
+            _optional_html_line("Тип", threat_short, "📋 ") if use_html and show_type else (
+                f"Тип: {esc(threat_short)}\n" if not use_html and show_type else ""
+            )
+        ),
+        "optional_amount": _optional_html_line("Сумма", amount, "💰 ") if use_html else (
+            f"Сумма: {esc(amount)}\n" if not _dash(amount) else ""
+        ),
+        "optional_product": _optional_html_line("Товар", product_ref, "📦 ") if use_html else (
+            f"Товар: {esc(product_ref)}\n" if not _dash(product_ref) else ""
+        ),
+    }
+    try:
+        body = template.format(**ctx).strip()
+    except KeyError:
+        body = DEFAULT_TELEGRAM_TEMPLATE.format(**ctx).strip()
+        use_html = True
+    body = re.sub(r"\n{3,}", "\n\n", body)
+    return body, ("HTML" if use_html else None)
 
 
 def parse_ozon_alert_json(txt: str) -> Optional[dict]:
@@ -105,8 +296,12 @@ def parse_ozon_alert_json(txt: str) -> Optional[dict]:
     summary = str(obj.get("summary") or "").strip()
     if not summary:
         return None
+    threat_type = str(obj.get("threat_type") or "—").strip() or "—"
     return {
-        "threat_type": str(obj.get("threat_type") or "—").strip() or "—",
+        "telegram_title": str(obj.get("telegram_title") or threat_type or "—").strip() or "—",
+        "threat_type": threat_type,
+        "deadline": str(obj.get("deadline") or "—").strip() or "—",
+        "consequence": str(obj.get("consequence") or "—").strip() or "—",
         "amount": str(obj.get("amount") or "—").strip() or "—",
         "product_ref": str(obj.get("product_ref") or "—").strip() or "—",
         "summary": summary,
@@ -229,19 +424,23 @@ async def maybe_record_ozon_alert(
         token = (db.get_setting("telegram_bot_token") or "").strip()
         chat_tg = resolve_telegram_chat_id(db, "ozon_alerts")
         if token and chat_tg:
-            body = render_telegram_message(
+            compact = normalize_alert_for_telegram(parsed, message_text)
+            body, parse_mode = render_telegram_message(
                 db,
                 store_name=store_name,
                 chat_type=chat_type,
-                message_at=message_at,
+                message_at=format_message_at_display(message_at),
                 message_text=message_text,
-                threat_type=parsed["threat_type"],
-                amount=parsed["amount"],
-                product_ref=parsed["product_ref"],
-                summary=parsed["summary"],
-                action_needed=parsed["action_needed"],
+                threat_type=compact["threat_type"],
+                amount=compact["amount"],
+                product_ref=compact["product_ref"],
+                summary=compact["summary"],
+                action_needed=compact["action_needed"],
+                telegram_title=compact.get("telegram_title", ""),
+                deadline=compact.get("deadline", ""),
+                consequence=compact.get("consequence", ""),
             )
-            ok, _ = await send_telegram_message(token, chat_tg, body)
+            ok, _ = await send_telegram_message(token, chat_tg, body, parse_mode=parse_mode)
             if ok:
                 db.mark_ozon_important_alert_telegram_sent(alert_id)
             else:

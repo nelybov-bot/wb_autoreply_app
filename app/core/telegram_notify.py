@@ -175,7 +175,13 @@ def resolve_telegram_chat_id(db, purpose: str) -> str:
     return specific or default
 
 
-async def send_telegram_message(bot_token: str, chat_id: str, text: str) -> Tuple[bool, str]:
+async def send_telegram_message(
+    bot_token: str,
+    chat_id: str,
+    text: str,
+    *,
+    parse_mode: Optional[str] = None,
+) -> Tuple[bool, str]:
     """
     Отправка в Telegram. Возвращает (успех, описание ошибки).
     Telegram Bot API часто отвечает HTTP 200 с ok=false — проверяем поле ok в JSON.
@@ -198,7 +204,13 @@ async def send_telegram_message(bot_token: str, chat_id: str, text: str) -> Tupl
     try:
         async with aiohttp.ClientSession() as session:
             for chunk in chunks:
-                payload = {"chat_id": cid, "text": chunk, "disable_web_page_preview": True}
+                payload: dict = {
+                    "chat_id": cid,
+                    "text": chunk,
+                    "disable_web_page_preview": True,
+                }
+                if parse_mode:
+                    payload["parse_mode"] = parse_mode
                 async with session.post(
                     url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
                 ) as resp:

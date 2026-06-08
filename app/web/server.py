@@ -97,6 +97,7 @@ from app.core.ozon_alerts import (
     SETTING_FROM_DATE as OZON_ALERTS_FROM_DATE,
     SETTING_TELEGRAM as OZON_ALERTS_TELEGRAM,
     SETTING_TEMPLATE as OZON_ALERTS_TEMPLATE,
+    is_legacy_telegram_template,
 )
 from app.core.workflows import (
     auto_process_ozon_buyer_chats,
@@ -1662,6 +1663,8 @@ def api_set_settings(body: dict[str, str], db: Database = Depends(get_db), _: Us
             v = normalize_telegram_bot_token(v or "")
             _tg_report_fail_until = 0.0
             _tg_report_fail_token = ""
+        if k == OZON_ALERTS_TEMPLATE and is_legacy_telegram_template(v or ""):
+            v = ""
         db.set_setting(k, v or "")
     return {"ok": True}
 

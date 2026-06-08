@@ -2314,16 +2314,15 @@
 
   // ---- Settings ----
   const DEFAULT_OZON_ALERT_TELEGRAM_TEMPLATE = (
-    '⚠️ Ozon: важное уведомление\n'
-    + 'Магазин: {store_name}\n'
-    + 'Тип: {threat_type}\n'
-    + 'Сумма: {amount}\n'
-    + 'Товар: {product_ref}\n'
-    + '{summary}\n\n'
-    + 'Действия: {action_needed}\n'
-    + 'Чат: {chat_type}\n'
-    + 'Дата: {message_at}\n\n'
-    + 'Текст:\n{message_text}'
+    '⚠️ <b>{telegram_title}</b>\n\n'
+    + '🏪 <b>Магазин:</b> {store_name}\n'
+    + '{optional_threat_type}'
+    + '📅 <b>Срок:</b> {deadline}\n'
+    + '⚡ <b>Последствия:</b> {consequence}\n'
+    + '{optional_amount}{optional_product}'
+    + '\n{summary}\n\n'
+    + '✅ <b>Действия:</b> {action_needed}\n'
+    + '🕐 {message_at} · {chat_type}'
   );
 
   const DEFAULT_CARD_CHECK_TELEGRAM_TEMPLATE = (

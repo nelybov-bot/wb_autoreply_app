@@ -706,7 +706,7 @@
           <div class="form-group">
             <label>Шаблон сообщения в Telegram</label>
             <textarea id="setting-ozon_alerts_telegram_template" rows="12" style="width:100%; font-family:monospace; font-size:0.85rem;"></textarea>
-            <div class="form-hint">Переменные: {store_name}, {chat_type}, {message_at}, {message_text}, {threat_type}, {amount}, {product_ref}, {summary}, {action_needed}</div>
+            <div class="form-hint">Переменные: {telegram_title}, {store_name}, {threat_type}, {deadline}, {consequence}, {amount}, {product_ref}, {summary}, {action_needed}, {message_at}, {chat_type}. HTML-теги &lt;b&gt; для выделения. Полный текст Ozon в Telegram не включается — только краткая сводка от ИИ.</div>
           </div>
           <div class="form-group">
             <label>Промпт ИИ</label>
