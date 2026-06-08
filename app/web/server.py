@@ -33,7 +33,16 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 from app.logging_config import setup_logging
 setup_logging(LOG_PATH)
 
-from app.db import Database, Store, ItemRow, PromptRow, UserRow, AuditEventRow, CardErrorAlertRow
+from app.db import (
+    Database,
+    Store,
+    ItemRow,
+    PromptRow,
+    UserRow,
+    AuditEventRow,
+    CardErrorAlertRow,
+    OzonImportantAlertRow,
+)
 from app.web import tasks as web_tasks
 from app.core.net import HttpStatusError
 from app.core.wb_buyer_chat import (
@@ -48,6 +57,7 @@ from app.core.wb_buyer_chat import (
 )
 from app.core.ozon_buyer_chat import (
     collect_ozon_thread_lines,
+    format_ozon_datetime_msk,
     is_ozon_buyer_chat_row,
     ozon_chat_category,
     ozon_chat_error_message,
@@ -76,9 +86,18 @@ from app.core.card_check import (
     SETTING_CARD_CHECK_TEMPLATE,
 )
 from app.core.telegram_notify import resolve_telegram_chat_id, send_activity_report
+from app.core.ozon_alerts import (
+    DEFAULT_TELEGRAM_TEMPLATE as DEFAULT_OZON_ALERT_TELEGRAM_TEMPLATE,
+    SETTING_ENABLED as OZON_ALERTS_ENABLED,
+    SETTING_FROM_DATE as OZON_ALERTS_FROM_DATE,
+    SETTING_TELEGRAM as OZON_ALERTS_TELEGRAM,
+    SETTING_TEMPLATE as OZON_ALERTS_TEMPLATE,
+)
 from app.core.workflows import (
     auto_process_ozon_buyer_chats,
+    auto_process_ozon_important_alerts,
     auto_process_wb_buyer_chats,
+    scan_ozon_important_alerts_for_store,
     generate_mass,
     generate_ozon_buyer_chat_reply,
     generate_wb_buyer_chat_reply,
@@ -399,6 +418,7 @@ class AutoScheduleBody(BaseModel):
     run_questions: bool = True
     run_wb_chats: bool = False
     run_ozon_chats: bool = False
+    run_ozon_alerts: bool = False
     run_ozon_actions_remove: bool = False
 
 
@@ -498,6 +518,7 @@ def _get_auto_schedule(db: Database) -> dict:
         "run_questions": True,
         "run_wb_chats": False,
         "run_ozon_chats": False,
+        "run_ozon_alerts": False,
         "run_ozon_actions_remove": False,
     }
     if not raw:
@@ -514,6 +535,7 @@ def _get_auto_schedule(db: Database) -> dict:
         cfg["run_questions"] = bool(obj.get("run_questions", True))
         cfg["run_wb_chats"] = bool(obj.get("run_wb_chats", False))
         cfg["run_ozon_chats"] = bool(obj.get("run_ozon_chats", False))
+        cfg["run_ozon_alerts"] = bool(obj.get("run_ozon_alerts", False))
         cfg["run_ozon_actions_remove"] = bool(obj.get("run_ozon_actions_remove", False))
     except Exception:
         pass
@@ -534,6 +556,7 @@ def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
         "run_questions": bool(body.run_questions),
         "run_wb_chats": bool(body.run_wb_chats),
         "run_ozon_chats": bool(body.run_ozon_chats),
+        "run_ozon_alerts": bool(body.run_ozon_alerts),
         "run_ozon_actions_remove": bool(body.run_ozon_actions_remove),
     }
     if not (
@@ -541,9 +564,13 @@ def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
         or cfg["run_questions"]
         or cfg["run_wb_chats"]
         or cfg["run_ozon_chats"]
+        or cfg["run_ozon_alerts"]
         or cfg["run_ozon_actions_remove"]
     ):
-        raise HTTPException(400, "Нужно включить хотя бы один тип: отзывы, вопросы, чаты WB/Ozon или автоудаление из акций Ozon")
+        raise HTTPException(
+            400,
+            "Нужно включить хотя бы один тип: отзывы, вопросы, чаты WB/Ozon, уведомления Ozon или автоудаление из акций",
+        )
     db.set_setting(AUTO_SCHEDULE_KEY, json.dumps(cfg, ensure_ascii=False))
     return cfg
 
@@ -584,6 +611,7 @@ async def _process_auto_store(
     item_types: list[str],
     run_wb_chats: bool,
     run_ozon_chats: bool,
+    run_ozon_alerts: bool,
     run_ozon_actions_remove: bool,
     openai_key: str,
     ozon_actions_cfg: dict,
@@ -661,6 +689,25 @@ async def _process_auto_store(
         else:
             result["ozon_chats"] = {"ozon_chat_skipped": 1, "reason": "no_openai_key"}
 
+    if run_ozon_alerts:
+        _auto_state["phase"] = "ozon_alerts"
+        if key:
+            if (
+                store.marketplace == "ozon"
+                and (store.client_id or "").strip()
+                and (store.api_key or "").strip()
+            ):
+                result["ozon_alerts"] = await auto_process_ozon_important_alerts(
+                    db, [store], openai_key=key,
+                )
+            else:
+                result["ozon_alerts"] = {
+                    "ozon_alert_skipped": 1,
+                    "reason": "not_ozon_or_no_keys",
+                }
+        else:
+            result["ozon_alerts"] = {"ozon_alert_skipped": 1, "reason": "no_openai_key"}
+
     if run_ozon_actions_remove:
         _auto_state["phase"] = "ozon_actions"
         if (
@@ -732,6 +779,19 @@ async def _process_auto_store(
             summary_parts.append(
                 f"Чаты Ozon: отправлено {int(oz.get('ozon_chat_sent') or 0)} "
                 f"(кандидатов {int(oz.get('ozon_chat_candidates') or 0)})"
+            )
+    oz_al = result.get("ozon_alerts") if isinstance(result.get("ozon_alerts"), dict) else {}
+    if oz_al:
+        if oz_al.get("ozon_alert_skip_reason") == "disabled":
+            pass
+        elif int(oz_al.get("ozon_alert_new") or 0):
+            summary_parts.append(
+                f"Уведомления Ozon: важных {int(oz_al.get('ozon_alert_new') or 0)} "
+                f"(чатов {int(oz_al.get('ozon_alert_chats_scanned') or 0)})"
+            )
+        elif oz_al.get("ozon_alert_chats_scanned"):
+            summary_parts.append(
+                f"Уведомления Ozon: проверено чатов {int(oz_al.get('ozon_alert_chats_scanned') or 0)}, новых нет"
             )
     oa = result.get("ozon_actions") if isinstance(result.get("ozon_actions"), dict) else {}
     if oa:
@@ -832,6 +892,7 @@ async def _run_auto_slot(slot: str) -> None:
         run_questions = bool(cfg.get("run_questions", True))
         run_wb_chats = bool(cfg.get("run_wb_chats", False))
         run_ozon_chats = bool(cfg.get("run_ozon_chats", False))
+        run_ozon_alerts = bool(cfg.get("run_ozon_alerts", False))
         run_ozon_actions_remove = bool(cfg.get("run_ozon_actions_remove", False))
         item_types: list[str] = []
         if run_reviews:
@@ -841,13 +902,14 @@ async def _run_auto_slot(slot: str) -> None:
         key = (db.get_setting("openai_key") or "").strip()
         ozon_actions_cfg = _get_ozon_actions_settings(db)
         log.info(
-            "auto_run start slot=%s stores=%s reviews=%s questions=%s wb_chats=%s ozon_chats=%s ozon_actions=%s",
+            "auto_run start slot=%s stores=%s reviews=%s questions=%s wb_chats=%s ozon_chats=%s ozon_alerts=%s ozon_actions=%s",
             slot,
             [s.id for s in sorted_stores],
             run_reviews,
             run_questions,
             run_wb_chats,
             run_ozon_chats,
+            run_ozon_alerts,
             run_ozon_actions_remove,
         )
         stores_results: list[dict] = []
@@ -867,6 +929,7 @@ async def _run_auto_slot(slot: str) -> None:
                 item_types=item_types,
                 run_wb_chats=run_wb_chats,
                 run_ozon_chats=run_ozon_chats,
+                run_ozon_alerts=run_ozon_alerts,
                 run_ozon_actions_remove=run_ozon_actions_remove,
                 openai_key=key,
                 ozon_actions_cfg=ozon_actions_cfg,
@@ -890,12 +953,16 @@ async def _run_auto_slot(slot: str) -> None:
             "sent_failed": _sum_store_results(stores_results, "sent_failed"),
             "run_wb_chats": run_wb_chats,
             "run_ozon_chats": run_ozon_chats,
+            "run_ozon_alerts": run_ozon_alerts,
             "run_ozon_actions_remove": run_ozon_actions_remove,
             "wb_chat_sent": sum(
                 int((r.get("wb_chats") or {}).get("wb_chat_sent") or 0) for r in stores_results
             ),
             "ozon_chat_sent": sum(
                 int((r.get("ozon_chats") or {}).get("ozon_chat_sent") or 0) for r in stores_results
+            ),
+            "ozon_alert_new": sum(
+                int((r.get("ozon_alerts") or {}).get("ozon_alert_new") or 0) for r in stores_results
             ),
         }
         db.add_audit_event(
@@ -1172,6 +1239,17 @@ def _schedule_hint(cfg: dict, db: Database) -> str:
             return "В цикле включены чаты Ozon, но среди выбранных магазинов нет Ozon с Client-Id и Api-Key."
         if not (db.get_setting("openai_key") or "").strip():
             return "Автоответы в чатах Ozon: нужен ключ OpenAI в «Настройки»."
+    if cfg.get("run_ozon_alerts"):
+        ozon_stores = [
+            s for s in stores
+            if s.marketplace == "ozon" and (s.client_id or "").strip() and (s.api_key or "").strip()
+        ]
+        if not ozon_stores:
+            return "В цикле включены уведомления Ozon, но нет Ozon-магазина с Client-Id и Api-Key."
+        if not (db.get_setting("openai_key") or "").strip():
+            return "Уведомления Ozon: нужен ключ OpenAI в «Настройки»."
+        if (db.get_setting(OZON_ALERTS_ENABLED) or "0").strip() != "1":
+            return "Включите «Важные уведомления Ozon» в настройках и сохраните."
     if cfg.get("run_ozon_actions_remove"):
         ozon_stores = [
             s for s in stores
@@ -1222,6 +1300,7 @@ def _auto_status(db: Database) -> dict:
         "run_questions": bool(cfg.get("run_questions", True)),
         "run_wb_chats": bool(cfg.get("run_wb_chats", False)),
         "run_ozon_chats": bool(cfg.get("run_ozon_chats", False)),
+        "run_ozon_alerts": bool(cfg.get("run_ozon_alerts", False)),
         "run_ozon_actions_remove": bool(cfg.get("run_ozon_actions_remove", False)),
         "next_slot": next_slot,
         "timezone": "Europe/Moscow",
@@ -1498,6 +1577,11 @@ def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(requir
         SETTING_CARD_CHECK_TELEGRAM,
         SETTING_CARD_CHECK_TEMPLATE,
         SETTING_CARD_CHECK_IN_REPORT,
+        OZON_ALERTS_ENABLED,
+        OZON_ALERTS_TELEGRAM,
+        OZON_ALERTS_FROM_DATE,
+        OZON_ALERTS_TEMPLATE,
+        "ozon_alerts_telegram_chat_id",
         "theme",
         SETTING_REPLY_FROM,
         SETTING_AUTO_CHAT_MAX_AGE_DAYS,
@@ -1610,6 +1694,91 @@ def api_list_card_errors(
     )
     store_names = {s.id: s.name for s in db.list_stores()}
     return [_card_error_to_out(r, store_names.get(r.store_id, "")) for r in rows]
+
+
+def _ozon_alert_to_out(row: OzonImportantAlertRow, store_name: str = "") -> dict:
+    return {
+        "id": row.id,
+        "ts": row.ts,
+        "store_id": row.store_id,
+        "store_name": store_name,
+        "chat_id": row.chat_id,
+        "message_id": row.message_id,
+        "chat_type": row.chat_type,
+        "message_at": row.message_at,
+        "message_at_label": format_ozon_datetime_msk(row.message_at) or row.message_at,
+        "message_text": row.message_text,
+        "threat_type": row.threat_type,
+        "amount": row.amount,
+        "product_ref": row.product_ref,
+        "summary": row.summary,
+        "action_needed": row.action_needed,
+        "status": row.status,
+        "telegram_sent": row.telegram_sent,
+    }
+
+
+@app.get("/api/ozon/alerts")
+def api_list_ozon_alerts(
+    store_id: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    important_only: bool = Query(True),
+    limit: int = Query(200, ge=1, le=500),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    rows = db.list_ozon_important_alerts(
+        store_id=store_id,
+        status=status,
+        limit=limit,
+    )
+    if important_only:
+        rows = [r for r in rows if r.status != "ignored"]
+    store_names = {s.id: s.name for s in db.list_stores()}
+    return [_ozon_alert_to_out(r, store_names.get(r.store_id, "")) for r in rows]
+
+
+@app.patch("/api/ozon/alerts/{alert_id}")
+def api_update_ozon_alert_status(
+    alert_id: int,
+    body: dict,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    st = str((body or {}).get("status") or "").strip()
+    ok = db.update_ozon_important_alert_status(alert_id, st)
+    if not ok:
+        raise HTTPException(400, "Неверный статус или алерт не найден")
+    return {"ok": True}
+
+
+@app.post("/api/ozon/alerts/{store_id}/scan")
+async def api_scan_ozon_alerts(
+    store_id: int,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_permission("view_settings")),
+):
+    stores = [s for s in db.list_stores() if s.id == int(store_id)]
+    if not stores:
+        raise HTTPException(404, "Магазин не найден")
+    store = stores[0]
+    if store.marketplace != "ozon":
+        raise HTTPException(400, "Только для магазинов Ozon")
+    key = (db.get_setting("openai_key") or "").strip()
+    if not key:
+        raise HTTPException(400, "Не задан OpenAI ключ")
+    if (db.get_setting(OZON_ALERTS_ENABLED) or "0").strip() != "1":
+        raise HTTPException(400, "Включите «Важные уведомления Ozon» в настройках")
+    try:
+        stats = await asyncio.wait_for(
+            scan_ozon_important_alerts_for_store(db, store, openai_key=key),
+            timeout=600.0,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "Сканирование Ozon превысило 10 минут — попробуйте снова позже") from None
+    except HttpStatusError as e:
+        raise _ozon_chat_http_error(e) from e
+    return {"ok": True, **stats}
 
 
 @app.patch("/api/card-errors/{alert_id}")
@@ -2239,12 +2408,22 @@ async def api_ozon_buyer_chat_list(
         if not cid:
             continue
         chat_obj = row.get("chat") if isinstance(row.get("chat"), dict) else {}
+        created_raw = str(chat_obj.get("created_at") or "")
+        updated_raw = str(
+            chat_obj.get("last_message_at")
+            or chat_obj.get("updated_at")
+            or chat_obj.get("created_at")
+            or ""
+        )
         chats.append({
             "chat_id": cid,
             "chat_type": ozon_chat_type(row) or "—",
             "category": ozon_chat_category(row),
             "chat_status": chat_obj.get("chat_status"),
-            "created_at": chat_obj.get("created_at"),
+            "created_at": created_raw,
+            "created_at_label": format_ozon_datetime_msk(created_raw) or created_raw or "—",
+            "last_activity_at": updated_raw,
+            "last_activity_label": format_ozon_datetime_msk(updated_raw) or updated_raw or "—",
             "unread_count": row.get("unread_count"),
             "preview": _ozon_chat_preview(row),
         })

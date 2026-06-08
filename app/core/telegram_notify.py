@@ -15,17 +15,23 @@ TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 
 SETTING_REPORT_CHAT_ID = "telegram_report_chat_id"
 SETTING_CARD_ERROR_CHAT_ID = "telegram_card_error_chat_id"
+SETTING_OZON_ALERTS_CHAT_ID = "ozon_alerts_telegram_chat_id"
 
 
 def resolve_telegram_chat_id(db, purpose: str) -> str:
     """
-    purpose: default — мгновенные отзывы; report — периодический отчёт; card_error — ошибки карточки.
-    Для report и card_error пустое значение = чат по умолчанию (telegram_chat_id).
+    purpose: default — отзывы; report — отчёт; card_error — карточки; ozon_alerts — важные уведомления Ozon.
+    Для остальных пустое значение = чат по умолчанию (telegram_chat_id).
     """
     default = (db.get_setting("telegram_chat_id") or "").strip()
     if purpose == "default":
         return default
-    key = SETTING_REPORT_CHAT_ID if purpose == "report" else SETTING_CARD_ERROR_CHAT_ID
+    keys = {
+        "report": SETTING_REPORT_CHAT_ID,
+        "card_error": SETTING_CARD_ERROR_CHAT_ID,
+        "ozon_alerts": SETTING_OZON_ALERTS_CHAT_ID,
+    }
+    key = keys.get(purpose, SETTING_CARD_ERROR_CHAT_ID)
     specific = (db.get_setting(key) or "").strip()
     return specific or default
 

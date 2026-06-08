@@ -5,7 +5,7 @@ import datetime as dt
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from .chat_common import parse_api_error_detail
+from .chat_common import MSK, parse_api_error_detail
 
 
 def _ozon_user_role(user: Any, msg: Optional[dict] = None) -> str:
@@ -160,6 +160,14 @@ def ozon_chat_matches_filter(row: dict, filter_kind: str) -> bool:
     if kind in ("support", "news"):
         return ozon_chat_category(row) == "support"
     return is_ozon_buyer_chat_row(row)
+
+
+def format_ozon_datetime_msk(iso: str) -> str:
+    """Дата/время сообщения или чата для UI (МСК)."""
+    msg_dt = _parse_ozon_iso(iso)
+    if msg_dt is None:
+        return ""
+    return msg_dt.astimezone(MSK).strftime("%d.%m.%Y %H:%M")
 
 
 def _parse_ozon_iso(iso: str) -> Optional[dt.datetime]:

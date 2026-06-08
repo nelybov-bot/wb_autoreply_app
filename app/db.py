@@ -70,6 +70,25 @@ class AuditEventRow:
 
 
 @dataclass(frozen=True)
+class OzonImportantAlertRow:
+    id: int
+    ts: str
+    store_id: int
+    chat_id: str
+    message_id: str
+    chat_type: str
+    message_at: str
+    message_text: str
+    threat_type: str
+    amount: str
+    product_ref: str
+    summary: str
+    action_needed: str
+    status: str
+    telegram_sent: bool
+
+
+@dataclass(frozen=True)
 class CardErrorAlertRow:
     id: int
     ts: str
@@ -226,6 +245,32 @@ class Database:
             )
             c.execute(
                 "CREATE INDEX IF NOT EXISTS idx_card_errors_status ON card_error_alerts(status)"
+            )
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS ozon_important_alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    store_id INTEGER NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    chat_type TEXT NOT NULL DEFAULT '',
+                    message_at TEXT NOT NULL DEFAULT '',
+                    message_text TEXT NOT NULL DEFAULT '',
+                    threat_type TEXT NOT NULL DEFAULT '',
+                    amount TEXT NOT NULL DEFAULT '',
+                    product_ref TEXT NOT NULL DEFAULT '',
+                    summary TEXT NOT NULL DEFAULT '',
+                    action_needed TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'new',
+                    telegram_sent INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(store_id, chat_id, message_id)
+                )
+            """)
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ozon_alerts_ts ON ozon_important_alerts(ts)"
+            )
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ozon_alerts_status ON ozon_important_alerts(status)"
             )
             self._conn.commit()
             self._seed_prompts_if_empty()
@@ -424,9 +469,12 @@ class Database:
     def _seed_missing_prompts(self) -> None:
         from app.core.card_check import DEFAULT_BUYER_CHAT_PROMPT, DEFAULT_CARD_CHECK_PROMPT
 
+        from app.core.ozon_alerts import DEFAULT_PROMPT as DEFAULT_OZON_ALERT_PROMPT
+
         extra = [
             ("buyer_chat", "general", DEFAULT_BUYER_CHAT_PROMPT),
             ("card_check", "general", DEFAULT_CARD_CHECK_PROMPT),
+            ("ozon_important_alert", "general", DEFAULT_OZON_ALERT_PROMPT),
         ]
         with _DB_LOCK:
             for item_type, rating_group, text in extra:
@@ -440,6 +488,157 @@ class Database:
                         (item_type, rating_group, text),
                     )
             self._conn.commit()
+
+    # ---------- Ozon important alerts ----------
+    def has_ozon_important_alert(self, store_id: int, chat_id: str, message_id: str) -> bool:
+        with _DB_LOCK:
+            row = self._conn.execute(
+                """SELECT 1 FROM ozon_important_alerts
+                   WHERE store_id=? AND chat_id=? AND message_id=?""",
+                (int(store_id), (chat_id or "").strip(), (message_id or "").strip()),
+            ).fetchone()
+            return row is not None
+
+    def add_ozon_important_alert(
+        self,
+        *,
+        store_id: int,
+        chat_id: str,
+        message_id: str,
+        chat_type: str,
+        message_at: str,
+        message_text: str,
+        threat_type: str,
+        amount: str,
+        product_ref: str,
+        summary: str,
+        action_needed: str,
+        status: str = "new",
+    ) -> int:
+        st = (status or "new").strip().lower()
+        if st not in ("new", "resolved", "ignored"):
+            st = "new"
+        ts = dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                """INSERT INTO ozon_important_alerts(
+                       ts, store_id, chat_id, message_id, chat_type, message_at, message_text,
+                       threat_type, amount, product_ref, summary, action_needed, status, telegram_sent
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?, ?, 0)""",
+                (
+                    ts,
+                    int(store_id),
+                    (chat_id or "").strip(),
+                    (message_id or "").strip(),
+                    (chat_type or "").strip(),
+                    (message_at or "").strip(),
+                    (message_text or "").strip(),
+                    (threat_type or "").strip(),
+                    (amount or "").strip(),
+                    (product_ref or "").strip(),
+                    (summary or "").strip(),
+                    (action_needed or "").strip(),
+                    st,
+                ),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def mark_ozon_message_alert_processed(
+        self,
+        *,
+        store_id: int,
+        chat_id: str,
+        message_id: str,
+        chat_type: str = "",
+        message_at: str = "",
+        message_text: str = "",
+    ) -> None:
+        """Пометить сообщение как проверенное (не важное) — повторно не анализировать."""
+        if self.has_ozon_important_alert(store_id, chat_id, message_id):
+            return
+        self.add_ozon_important_alert(
+            store_id=store_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            chat_type=chat_type,
+            message_at=message_at,
+            message_text=message_text,
+            threat_type="—",
+            amount="—",
+            product_ref="—",
+            summary="(не важно)",
+            action_needed="—",
+            status="ignored",
+        )
+
+    def mark_ozon_important_alert_telegram_sent(self, alert_id: int) -> None:
+        with _DB_LOCK:
+            self._conn.execute(
+                "UPDATE ozon_important_alerts SET telegram_sent=1 WHERE id=?",
+                (int(alert_id),),
+            )
+            self._conn.commit()
+
+    def update_ozon_important_alert_status(self, alert_id: int, status: str) -> bool:
+        st = (status or "").strip().lower()
+        if st not in ("new", "resolved", "ignored"):
+            return False
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                "UPDATE ozon_important_alerts SET status=? WHERE id=?",
+                (st, int(alert_id)),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def list_ozon_important_alerts(
+        self,
+        *,
+        store_id: Optional[int] = None,
+        status: Optional[str] = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[OzonImportantAlertRow]:
+        where = []
+        params: list = []
+        if store_id is not None:
+            where.append("store_id=?")
+            params.append(int(store_id))
+        if status:
+            where.append("status=?")
+            params.append(status.strip())
+        w = ("WHERE " + " AND ".join(where)) if where else ""
+        safe_limit = max(1, min(int(limit), 500))
+        safe_offset = max(0, int(offset))
+        with _DB_LOCK:
+            rows = self._conn.execute(
+                f"""SELECT id, ts, store_id, chat_id, message_id, chat_type, message_at, message_text,
+                           threat_type, amount, product_ref, summary, action_needed, status, telegram_sent
+                    FROM ozon_important_alerts {w}
+                    ORDER BY id DESC LIMIT ? OFFSET ?""",
+                params + [safe_limit, safe_offset],
+            ).fetchall()
+            return [
+                OzonImportantAlertRow(
+                    id=int(r["id"]),
+                    ts=str(r["ts"] or ""),
+                    store_id=int(r["store_id"]),
+                    chat_id=str(r["chat_id"] or ""),
+                    message_id=str(r["message_id"] or ""),
+                    chat_type=str(r["chat_type"] or ""),
+                    message_at=str(r["message_at"] or ""),
+                    message_text=str(r["message_text"] or ""),
+                    threat_type=str(r["threat_type"] or ""),
+                    amount=str(r["amount"] or ""),
+                    product_ref=str(r["product_ref"] or ""),
+                    summary=str(r["summary"] or ""),
+                    action_needed=str(r["action_needed"] or ""),
+                    status=str(r["status"] or "new"),
+                    telegram_sent=bool(r["telegram_sent"]),
+                )
+                for r in rows
+            ]
 
     # ---------- Card error alerts ----------
     def has_card_error_alert(self, store_id: int, source_type: str, source_ref: str) -> bool:

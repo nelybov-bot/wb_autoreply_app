@@ -111,6 +111,7 @@
               <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="chats">Чаты</button>
               <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="telegram">Telegram</button>
               <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="card-check">Проверка карточек</button>
+              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="ozon-alerts">Уведомления Ozon</button>
               <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="ui">Интерфейс</button>
               <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="users" id="nav-settings-users">Пользователи</button>
               <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="prompts">Промпты</button>
@@ -120,6 +121,7 @@
       </div>
 
       <button type="button" class="nav-link" data-tab="card-errors">Ошибки карточек</button>
+      <button type="button" class="nav-link" data-tab="ozon-alerts">Уведомления Ozon</button>
       <button type="button" class="nav-link" data-tab="log">Журнал</button>
     </div>
   </nav>
@@ -499,6 +501,7 @@
             <label class="checkbox-row"><input type="checkbox" id="auto-run-questions" checked> Вопросы</label>
             <label class="checkbox-row"><input type="checkbox" id="auto-run-wb-chats"> Чаты WB</label>
             <label class="checkbox-row"><input type="checkbox" id="auto-run-ozon-chats"> Чаты Ozon</label>
+            <label class="checkbox-row"><input type="checkbox" id="auto-run-ozon-alerts"> Важные уведомления Ozon (поддержка)</label>
             <label class="checkbox-row"><input type="checkbox" id="auto-run-ozon-actions-remove"> Удаление из автоакций Ozon</label>
           </div>
           <div class="form-card auto-card-section auto-card-stores">
@@ -529,6 +532,7 @@
           <button type="button" data-settings-section="chats" role="tab">Чаты</button>
           <button type="button" data-settings-section="telegram" role="tab">Telegram</button>
           <button type="button" data-settings-section="card-check" role="tab">Карточки</button>
+          <button type="button" data-settings-section="ozon-alerts" role="tab">Ozon</button>
           <button type="button" data-settings-section="ui" role="tab">Интерфейс</button>
           <button type="button" data-settings-section="users" id="settings-seg-users" role="tab">Пользователи</button>
           <button type="button" data-settings-section="prompts" role="tab">Промпты</button>
@@ -583,6 +587,10 @@
           <div class="form-group">
             <label>ID чата для периодических отчётов</label>
             <input type="text" id="setting-telegram_report_chat_id" placeholder="необязательно — иначе как выше">
+          </div>
+          <div class="form-group">
+            <label>ID чата для важных уведомлений Ozon</label>
+            <input type="text" id="setting-ozon_alerts_telegram_chat_id" placeholder="необязательно — иначе чат по умолчанию">
           </div>
           <div class="form-group">
             <label class="checkbox-row"><input type="checkbox" id="setting-telegram_enabled"> Мгновенные уведомления (отзывы 1–3★, упаковка)</label>
@@ -674,12 +682,58 @@
           <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
         </div>
 
+        <div id="settings-section-ozon-alerts" class="settings-section form-card" hidden>
+          <h2>Важные уведомления Ozon</h2>
+          <p class="form-hint" style="margin-bottom: 14px;">Сканирует чаты «Поддержка и новости» Ozon (штрафы, ИС, блокировки). ИИ анализирует сообщения с выбранной даты и шлёт краткую сводку в Telegram.</p>
+          <div class="form-group">
+            <label class="checkbox-row"><input type="checkbox" id="setting-ozon_alerts_enabled"> Включить проверку</label>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-row"><input type="checkbox" id="setting-ozon_alerts_telegram_enabled" checked> Отправлять в Telegram при обнаружении</label>
+          </div>
+          <div class="form-group">
+            <label>Проверять сообщения с даты</label>
+            <input type="date" id="setting-ozon_alerts_check_from_date">
+            <div class="form-hint">Пусто — все сообщения в выборке истории чата.</div>
+          </div>
+          <div class="form-group">
+            <label>Шаблон сообщения в Telegram</label>
+            <textarea id="setting-ozon_alerts_telegram_template" rows="12" style="width:100%; font-family:monospace; font-size:0.85rem;"></textarea>
+            <div class="form-hint">Переменные: {store_name}, {chat_type}, {message_at}, {message_text}, {threat_type}, {amount}, {product_ref}, {summary}, {action_needed}</div>
+          </div>
+          <div class="form-group">
+            <label>Промпт ИИ</label>
+            <div class="form-hint">Редактируется во вкладке «Настройки → Промпты» — группа «Уведомления Ozon».</div>
+          </div>
+          <div class="actions" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+            <select id="ozon-alerts-scan-store" title="Магазин Ozon"></select>
+            <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
+            <button type="button" class="btn btn-secondary" id="btn-ozon-alerts-scan-now">Проверить чаты сейчас</button>
+          </div>
+        </div>
+
         <div id="settings-section-prompts" class="settings-section form-card" hidden>
           <h2>Промпты</h2>
           <p class="form-hint" style="margin-bottom: 14px;">Промпт «Проверка карточки» добавляется к каждой генерации. «Чаты» — для WB и Ozon.</p>
           <div id="prompts-list"></div>
         </div>
       </div>
+    </section>
+
+    <!-- Уведомления Ozon -->
+    <section id="panel-ozon-alerts" class="panel">
+      <div class="toolbar" style="gap: 10px;">
+        <select id="ozon-alerts-store">
+          <option value="">Все магазины</option>
+        </select>
+        <select id="ozon-alerts-status">
+          <option value="">Важные (без «не важно»)</option>
+          <option value="new">Только новые</option>
+          <option value="resolved">Обработанные</option>
+        </select>
+        <button type="button" class="btn btn-secondary" id="btn-refresh-ozon-alerts">Обновить</button>
+      </div>
+      <div id="ozon-alerts-wrap" class="ops-log-table-wrap" style="margin-top: 14px;"></div>
     </section>
 
     <!-- Ошибки карточек -->
@@ -726,6 +780,8 @@
           <option value="ozon_actions_auto_remove">Акции Ozon: автоудаление</option>
           <option value="telegram_report">Telegram: отчёт</option>
           <option value="card_error_detected">Ошибка карточки</option>
+          <option value="ozon_alert_detected">Ozon: важное уведомление</option>
+          <option value="store_ozon_alerts_auto">Автозапуск: уведомления Ozon</option>
         </select>
         <select id="log-level">
           <option value="">Все уровни</option>
@@ -800,6 +856,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=26"></script>
+  <script src="/static/app.js?v=27"></script>
 </body>
 </html>

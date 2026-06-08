@@ -23,19 +23,30 @@ from .telegram_notify import send_review_to_chat
 from .chat_common import (
     SETTING_REPLY_FROM,
     ozon_iso_after_cutoff,
+    ozon_iso_within_max_age,
     parse_auto_chat_max_age_days,
     parse_reply_from_date,
     SETTING_AUTO_CHAT_MAX_AGE_DAYS,
     wb_ts_within_max_age,
-    ozon_iso_within_max_age,
     wb_ts_ms_after_cutoff,
 )
 from .ozon_actions import auto_remove_from_ozon_auto_actions
+from .ozon_alerts import (
+    build_conversation_excerpt,
+    classify_ozon_support_message,
+    format_message_at_display,
+    maybe_record_ozon_alert,
+    ozon_alerts_enabled,
+    ozon_alerts_from_date,
+)
 from .ozon_buyer_chat import (
     collect_ozon_thread_lines,
+    format_ozon_datetime_msk,
     is_ozon_buyer_chat_row,
+    is_ozon_support_chat_row,
     last_client_message_info as ozon_last_client_info,
     ozon_chat_row_id,
+    ozon_chat_type,
     ozon_reply_window_hint,
     ozon_http_skip_reason,
     ozon_feature_unavailable_user_message,
@@ -1598,3 +1609,182 @@ async def ozon_actions_auto_remove_for_store(
     except Exception as e:
         log.exception("ozon_actions_auto_remove store=%s", store.id)
         return {"skipped": 1, "reason": "error", "error": str(e)[:300]}
+
+
+async def scan_ozon_important_alerts_for_store(
+    db: Database,
+    store: Store,
+    *,
+    openai_key: str,
+    max_chats: int = 40,
+    max_messages_per_chat: int = 25,
+    model: str = "gpt-5.2",
+) -> Dict[str, Any]:
+    """Сканирует чаты поддержки Ozon и шлёт в Telegram важные уведомления."""
+    from .ozon_buyer_chat import is_ozon_per_chat_send_error
+
+    stats: Dict[str, Any] = {
+        "ozon_alert_chats_scanned": 0,
+        "ozon_alert_messages_checked": 0,
+        "ozon_alert_new": 0,
+        "ozon_alert_ai_failed": 0,
+        "ozon_alert_skipped_no_access": 0,
+        "ozon_alert_skip_reason": "",
+    }
+    if not ozon_alerts_enabled(db):
+        stats["ozon_alert_skip_reason"] = "disabled"
+        return stats
+    if store.marketplace != "ozon":
+        stats["ozon_alert_skip_reason"] = "not_ozon"
+        return stats
+    if not (store.client_id or "").strip() or not (store.api_key or "").strip():
+        stats["ozon_alert_skip_reason"] = "no_keys"
+        return stats
+    key = (openai_key or "").strip()
+    if not key:
+        stats["ozon_alert_skip_reason"] = "no_openai_key"
+        return stats
+
+    cutoff = ozon_alerts_from_date(db)
+    oz_client = OzonClient(store.client_id or "", store.api_key)
+    oai = OpenAIClient(key, model=model)
+    store_name = _store_name(db, store.id)
+
+    try:
+        rows = await oz_client.list_all_chats(max_pages=20)
+    except HttpStatusError as e:
+        reason = ozon_http_skip_reason(e.status, e.body or "", feature="chat")
+        if reason:
+            stats["ozon_alert_skipped_no_access"] = 1
+            stats["ozon_alert_skip_reason"] = reason
+            stats["message"] = ozon_feature_unavailable_user_message(reason, feature="chat")
+            return stats
+        raise
+
+    support_rows = [r for r in rows if isinstance(r, dict) and is_ozon_support_chat_row(r)]
+    support_rows.sort(key=lambda r: int(r.get("unread_count") or 0), reverse=True)
+    take = support_rows[: max(1, int(max_chats))]
+
+    for row in take:
+        chat_id = ozon_chat_row_id(row)
+        if not chat_id:
+            continue
+        stats["ozon_alert_chats_scanned"] += 1
+        chat_type = ozon_chat_type(row) or "support"
+        try:
+            hist = await oz_client.chat_history(chat_id, limit=80)
+        except HttpStatusError as e:
+            if is_ozon_per_chat_send_error(e.body or ""):
+                continue
+            log.warning("ozon_alert history store=%s chat=%s: HTTP %s", store.id, chat_id, e.status)
+            continue
+        except (asyncio.CancelledError, GeneratorExit):
+            raise
+        except Exception:
+            log.exception("ozon_alert history store=%s chat=%s", store.id, chat_id)
+            continue
+
+        messages = hist.get("messages") or []
+        if not isinstance(messages, list):
+            messages = []
+        lines = collect_ozon_thread_lines(messages)
+        checked = 0
+        for role, text, mid, created in lines:
+            if role == "seller":
+                continue
+            if not ozon_iso_after_cutoff(created, cutoff):
+                continue
+            if db.has_ozon_important_alert(store.id, chat_id, mid):
+                continue
+            stats["ozon_alert_messages_checked"] += 1
+            checked += 1
+            if checked > max_messages_per_chat:
+                break
+            excerpt = build_conversation_excerpt(lines, up_to_message_id=mid)
+            try:
+                parsed = await classify_ozon_support_message(
+                    db,
+                    oai,
+                    store_name=store_name,
+                    chat_type=chat_type,
+                    message_text=text,
+                    message_at=format_ozon_datetime_msk(created) or created,
+                    conversation_excerpt=excerpt,
+                )
+            except Exception:
+                log.exception("ozon_alert classify store=%s chat=%s", store.id, chat_id)
+                stats["ozon_alert_ai_failed"] += 1
+                continue
+            if not parsed:
+                db.mark_ozon_message_alert_processed(
+                    store_id=store.id,
+                    chat_id=chat_id,
+                    message_id=mid,
+                    chat_type=chat_type,
+                    message_at=created,
+                    message_text=text,
+                )
+                continue
+            alert_id = await maybe_record_ozon_alert(
+                db,
+                parsed,
+                store_id=store.id,
+                store_name=store_name,
+                chat_id=chat_id,
+                message_id=mid,
+                chat_type=chat_type,
+                message_at=format_message_at_display(created),
+                message_text=text,
+            )
+            if alert_id:
+                stats["ozon_alert_new"] += 1
+        await asyncio.sleep(1.05)
+    return stats
+
+
+async def auto_process_ozon_important_alerts(
+    db: Database,
+    stores: List[Store],
+    *,
+    openai_key: str,
+    model: str = "gpt-5.2",
+) -> Dict[str, int]:
+    stats: Dict[str, int] = {
+        "ozon_alert_stores": 0,
+        "ozon_alert_new": 0,
+        "ozon_alert_chats_scanned": 0,
+        "ozon_alert_skipped_no_access": 0,
+    }
+    if not ozon_alerts_enabled(db):
+        return stats
+    key = (openai_key or "").strip()
+    if not key:
+        return stats
+    for store in stores:
+        if store.marketplace != "ozon":
+            continue
+        stats["ozon_alert_stores"] += 1
+        try:
+            part = await scan_ozon_important_alerts_for_store(
+                db, store, openai_key=key, model=model,
+            )
+        except HttpStatusError as e:
+            log.warning("ozon_alert_auto store=%s: HTTP %s", store.id, e.status)
+            continue
+        except (asyncio.CancelledError, GeneratorExit):
+            raise
+        except Exception:
+            log.exception("ozon_alert_auto store=%s", store.id)
+            continue
+        stats["ozon_alert_new"] += int(part.get("ozon_alert_new") or 0)
+        stats["ozon_alert_chats_scanned"] += int(part.get("ozon_alert_chats_scanned") or 0)
+        stats["ozon_alert_skipped_no_access"] += int(part.get("ozon_alert_skipped_no_access") or 0)
+        _audit_activity(
+            db,
+            action="store_ozon_alerts_auto",
+            store_id=store.id,
+            result="ok" if int(part.get("ozon_alert_new") or 0) else "skip",
+            item_type="ozon_alert",
+            meta={"store_name": store.name, **part},
+        )
+    return stats

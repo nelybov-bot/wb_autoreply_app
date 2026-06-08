@@ -278,6 +278,7 @@
     }
     if (tabId === 'log') loadLog();
     if (tabId === 'card-errors') loadCardErrors();
+    if (tabId === 'ozon-alerts') loadOzonAlerts();
   }
 
   function wireAppNav() {
@@ -719,6 +720,7 @@
         + stores.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
       if (prevCe && stores.some(s => String(s.id) === prevCe)) cardErrStoreSel.value = prevCe;
     }
+    fillOzonAlertsStoreSelects();
     const ozActSel = document.getElementById('ozon-actions-store');
     if (ozActSel) {
       const oz = storesForMarketplace('ozon');
@@ -1386,7 +1388,8 @@
       const preview = escapeHtml(c.preview || '—');
       const cat = ozonChatCategoryLabel(c.category);
       const typeHint = c.chat_type ? ` · ${escapeHtml(String(c.chat_type))}` : '';
-      return `<button type="button" class="${active}" data-chat-id="${enc}"><div class="wb-chat-item-name">${escapeHtml(cat)}${typeHint}</div><div class="wb-chat-item-preview">${preview}</div></button>`;
+      const dateLabel = escapeHtml(c.last_activity_label || c.created_at_label || '—');
+      return `<button type="button" class="${active}" data-chat-id="${enc}"><div class="wb-chat-item-name">${escapeHtml(cat)}${typeHint}</div><div class="wb-chat-item-preview">${preview}</div><div class="wb-chat-item-preview" style="opacity:.75;font-size:.82em;">${dateLabel}</div></button>`;
     }).join('');
     wrap.querySelectorAll('.wb-chat-item').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -1514,7 +1517,9 @@
         threadEl.innerHTML = lines.length
           ? lines.map(l => {
             const lab = ozonChatRoleLabel(l.role);
-            return `<div class="wb-chat-line"><span class="wb-chat-role">${lab}</span><span class="wb-chat-text">${escapeHtml(l.text)}</span></div>`;
+            const dt = l.created_at ? escapeHtml(String(l.created_at).slice(0, 19).replace('T', ' ')) : '';
+            const dtHtml = dt ? `<span class="wb-chat-date" style="opacity:.7;font-size:.82em;margin-right:8px;">${dt}</span>` : '';
+            return `<div class="wb-chat-line"><span class="wb-chat-role">${lab}</span>${dtHtml}<span class="wb-chat-text">${escapeHtml(l.text)}</span></div>`;
           }).join('')
           : '<div class="form-hint">Нет текста сообщений.</div>';
       }
@@ -2293,6 +2298,19 @@
   document.getElementById('btn-more-questions').addEventListener('click', () => loadQuestions(false));
 
   // ---- Settings ----
+  const DEFAULT_OZON_ALERT_TELEGRAM_TEMPLATE = (
+    '⚠️ Ozon: важное уведомление\n'
+    + 'Магазин: {store_name}\n'
+    + 'Тип: {threat_type}\n'
+    + 'Сумма: {amount}\n'
+    + 'Товар: {product_ref}\n'
+    + '{summary}\n\n'
+    + 'Действия: {action_needed}\n'
+    + 'Чат: {chat_type}\n'
+    + 'Дата: {message_at}\n\n'
+    + 'Текст:\n{message_text}'
+  );
+
   const DEFAULT_CARD_CHECK_TELEGRAM_TEMPLATE = (
     'Ошибка в карточке (вероятно)\n'
     + 'Магазин: {store_name}\n'
@@ -2303,12 +2321,13 @@
     + '{explanation}'
   );
 
-  const PROMPT_GROUP_ORDER = ['review', 'question', 'buyer_chat', 'card_check'];
+  const PROMPT_GROUP_ORDER = ['review', 'question', 'buyer_chat', 'card_check', 'ozon_important_alert'];
   const PROMPT_GROUP_TITLES = {
     review: 'Отзывы',
     question: 'Вопросы',
     buyer_chat: 'Чаты с покупателями (WB и Ozon)',
     card_check: 'Проверка карточки товара',
+    ozon_important_alert: 'Уведомления Ozon (поддержка)',
   };
 
   function promptRatingLabel(itemType, ratingGroup) {
@@ -2399,6 +2418,19 @@
       if (cardTpl) {
         cardTpl.value = data.card_check_telegram_template || DEFAULT_CARD_CHECK_TELEGRAM_TEMPLATE;
       }
+      const ozAlertEnabled = document.getElementById('setting-ozon_alerts_enabled');
+      if (ozAlertEnabled) ozAlertEnabled.checked = String(data.ozon_alerts_enabled || '0') === '1';
+      const ozAlertTg = document.getElementById('setting-ozon_alerts_telegram_enabled');
+      if (ozAlertTg) ozAlertTg.checked = String(data.ozon_alerts_telegram_enabled || '1') !== '0';
+      const ozAlertFrom = document.getElementById('setting-ozon_alerts_check_from_date');
+      if (ozAlertFrom) ozAlertFrom.value = (data.ozon_alerts_check_from_date || '').slice(0, 10);
+      const ozAlertTpl = document.getElementById('setting-ozon_alerts_telegram_template');
+      if (ozAlertTpl) {
+        ozAlertTpl.value = data.ozon_alerts_telegram_template || DEFAULT_OZON_ALERT_TELEGRAM_TEMPLATE;
+      }
+      const ozAlertTgChat = document.getElementById('setting-ozon_alerts_telegram_chat_id');
+      if (ozAlertTgChat) ozAlertTgChat.value = data.ozon_alerts_telegram_chat_id || '';
+      fillOzonAlertsStoreSelects();
       const prompts = await api('/prompts');
       renderPromptsList(prompts);
     } catch (err) {
@@ -2434,6 +2466,8 @@
       if (autoRunWbChats) autoRunWbChats.checked = !!autoCfg.run_wb_chats;
       const autoRunOzonChats = document.getElementById('auto-run-ozon-chats');
       if (autoRunOzonChats) autoRunOzonChats.checked = !!autoCfg.run_ozon_chats;
+      const autoRunOzonAlerts = document.getElementById('auto-run-ozon-alerts');
+      if (autoRunOzonAlerts) autoRunOzonAlerts.checked = !!autoCfg.run_ozon_alerts;
       const autoRunOzonActions = document.getElementById('auto-run-ozon-actions-remove');
       if (autoRunOzonActions) autoRunOzonActions.checked = !!autoCfg.run_ozon_actions_remove;
       syncAutoScheduleModeUi();
@@ -2489,18 +2523,19 @@
       const run_questions = !!document.getElementById('auto-run-questions')?.checked;
       const run_wb_chats = !!document.getElementById('auto-run-wb-chats')?.checked;
       const run_ozon_chats = !!document.getElementById('auto-run-ozon-chats')?.checked;
+      const run_ozon_alerts = !!document.getElementById('auto-run-ozon-alerts')?.checked;
       const run_ozon_actions_remove = !!document.getElementById('auto-run-ozon-actions-remove')?.checked;
       const store_ids = getAutoSelectedStoreIds();
       if (!store_ids.length) {
         toast('Выбери хотя бы один магазин для автозапуска', 'error');
         return;
       }
-      if (!run_reviews && !run_questions && !run_wb_chats && !run_ozon_chats && !run_ozon_actions_remove) {
-        toast('Выбери хотя бы один тип: отзывы, вопросы, чаты или акции Ozon', 'error');
+      if (!run_reviews && !run_questions && !run_wb_chats && !run_ozon_chats && !run_ozon_alerts && !run_ozon_actions_remove) {
+        toast('Выбери хотя бы один тип: отзывы, вопросы, чаты, уведомления или акции Ozon', 'error');
         return;
       }
       try {
-        await api('/auto-schedule', { method: 'POST', body: JSON.stringify({ enabled, slots, store_ids, schedule_mode, interval_hours, run_reviews, run_questions, run_wb_chats, run_ozon_chats, run_ozon_actions_remove }) });
+        await api('/auto-schedule', { method: 'POST', body: JSON.stringify({ enabled, slots, store_ids, schedule_mode, interval_hours, run_reviews, run_questions, run_wb_chats, run_ozon_chats, run_ozon_alerts, run_ozon_actions_remove }) });
         toast('Автозапуск сохранён');
         await loadAutoSchedulePanel();
       } catch (err) {
@@ -2553,6 +2588,11 @@
       card_check_telegram_enabled: document.getElementById('setting-card_check_telegram_enabled')?.checked ? '1' : '0',
       card_check_include_in_periodic_report: document.getElementById('setting-card_check_include_in_periodic_report')?.checked ? '1' : '0',
       card_check_telegram_template: document.getElementById('setting-card_check_telegram_template')?.value || '',
+      ozon_alerts_enabled: document.getElementById('setting-ozon_alerts_enabled')?.checked ? '1' : '0',
+      ozon_alerts_telegram_enabled: document.getElementById('setting-ozon_alerts_telegram_enabled')?.checked ? '1' : '0',
+      ozon_alerts_check_from_date: document.getElementById('setting-ozon_alerts_check_from_date')?.value || '',
+      ozon_alerts_telegram_template: document.getElementById('setting-ozon_alerts_telegram_template')?.value || '',
+      ozon_alerts_telegram_chat_id: document.getElementById('setting-ozon_alerts_telegram_chat_id')?.value || '',
       buyer_chat_reply_from_date: document.getElementById('setting-buyer_chat_reply_from_date')?.value || '',
       buyer_chat_auto_max_age_days: String(parseInt(document.getElementById('setting-buyer_chat_auto_max_age_days')?.value || '3', 10) || 3),
     };
@@ -2601,6 +2641,8 @@
       store_auto: 'Автозапуск: магазин',
       store_wb_chats_auto: 'Автозапуск: чаты WB',
       store_ozon_chats_auto: 'Автозапуск: чаты Ozon',
+      store_ozon_alerts_auto: 'Автозапуск: уведомления Ozon',
+      ozon_alert_detected: 'Ozon: важное уведомление',
       ozon_actions_auto_remove: 'Акции Ozon: автоудаление',
       ozon_actions_remove: 'Акции Ozon: удаление',
       wb_buyer_chat_generate: 'Чат WB: генерация',
@@ -2628,6 +2670,10 @@
     const oz = r.ozon_chats;
     if (oz && (oz.ozon_chat_sent || oz.ozon_chat_candidates)) {
       parts.push(`чаты Ozon: ${oz.ozon_chat_sent || 0} отв.`);
+    }
+    const ozAl = r.ozon_alerts;
+    if (ozAl && (Number(ozAl.ozon_alert_new) || Number(ozAl.ozon_alert_chats_scanned))) {
+      parts.push(`уведомл. Ozon: ${ozAl.ozon_alert_new || 0} важн., чатов ${ozAl.ozon_alert_chats_scanned || 0}`);
     }
     const oa = r.ozon_actions;
     if (oa) {
@@ -2666,6 +2712,7 @@
       if (rev.length) lines.push('Отзывы/вопросы: ' + rev.join(', '));
       if (meta.run_wb_chats) lines.push(`Чаты WB: отправлено ${meta.wb_chat_sent ?? 0}`);
       if (meta.run_ozon_chats) lines.push(`Чаты Ozon: отправлено ${meta.ozon_chat_sent ?? 0}`);
+      if (meta.run_ozon_alerts) lines.push(`Уведомления Ozon: важных ${meta.ozon_alert_new ?? 0}`);
       if (meta.run_ozon_actions_remove) {
         const oa = meta.ozon_actions_totals || {};
         lines.push(
@@ -2678,6 +2725,9 @@
       return lines.join('\n');
     }
     if (action === 'store_auto' && meta.summary) return String(meta.summary);
+    if (action === 'store_ozon_alerts_auto') {
+      return `Ozon уведомления: новых ${meta.ozon_alert_new ?? 0}, чатов ${meta.ozon_alert_chats_scanned ?? 0}`;
+    }
     if (action === 'store_wb_chats_auto' || action === 'store_ozon_chats_auto') {
       const sent = meta.wb_chat_sent ?? meta.ozon_chat_sent ?? 0;
       const cand = meta.wb_chat_candidates ?? meta.ozon_chat_candidates ?? 0;
@@ -2686,6 +2736,10 @@
       }
       if (meta.reason) return `Пропуск: ${meta.reason}`;
       return `Отправлено ${sent}, кандидатов ${cand}`;
+    }
+    if (action === 'ozon_alert_detected') {
+      const m = meta || {};
+      return `Ozon: ${m.threat_type || 'важное'} — ${m.summary || m.amount || ''}`.trim();
     }
     if (action === 'card_error_detected') {
       const parts = [];
@@ -2840,6 +2894,88 @@
     ozon_chat: 'Чат Ozon',
   };
 
+  function fillOzonAlertsStoreSelects() {
+    const oz = storesForMarketplace('ozon');
+    const opts = oz.length
+      ? oz.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')
+      : '<option value="">Нет магазинов Ozon</option>';
+    const scanSel = document.getElementById('ozon-alerts-scan-store');
+    if (scanSel) {
+      const prev = String(scanSel.value || '').trim();
+      scanSel.innerHTML = opts;
+      if (prev && oz.some(s => String(s.id) === prev)) scanSel.value = prev;
+      else if (oz.length) selectFirstStoreOption(scanSel);
+    }
+    const panelSel = document.getElementById('ozon-alerts-store');
+    if (panelSel) {
+      const prevP = String(panelSel.value || '').trim();
+      panelSel.innerHTML = '<option value="">Все магазины</option>'
+        + oz.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+      if (prevP && (prevP === '' || oz.some(s => String(s.id) === prevP))) panelSel.value = prevP;
+    }
+  }
+
+  async function loadOzonAlerts() {
+    const wrap = document.getElementById('ozon-alerts-wrap');
+    if (!wrap) return;
+    wrap.innerHTML = '<div class="form-hint">Загрузка…</div>';
+    try {
+      await ensureStoresLoaded();
+      fillOzonAlertsStoreSelects();
+    } catch (_) {}
+    const storeId = (document.getElementById('ozon-alerts-store')?.value || '').trim();
+    const status = (document.getElementById('ozon-alerts-status')?.value || '').trim();
+    let url = '/ozon/alerts?limit=300';
+    if (storeId) url += `&store_id=${encodeURIComponent(storeId)}`;
+    if (status) {
+      url += `&status=${encodeURIComponent(status)}&important_only=0`;
+    }
+    try {
+      const rows = await api(url);
+      if (!rows.length) {
+        wrap.innerHTML = '<div class="form-hint">Важных уведомлений пока нет. Включите проверку в «Настройки → Ozon» и нажмите «Проверить чаты сейчас».</div>';
+        return;
+      }
+      wrap.innerHTML = `
+        <table class="items-table">
+          <thead><tr>
+            <th>Время</th><th>Магазин</th><th>Тип</th><th>Сумма</th><th>Товар</th><th>Сводка</th><th>Действия</th><th></th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr>
+                <td>${escapeHtml(r.message_at_label || r.ts || '—')}</td>
+                <td>${escapeHtml(r.store_name || r.store_id)}</td>
+                <td>${escapeHtml(r.threat_type || '—')}</td>
+                <td>${escapeHtml(r.amount || '—')}</td>
+                <td>${escapeHtml(r.product_ref || '—')}</td>
+                <td>${escapeHtml(r.summary || '—')}</td>
+                <td>${escapeHtml(r.action_needed || '—')}</td>
+                <td>${r.status === 'new'
+                  ? `<button type="button" class="btn btn-secondary btn-sm" data-ozon-alert-resolve="${r.id}">Обработано</button>`
+                  : escapeHtml(r.status)}</td>
+              </tr>
+              <tr><td colspan="8" style="font-size:.85em;color:var(--text-muted);">${escapeHtml((r.message_text || '').slice(0, 500))}</td></tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+      wrap.querySelectorAll('[data-ozon-alert-resolve]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = Number(btn.getAttribute('data-ozon-alert-resolve'));
+          try {
+            await api('/ozon/alerts/' + id, { method: 'PATCH', body: JSON.stringify({ status: 'resolved' }) });
+            toast('Отмечено как обработано');
+            await loadOzonAlerts();
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        });
+      });
+    } catch (err) {
+      wrap.innerHTML = `<div class="form-hint" style="color:#b91c1c;">${escapeHtml(err.message || 'Ошибка')}</div>`;
+    }
+  }
+
   async function loadCardErrors() {
     const wrap = document.getElementById('card-errors-wrap');
     if (!wrap) return;
@@ -2901,6 +3037,25 @@
   }
 
   document.getElementById('btn-refresh-card-errors')?.addEventListener('click', () => { void loadCardErrors(); });
+  document.getElementById('btn-refresh-ozon-alerts')?.addEventListener('click', () => { void loadOzonAlerts(); });
+  document.getElementById('ozon-alerts-store')?.addEventListener('change', () => { void loadOzonAlerts(); });
+  document.getElementById('ozon-alerts-status')?.addEventListener('change', () => { void loadOzonAlerts(); });
+  document.getElementById('btn-ozon-alerts-scan-now')?.addEventListener('click', async () => {
+    const sid = document.getElementById('ozon-alerts-scan-store')?.value;
+    if (!sid) {
+      toast('Выберите магазин Ozon', 'error');
+      return;
+    }
+    try {
+      await saveServerSettings();
+      toast('Сканирую чаты поддержки Ozon… это может занять несколько минут', 'info');
+      const r = await api(`/ozon/alerts/${sid}/scan`, { method: 'POST', body: '{}', timeoutMs: 600000 });
+      toast(`Готово: новых важных ${r.ozon_alert_new ?? 0}, проверено сообщений ${r.ozon_alert_messages_checked ?? 0}`);
+      await loadOzonAlerts();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
   document.getElementById('card-errors-store')?.addEventListener('change', () => { void loadCardErrors(); });
   document.getElementById('card-errors-status')?.addEventListener('change', () => { void loadCardErrors(); });
 
