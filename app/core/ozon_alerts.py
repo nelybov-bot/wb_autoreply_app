@@ -46,6 +46,12 @@ DEFAULT_TELEGRAM_TEMPLATE = (
     "🕐 {message_at} · {chat_type}"
 )
 
+ALERT_CAT_CERT = "cert_request"
+ALERT_CAT_HIDDEN = "product_hidden"
+ALERT_CAT_OTHER = "other"
+
+_SKU_RE = re.compile(r"\b(\d{6,12})\b")
+
 _TITLE_RULES: list[tuple[str, str]] = [
     (r"сертификат|документ.{0,20}качеств", "Запрос сертификата качества"),
     (r"интеллектуальн|правообладател", "Нарушение интеллектуальной собственности"),
@@ -64,8 +70,185 @@ JSON_SUFFIX = (
     '"amount": "сумма штрафа или —", '
     '"product_ref": "SKU и краткое название или —", '
     '"summary": "одно короткое предложение, до 120 символов", '
-    '"action_needed": "одна короткая фраза до 100 символов, без путей меню целиком"}'
+    '"action_needed": "одна короткая фраза до 100 символов, без путей меню целиком", '
+    '"alert_category": "cert_request — запрос сертификата/декларации/документов; '
+    'product_hidden — товар уже скрыт/снят; other — прочее"}'
 )
+
+
+def extract_product_skus(*texts: str) -> list[str]:
+    """SKU / offer_id из product_ref и текста Ozon (6–12 цифр)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in texts:
+        for m in _SKU_RE.finditer(raw or ""):
+            sku = m.group(1)
+            if sku not in seen:
+                seen.add(sku)
+                out.append(sku)
+    return out
+
+
+def classify_alert_category(
+    *,
+    threat_type: str = "",
+    summary: str = "",
+    message_text: str = "",
+    telegram_title: str = "",
+    consequence: str = "",
+    alert_category: str = "",
+) -> str:
+    """Категория для отчётов: запрос документов vs фактическое скрытие."""
+    raw_cat = (alert_category or "").strip().lower()
+    if raw_cat in (ALERT_CAT_CERT, ALERT_CAT_HIDDEN, ALERT_CAT_OTHER):
+        return raw_cat
+    blob = " ".join(
+        x for x in (threat_type, summary, message_text, telegram_title, consequence) if x
+    ).lower()
+    hidden_markers = (
+        r"скрыли\b",
+        r"был скрыт",
+        r"скрыт с",
+        r"снят с продаж",
+        r"сняли с продаж",
+        r"заблокирован",
+        r"удалён с",
+        r"удален с",
+        r"недоступен для покуп",
+    )
+    for pat in hidden_markers:
+        if re.search(pat, blob):
+            return ALERT_CAT_HIDDEN
+    cert_markers = (
+        r"сертификат",
+        r"декларац",
+        r"документ.{0,20}качеств",
+        r"запросил документ",
+        r"предоставьте документ",
+        r"загрузите документ",
+        r"соответств",
+    )
+    for pat in cert_markers:
+        if re.search(pat, blob):
+            return ALERT_CAT_CERT
+    if re.search(r"скрыть|скроем|придётся скрыть|снять с продаж", blob):
+        return ALERT_CAT_CERT
+    return ALERT_CAT_OTHER
+
+
+def hide_reason_label(threat_type: str, summary: str) -> str:
+    t = _truncate_text((threat_type or "").strip(), 55)
+    if t and t != "—":
+        return t
+    return _truncate_text((summary or "").strip(), 55) or "причина не указана"
+
+
+def enrich_alert_record_fields(
+    *,
+    threat_type: str,
+    product_ref: str,
+    summary: str,
+    message_text: str,
+    parsed: Optional[dict] = None,
+) -> tuple[str, str]:
+    """(alert_category, product_skus_csv)."""
+    p = parsed or {}
+    cat = classify_alert_category(
+        threat_type=threat_type,
+        summary=summary,
+        message_text=message_text,
+        telegram_title=str(p.get("telegram_title") or ""),
+        consequence=str(p.get("consequence") or ""),
+        alert_category=str(p.get("alert_category") or ""),
+    )
+    skus = extract_product_skus(product_ref, message_text, str(p.get("product_ref") or ""))
+    return cat, ",".join(skus)
+
+
+def ozon_product_stats_for_period(
+    db: Database,
+    since_iso: str,
+    until_iso: Optional[str] = None,
+) -> dict:
+    """
+    Уникальные товары по первому уведомлению в категории за интервал [since, until).
+    Повторные напоминания Ozon по тому же SKU не увеличивают счётчик в новых сутках/часах.
+    """
+    from ..db import iso_to_unix
+
+    since_u = iso_to_unix(since_iso)
+    until_u = iso_to_unix(until_iso) if until_iso else None
+    if since_u <= 0:
+        return _empty_ozon_product_stats()
+    if until_u is None or until_u <= since_u:
+        until_u = since_u + 86400 * 365
+
+    rows = db.list_ozon_alerts_for_product_report()
+    first_seen: dict[tuple[int, str, str], dict] = {}
+
+    for row in rows:
+        if (row.get("status") or "") == "ignored":
+            continue
+        cat = (row.get("alert_category") or "").strip()
+        if not cat:
+            cat = classify_alert_category(
+                threat_type=str(row.get("threat_type") or ""),
+                summary=str(row.get("summary") or ""),
+                message_text=str(row.get("message_text") or ""),
+            )
+        if cat not in (ALERT_CAT_CERT, ALERT_CAT_HIDDEN):
+            continue
+        skus_raw = (row.get("product_skus") or "").strip()
+        if skus_raw:
+            skus = [s for s in skus_raw.split(",") if s.strip()]
+        else:
+            skus = extract_product_skus(
+                str(row.get("product_ref") or ""),
+                str(row.get("message_text") or ""),
+            )
+        if not skus:
+            continue
+        ts_u = iso_to_unix(str(row.get("ts") or ""))
+        if ts_u <= 0:
+            continue
+        store_id = int(row.get("store_id") or 0)
+        reason = hide_reason_label(
+            str(row.get("threat_type") or ""),
+            str(row.get("summary") or ""),
+        )
+        for sku in skus:
+            key = (store_id, sku, cat)
+            prev = first_seen.get(key)
+            if prev is None or ts_u < prev["ts_u"]:
+                first_seen[key] = {"ts_u": ts_u, "reason": reason}
+
+    cert_n = 0
+    hidden_n = 0
+    hidden_reasons: dict[str, int] = {}
+    for (_store, _sku, cat), info in first_seen.items():
+        ts_u = info["ts_u"]
+        if ts_u < since_u or ts_u >= until_u:
+            continue
+        if cat == ALERT_CAT_CERT:
+            cert_n += 1
+        elif cat == ALERT_CAT_HIDDEN:
+            hidden_n += 1
+            r = info["reason"]
+            hidden_reasons[r] = hidden_reasons.get(r, 0) + 1
+
+    return {
+        "ozon_cert_requests_products": cert_n,
+        "ozon_hidden_products": hidden_n,
+        "ozon_hidden_by_reason": hidden_reasons,
+    }
+
+
+def _empty_ozon_product_stats() -> dict:
+    return {
+        "ozon_cert_requests_products": 0,
+        "ozon_hidden_products": 0,
+        "ozon_hidden_by_reason": {},
+    }
 
 
 def ozon_alerts_enabled(db: Database) -> bool:
@@ -295,6 +478,7 @@ def parse_ozon_alert_json(txt: str) -> Optional[dict]:
         "product_ref": str(obj.get("product_ref") or "—").strip() or "—",
         "summary": summary,
         "action_needed": str(obj.get("action_needed") or "—").strip() or "—",
+        "alert_category": str(obj.get("alert_category") or "").strip().lower(),
     }
 
 
@@ -378,6 +562,13 @@ async def maybe_record_ozon_alert(
     ref = f"{chat_id}:{message_id}"
     if db.has_ozon_important_alert(store_id, chat_id, message_id):
         return None
+    alert_category, product_skus = enrich_alert_record_fields(
+        threat_type=parsed["threat_type"],
+        product_ref=parsed["product_ref"],
+        summary=parsed["summary"],
+        message_text=message_text,
+        parsed=parsed,
+    )
     alert_id = db.add_ozon_important_alert(
         store_id=store_id,
         chat_id=chat_id,
@@ -390,6 +581,8 @@ async def maybe_record_ozon_alert(
         product_ref=parsed["product_ref"],
         summary=parsed["summary"],
         action_needed=parsed["action_needed"],
+        alert_category=alert_category,
+        product_skus=product_skus,
     )
     try:
         db.add_audit_event(

@@ -38,6 +38,23 @@ def iso_to_unix(iso: str) -> float:
         d = d.replace(tzinfo=dt.timezone.utc)
     return d.timestamp()
 
+
+def _empty_activity_stats() -> dict:
+    return {
+        "reviews_sent": 0,
+        "questions_sent": 0,
+        "ozon_products_removed": 0,
+        "wb_chat_replies": 0,
+        "ozon_chat_replies": 0,
+        "chat_replies_total": 0,
+        "card_errors": 0,
+        "ozon_alerts": 0,
+        "ozon_cert_requests_products": 0,
+        "ozon_hidden_products": 0,
+        "ozon_hidden_by_reason": {},
+    }
+
+
 @dataclass(frozen=True)
 class Store:
     id: int
@@ -107,6 +124,8 @@ class OzonImportantAlertRow:
     action_needed: str
     status: str
     telegram_sent: bool
+    alert_category: str = ""
+    product_skus: str = ""
 
 
 @dataclass(frozen=True)
@@ -294,6 +313,14 @@ class Database:
             c.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ozon_alerts_status ON ozon_important_alerts(status)"
             )
+            for col, ddl in (
+                ("alert_category", "TEXT NOT NULL DEFAULT ''"),
+                ("product_skus", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                try:
+                    c.execute(f"ALTER TABLE ozon_important_alerts ADD COLUMN {col} {ddl}")
+                except sqlite3.OperationalError:
+                    pass
             self._conn.commit()
             self._seed_prompts_if_empty()
             self._seed_missing_prompts()
@@ -536,6 +563,8 @@ class Database:
         summary: str,
         action_needed: str,
         status: str = "new",
+        alert_category: str = "",
+        product_skus: str = "",
     ) -> int:
         st = (status or "new").strip().lower()
         if st not in ("new", "resolved", "ignored"):
@@ -545,8 +574,9 @@ class Database:
             cur = self._conn.execute(
                 """INSERT INTO ozon_important_alerts(
                        ts, store_id, chat_id, message_id, chat_type, message_at, message_text,
-                       threat_type, amount, product_ref, summary, action_needed, status, telegram_sent
-                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?, ?, 0)""",
+                       threat_type, amount, product_ref, summary, action_needed, status,
+                       alert_category, product_skus, telegram_sent
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)""",
                 (
                     ts,
                     int(store_id),
@@ -561,6 +591,8 @@ class Database:
                     (summary or "").strip(),
                     (action_needed or "").strip(),
                     st,
+                    (alert_category or "").strip(),
+                    (product_skus or "").strip(),
                 ),
             )
             self._conn.commit()
@@ -623,6 +655,33 @@ class Database:
             )
             self._conn.commit()
             return cur.rowcount > 0
+
+    def list_ozon_alerts_for_product_report(self) -> list[dict]:
+        """Все значимые уведомления Ozon для подсчёта уникальных SKU в отчётах."""
+        with _DB_LOCK:
+            rows = self._conn.execute(
+                """SELECT store_id, ts, threat_type, product_ref, summary, message_text,
+                          alert_category, product_skus, status
+                   FROM ozon_important_alerts
+                   WHERE status IN ('new', 'resolved')
+                   ORDER BY id ASC"""
+            ).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            out.append(
+                {
+                    "store_id": int(r["store_id"]),
+                    "ts": str(r["ts"] or ""),
+                    "threat_type": str(r["threat_type"] or ""),
+                    "product_ref": str(r["product_ref"] or ""),
+                    "summary": str(r["summary"] or ""),
+                    "message_text": str(r["message_text"] or ""),
+                    "alert_category": str(r["alert_category"] or ""),
+                    "product_skus": str(r["product_skus"] or ""),
+                    "status": str(r["status"] or ""),
+                }
+            )
+        return out
 
     def list_ozon_important_alerts(
         self,
@@ -1305,16 +1364,7 @@ class Database:
         """Счётчики действий за интервал [since, until) по unix-времени (корректно с TZ)."""
         since_u = iso_to_unix(since_iso)
         if since_u <= 0:
-            return {
-                "reviews_sent": 0,
-                "questions_sent": 0,
-                "ozon_products_removed": 0,
-                "wb_chat_replies": 0,
-                "ozon_chat_replies": 0,
-                "chat_replies_total": 0,
-                "card_errors": 0,
-                "ozon_alerts": 0,
-            }
+            return _empty_activity_stats()
         until_u = iso_to_unix(until_iso) if until_iso else None
         ts_rng = "iso_to_unix(ts) >= ?"
         sent_rng = "iso_to_unix(sent_at) >= ?"
@@ -1371,7 +1421,7 @@ class Database:
         wb_chats = int(wb["n"]) if wb else 0
         oz_chats = int(oz["n"]) if oz else 0
         card_errors = self.count_card_error_alerts_since(since_iso, until_iso)
-        return {
+        stats = {
             "reviews_sent": int(rev["n"]) if rev else 0,
             "questions_sent": int(qu["n"]) if qu else 0,
             "ozon_products_removed": products_removed,
@@ -1380,7 +1430,17 @@ class Database:
             "chat_replies_total": wb_chats + oz_chats,
             "card_errors": card_errors,
             "ozon_alerts": int(oz_alerts["n"]) if oz_alerts else 0,
+            "ozon_cert_requests_products": 0,
+            "ozon_hidden_products": 0,
+            "ozon_hidden_by_reason": {},
         }
+        try:
+            from app.core.ozon_alerts import ozon_product_stats_for_period
+
+            stats.update(ozon_product_stats_for_period(self, since_iso, until_iso))
+        except Exception:
+            pass
+        return stats
 
     def get_stats(self) -> dict:
         """Операционная сводка: отправки + текущая очередь + активные магазины."""

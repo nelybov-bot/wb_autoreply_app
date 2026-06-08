@@ -2664,8 +2664,8 @@
         const res = await api('/telegram/report-now', { method: 'POST' });
         toast(
           `Отчёт отправлен: отзывы ${res.reviews_sent || 0}, вопросы ${res.questions_sent || 0}, `
-          + `чаты ${res.chat_replies_total || 0}, уведомл. Ozon ${res.ozon_alerts || 0}, `
-          + `акции −${res.ozon_products_removed || 0}`,
+          + `чаты ${res.chat_replies_total || 0}, документы Ozon ${res.ozon_cert_requests_products || 0}, `
+          + `скрытия ${res.ozon_hidden_products || 0}, акции −${res.ozon_products_removed || 0}`,
         );
       } catch (err) {
         toast(err.message, 'error');

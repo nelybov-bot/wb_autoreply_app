@@ -282,6 +282,9 @@ def format_activity_report(
     removed = int(stats.get("ozon_products_removed") or 0)
     card_errors = int(stats.get("card_errors") or 0)
     ozon_alerts = int(stats.get("ozon_alerts") or 0)
+    cert_products = int(stats.get("ozon_cert_requests_products") or 0)
+    hidden_products = int(stats.get("ozon_hidden_products") or 0)
+    hidden_by_reason = stats.get("ozon_hidden_by_reason") or {}
     interval_ru = "за час" if interval == "hour" else "за сутки"
     period = escape_tg_html(period_label)
     lines = [
@@ -293,9 +296,15 @@ def format_activity_report(
         f"<b>Вопросы:</b> отвечено {questions}",
         f"<b>Чаты с покупателями:</b> {chat_total} "
         f"<i>(WB: {wb_chats}, Ozon: {ozon_chats})</i>",
-        f"<b>Важные уведомления Ozon:</b> {ozon_alerts}",
+        f"<b>Уведомления Ozon:</b> {ozon_alerts} <i>(сообщений)</i>",
+        f"<b>Запрос документов:</b> {cert_products} "
+        f"<i>товаров (сертификаты/декларации, уник.)</i>",
+        f"<b>Скрытия товаров:</b> {hidden_products} <i>(уник.)</i>",
         f"<b>Автоакции Ozon:</b> удалено товаров {removed}",
     ]
+    if hidden_products and isinstance(hidden_by_reason, dict):
+        for reason, cnt in sorted(hidden_by_reason.items(), key=lambda x: -int(x[1]))[:6]:
+            lines.append(f"  · {escape_tg_html(reason)} — {int(cnt)}")
     if include_card_errors:
         lines.append(f"<b>Ошибки в карточках:</b> {card_errors}")
     return "\n".join(lines)
