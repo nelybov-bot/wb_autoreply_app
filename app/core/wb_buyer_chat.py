@@ -349,40 +349,93 @@ def merge_good_card(chat_row: dict, events: List[dict]) -> dict:
     return gc
 
 
+def _bool_flag(val: Any) -> Optional[bool]:
+    if val is True or val == 1:
+        return True
+    if val is False or val == 0:
+        return False
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if s in ("true", "1", "yes"):
+            return True
+        if s in ("false", "0", "no"):
+            return False
+    return None
+
+
+_CLIENT_SOURCES = frozenset({"rusite", "client", "buyer", "customer", "mobile", "ios", "android", "site"})
+
+
 def _event_role(ev: dict) -> str:
     """Роль автора события: client / seller / other."""
     if not isinstance(ev, dict):
         return "other"
-    if ev.get("isSeller") is True:
+    seller_flag = _bool_flag(ev.get("isSeller"))
+    if seller_flag is True:
         return "seller"
-    if ev.get("isSeller") is False:
+    if seller_flag is False:
         return "client"
     sender = str(ev.get("sender") or "").strip().lower()
     if sender == "client":
         return "client"
-    if sender in ("seller", "seller-public-api"):
+    if sender in ("seller", "seller-public-api", "seller-portal", "seller-web"):
         return "seller"
     source = str(ev.get("source") or "").strip().lower()
-    if source in ("rusite", "client", "buyer", "customer"):
+    if source in _CLIENT_SOURCES:
         return "client"
-    if source.startswith("seller") or source in ("seller-portal", "seller-public-api", "seller-web"):
+    if source.startswith("seller") or "seller" in source:
         return "seller"
     msg = ev.get("message")
     if isinstance(msg, dict):
         ms = str(msg.get("sender") or "").strip().lower()
         if ms == "client":
             return "client"
-        if ms in ("seller", "seller-public-api"):
+        if ms in ("seller", "seller-public-api", "seller-portal", "seller-web"):
             return "seller"
+    # У сообщений покупателя в events часто есть clientName; у ответов продавца — нет.
+    client_name = str(ev.get("clientName") or "").strip()
+    if client_name and sender != "seller" and seller_flag is not True:
+        return "client"
+    if not client_name and source and source not in _CLIENT_SOURCES and "seller" in source:
+        return "seller"
+    if not client_name and sender in ("", "seller") and source and "seller" in source:
+        return "seller"
     return sender or source or "other"
 
 
-def _last_message_role(lm: dict, chat_row: Optional[dict] = None) -> str:
-    """Роль автора lastMessage из списка чатов WB."""
+def _resolve_last_message_role(
+    lm: dict,
+    chat_row: Optional[dict] = None,
+    events: Optional[List[dict]] = None,
+    chat_id: str = "",
+) -> str:
+    """Роль lastMessage: в списке чатов WB часто только text + addTimestamp без sender."""
     if isinstance(lm, dict) and lm:
         role = _event_role(lm)
         if role in ("client", "seller"):
             return role
+    cid = (chat_id or (chat_row or {}).get("chatID") or "").strip()
+    if events and cid:
+        ts = int(lm.get("addTimestamp") or 0)
+        text = str(lm.get("text") or "").strip()
+        for ev in events:
+            if str(ev.get("chatID") or "").strip() != cid:
+                continue
+            if str(ev.get("eventType") or "") != "message":
+                continue
+            if int(ev.get("addTimestamp") or 0) != ts:
+                continue
+            if text and _event_text(ev) != text:
+                continue
+            role = _event_role(ev)
+            if role in ("client", "seller"):
+                return role
+        lines = collect_thread_lines(events, cid)
+        if lines:
+            _r, _t, last_ts, _mk = lines[-1]
+            if abs(int(lm.get("addTimestamp") or 0) - last_ts) <= 3000:
+                if _r in ("client", "seller"):
+                    return _r
     if isinstance(chat_row, dict):
         role = _event_role(chat_row)
         if role in ("client", "seller"):
@@ -413,7 +466,10 @@ def collect_thread_lines(events: List[dict], chat_id: str) -> List[Tuple[str, st
     return out
 
 
-def fallback_line_from_chat_row(chat_row: dict) -> List[Tuple[str, str, int, str]]:
+def fallback_line_from_chat_row(
+    chat_row: dict,
+    events: Optional[List[dict]] = None,
+) -> List[Tuple[str, str, int, str]]:
     """Если в /events нет сообщений — одна строка из lastMessage списка чатов."""
     if not isinstance(chat_row, dict):
         return []
@@ -424,8 +480,35 @@ def fallback_line_from_chat_row(chat_row: dict) -> List[Tuple[str, str, int, str
     if not t:
         return []
     ts = int(lm.get("addTimestamp") or 0)
-    role = _last_message_role(lm, chat_row)
+    cid = str(chat_row.get("chatID") or "").strip()
+    role = _resolve_last_message_role(lm, chat_row, events, cid)
     return [(role, t, ts, str(ts))]
+
+
+def build_wb_thread_lines(
+    events: List[dict],
+    chat_id: str,
+    chat_row: Optional[dict] = None,
+) -> List[Tuple[str, str, int, str]]:
+    """Переписка: events + lastMessage из списка чатов, если в ленте не хватает строк."""
+    cid = (chat_id or "").strip()
+    lines = collect_thread_lines(events, cid)
+    if not isinstance(chat_row, dict):
+        return lines
+    lm = chat_row.get("lastMessage") or {}
+    if not isinstance(lm, dict):
+        return lines
+    text = str(lm.get("text") or "").strip()
+    if not text:
+        return lines
+    ts = int(lm.get("addTimestamp") or 0)
+    if any(abs(ts - ts_) <= 3000 and t.strip() == text for _, t, ts_, __ in lines):
+        return lines
+    role = _resolve_last_message_role(lm, chat_row, events, cid)
+    lines = list(lines)
+    lines.append((role, text, ts, str(ts)))
+    lines.sort(key=lambda x: x[2])
+    return lines
 
 
 def last_client_message_info(lines_ts: List[Tuple[str, str, int, str]]) -> Optional[Tuple[str, int]]:
@@ -444,6 +527,7 @@ async def fetch_events_for_chat(
 ) -> Tuple[List[dict], Optional[int]]:
     """
     Подтягивает страницы /seller/events и отбирает события выбранного чата.
+    Лента общая для всех чатов — для старых диалогов нужно больше страниц.
     """
     merged: List[dict] = []
     seen_event_ids: set[str] = set()

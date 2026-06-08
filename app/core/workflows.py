@@ -43,8 +43,8 @@ from .ozon_buyer_chat import (
 )
 from .wb_buyer_chat import (
     WbBuyerChatClient,
+    build_wb_thread_lines,
     collect_thread_lines,
-    fallback_line_from_chat_row,
     fetch_events_for_chat,
     last_client_message_info as wb_last_client_info,
     merge_good_card,
@@ -1193,9 +1193,7 @@ async def wb_buyer_chats_mass_generate_send_for_store(
         except Exception:
             log.exception("wb_chat_mass events store=%s chat=%s", store.id, cid)
             continue
-        lines_ts = collect_thread_lines(evs, cid)
-        if not lines_ts:
-            lines_ts = fallback_line_from_chat_row(row)
+        lines_ts = build_wb_thread_lines(evs, cid, row)
         ok, reason, _mk, _ts = _wb_chat_eligibility(
             db, store.id, cid, lines_ts, reply_from, max_age_days=max_message_age_days
         )

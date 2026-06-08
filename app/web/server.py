@@ -38,7 +38,7 @@ from app.web import tasks as web_tasks
 from app.core.net import HttpStatusError
 from app.core.wb_buyer_chat import (
     WbBuyerChatClient,
-    fallback_line_from_chat_row,
+    build_wb_thread_lines,
     collect_thread_lines,
     fetch_events_for_chat,
     merge_good_card,
@@ -1846,7 +1846,7 @@ async def api_wb_buyer_chat_list(
 async def api_wb_buyer_chat_thread(
     store_id: int,
     chat_id: str,
-    pages: int = Query(12, ge=1, le=15, description="Сколько страниц ленты /events обойти для этого чата"),
+    pages: int = Query(20, ge=1, le=50, description="Сколько страниц ленты /events обойти для этого чата"),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):
@@ -1860,13 +1860,11 @@ async def api_wb_buyer_chat_thread(
     if not chat_row:
         raise HTTPException(404, "Чат не найден в списке. Нажмите «Обновить список чатов».")
     try:
-        events, _next = await fetch_events_for_chat(client, chat_id, max_wb_requests=pages)
+        events, next_cursor = await fetch_events_for_chat(client, chat_id, max_wb_requests=pages)
     except HttpStatusError as e:
         raise _wb_chat_http_error(e) from e
     gc = merge_good_card(chat_row if isinstance(chat_row, dict) else {}, events)
-    lines_ts = collect_thread_lines(events, chat_id)
-    if not lines_ts and isinstance(chat_row, dict):
-        lines_ts = fallback_line_from_chat_row(chat_row)
+    lines_ts = build_wb_thread_lines(events, chat_id, chat_row if isinstance(chat_row, dict) else None)
     lines = [{"role": r, "text": t, "addTimestamp": ts} for r, t, ts, _mk in lines_ts]
     texts_for_title = [t for _, t, __, ___ in lines_ts]
     product_title = product_title_from_wb_chat(gc, texts_for_title)
@@ -1887,6 +1885,8 @@ async def api_wb_buyer_chat_thread(
         "eligible_for_reply": eligible,
         "skip_reason": skip_reason if not eligible else "",
         "reply_from_date": reply_from.isoformat() if reply_from else "",
+        "has_more_history": next_cursor is not None,
+        "events_loaded": len(events),
     }
 
 
@@ -1913,13 +1913,15 @@ async def api_wb_buyer_chat_generate(
     if not chat_row:
         raise HTTPException(404, "Чат не найден в списке")
     try:
-        events, _ = await fetch_events_for_chat(client, chat_id, max_wb_requests=4)
+        events, _ = await fetch_events_for_chat(client, chat_id, max_wb_requests=20)
     except HttpStatusError as e:
         raise _wb_chat_http_error(e) from e
     gc = merge_good_card(chat_row if isinstance(chat_row, dict) else {}, events)
-    lines_ts = collect_thread_lines(events, chat_id)
-    if not lines_ts and isinstance(chat_row, dict):
-        lines_ts = fallback_line_from_chat_row(chat_row)
+    lines_ts = build_wb_thread_lines(
+        events,
+        chat_id,
+        chat_row if isinstance(chat_row, dict) else None,
+    )
     texts_for_title = [t for _, t, __, ___ in lines_ts]
     product_title = product_title_from_wb_chat(gc, texts_for_title)
     excerpt_parts = []
