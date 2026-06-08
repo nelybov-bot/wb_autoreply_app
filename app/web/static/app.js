@@ -155,6 +155,8 @@
     document.querySelectorAll('#nav-settings-users, #settings-seg-users').forEach(el => {
       el.style.display = isAdmin ? '' : 'none';
     });
+    const importCfgBtn = document.getElementById('btn-config-import');
+    if (importCfgBtn) importCfgBtn.style.display = isAdmin ? '' : 'none';
     const panelSettings = document.getElementById('panel-settings');
     const panelAuto = document.getElementById('panel-auto');
     const panelLog = document.getElementById('panel-log');
@@ -2574,6 +2576,93 @@
     });
   }
 
+  function wireConfigBackup() {
+    if (wireConfigBackup._done) return;
+    wireConfigBackup._done = true;
+    const btnExport = document.getElementById('btn-config-export');
+    const btnImport = document.getElementById('btn-config-import');
+    const fileInput = document.getElementById('config-import-file');
+
+    if (btnExport) {
+      btnExport.addEventListener('click', async () => {
+        btnExport.disabled = true;
+        try {
+          const base = getApiBase();
+          const url = base ? base + '/api/config/export' : API + '/config/export';
+          const res = await fetch(url, { credentials: 'include' });
+          if (!res.ok) {
+            const text = await res.text();
+            let err;
+            try { err = JSON.parse(text); } catch (_) { err = { detail: text }; }
+            throw new Error(err.detail || res.statusText || 'Ошибка выгрузки');
+          }
+          const blob = await res.blob();
+          const cd = res.headers.get('Content-Disposition') || '';
+          let filename = 'wb-autoreply-config.json';
+          const m = /filename="([^"]+)"/.exec(cd);
+          if (m) filename = m[1];
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(a.href);
+          toast('Настройки выгружены в файл');
+        } catch (err) {
+          toast(err.message || String(err), 'error');
+        } finally {
+          btnExport.disabled = false;
+        }
+      });
+    }
+
+    if (btnImport && fileInput) {
+      btnImport.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', async () => {
+        const file = fileInput.files && fileInput.files[0];
+        fileInput.value = '';
+        if (!file) return;
+        if (!confirmDanger('Загрузить настройки из файла? Существующие магазины с тем же именем будут обновлены.')) return;
+        btnImport.disabled = true;
+        try {
+          const text = await file.text();
+          let data;
+          try {
+            data = JSON.parse(text);
+          } catch (_) {
+            throw new Error('Файл не является корректным JSON');
+          }
+          const res = await api('/config/import', {
+            method: 'POST',
+            body: JSON.stringify({ data }),
+          });
+          const parts = [];
+          if (res.stores_created) parts.push(`магазинов добавлено: ${res.stores_created}`);
+          if (res.stores_updated) parts.push(`обновлено: ${res.stores_updated}`);
+          if (res.settings_count) parts.push(`настроек: ${res.settings_count}`);
+          if (res.prompts_added || res.prompts_updated) {
+            parts.push(`промптов +${res.prompts_added || 0}/~${res.prompts_updated || 0}`);
+          }
+          if (res.store_errors && res.store_errors.length) {
+            toast((parts.join(', ') || 'Загружено') + '. Ошибки: ' + res.store_errors.join('; '), 'error');
+          } else {
+            toast(parts.length ? 'Загружено: ' + parts.join(', ') : 'Настройки загружены');
+          }
+          await loadSettings();
+          await reloadStoresIntoSelects();
+          if (document.getElementById('panel-stores') && !document.getElementById('panel-stores').hidden) {
+            await loadStores();
+          }
+        } catch (err) {
+          toast(err.message || String(err), 'error');
+        } finally {
+          btnImport.disabled = false;
+        }
+      });
+    }
+  }
+
   function wireSettingsPanel() {
     if (wireSettingsPanel._done) return;
     wireSettingsPanel._done = true;
@@ -3305,6 +3394,7 @@
     applyUiPrefs();
     wireUiPrefs();
     wireSettingsPanel();
+    wireConfigBackup();
     syncBgParallaxListener();
     ensureAutoStatusPolling();
     if (!me) {

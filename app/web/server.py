@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Depends, Request, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -100,6 +100,7 @@ from app.core.ozon_alerts import (
     SETTING_TEMPLATE as OZON_ALERTS_TEMPLATE,
     is_legacy_telegram_template,
 )
+from app.core.config_backup import export_config, import_config
 from app.core.workflows import (
     auto_process_ozon_buyer_chats,
     auto_process_ozon_important_alerts,
@@ -1762,6 +1763,51 @@ def api_list_prompts(db: Database = Depends(get_db), _: UserRow = Depends(requir
 def api_update_prompt(prompt_id: int, body: PromptUpdate, db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
     db.update_prompt(prompt_id, body.prompt_text)
     return {"ok": True}
+
+
+# ---------- API: config backup ----------
+class ConfigImportBody(BaseModel):
+    data: dict
+
+
+@app.get("/api/config/export")
+def api_config_export(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
+    """Выгрузка магазинов, настроек, расписания и промптов в JSON-файл."""
+    payload = export_config(db)
+    stamp = dt.datetime.now(MSK_TZ).strftime("%Y%m%d-%H%M%S")
+    filename = f"wb-autoreply-config-{stamp}.json"
+    body = json.dumps(payload, ensure_ascii=False, indent=2)
+    return Response(
+        content=body.encode("utf-8"),
+        media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/config/import")
+def api_config_import(
+    body: ConfigImportBody,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_admin),
+):
+    """Загрузка конфигурации из JSON (магазины обновляются по имени и маркетплейсу)."""
+    global _tg_report_fail_until, _tg_report_fail_token
+    try:
+        result = import_config(db, body.data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    token = normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or "")
+    if token:
+        db.set_setting("telegram_bot_token", token)
+        _tg_report_fail_until = 0.0
+        _tg_report_fail_token = ""
+    tpl = db.get_setting(OZON_ALERTS_TEMPLATE) or ""
+    if is_legacy_telegram_template(tpl):
+        db.set_setting(OZON_ALERTS_TEMPLATE, "")
+    card_tpl = db.get_setting(SETTING_CARD_CHECK_TEMPLATE) or ""
+    if is_legacy_card_telegram_template(card_tpl):
+        db.set_setting(SETTING_CARD_CHECK_TEMPLATE, "")
+    return result
 
 
 class CardErrorStatusBody(BaseModel):

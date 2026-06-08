@@ -553,6 +553,16 @@
             <label>Пользователь</label>
             <div class="form-hint" id="auth-user-label">—</div>
           </div>
+          <h3 class="settings-subhead">Резервная копия настроек</h3>
+          <p class="form-hint">
+            Один файл: магазины, API-ключи, Telegram, расписание автозапуска, Ozon-акции и промпты.
+            В файле есть секреты — храните его в безопасном месте, не выкладывайте в git.
+          </p>
+          <div class="form-row" style="gap:10px; flex-wrap:wrap; margin-top:10px;">
+            <button type="button" class="btn btn-secondary" id="btn-config-export">Выгрузить настройки</button>
+            <button type="button" class="btn btn-secondary" id="btn-config-import">Загрузить настройки</button>
+            <input type="file" id="config-import-file" accept="application/json,.json" hidden>
+          </div>
         </div>
 
         <div id="settings-section-openai" class="settings-section form-card" hidden>
