@@ -33,7 +33,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 from app.logging_config import setup_logging
 setup_logging(LOG_PATH)
 
-from app.db import Database, Store, ItemRow, PromptRow, UserRow, AuditEventRow
+from app.db import Database, Store, ItemRow, PromptRow, UserRow, AuditEventRow, CardErrorAlertRow
 from app.web import tasks as web_tasks
 from app.core.net import HttpStatusError
 from app.core.wb_buyer_chat import (
@@ -42,6 +42,7 @@ from app.core.wb_buyer_chat import (
     collect_thread_lines,
     fetch_events_for_chat,
     merge_good_card,
+    last_client_message_info as wb_last_client_info,
     product_title_from_wb_chat,
     wb_chat_error_message,
 )
@@ -54,6 +55,7 @@ from app.core.ozon_buyer_chat import (
     ozon_chat_row_id,
     ozon_chat_type,
     ozon_feature_unavailable_user_message,
+    last_client_message_info as ozon_last_client_info,
     ozon_http_skip_reason,
     ozon_reply_window_hint,
     product_title_from_ozon_chat,
@@ -66,6 +68,14 @@ from app.core.ozon_actions import (
 )
 from app.core.ozon_client import OzonClient
 from app.core.chat_common import SETTING_AUTO_CHAT_MAX_AGE_DAYS, SETTING_REPLY_FROM, parse_api_error_detail
+from app.core.card_check import (
+    DEFAULT_TELEGRAM_TEMPLATE,
+    SETTING_CARD_CHECK_ENABLED,
+    SETTING_CARD_CHECK_IN_REPORT,
+    SETTING_CARD_CHECK_TELEGRAM,
+    SETTING_CARD_CHECK_TEMPLATE,
+)
+from app.core.telegram_notify import send_activity_report
 from app.core.workflows import (
     auto_process_ozon_buyer_chats,
     auto_process_wb_buyer_chats,
@@ -406,11 +416,15 @@ class OzonActionsRemoveBody(BaseModel):
 OZON_ACTIONS_SETTINGS_KEY = "ozon_actions_settings_json"
 AUTO_SCHEDULE_KEY = "auto_schedule_json"
 AUTO_LAST_RUN_KEY = "auto_schedule_last_run_at"
+TELEGRAM_REPORT_ENABLED = "telegram_report_enabled"
+TELEGRAM_REPORT_INTERVAL = "telegram_report_interval"
+TELEGRAM_REPORT_LAST_SENT = "telegram_report_last_sent"
 _WB_CHAT_LIST_TTL_S = 55.0
 _OZON_CHAT_LIST_TTL_S = 55.0
 _wb_chat_list_cache: dict[int, tuple[float, list]] = {}
 _ozon_chat_list_cache: dict[int, tuple[float, list, Optional[str]]] = {}
 _scheduler_task: Optional[asyncio.Task] = None
+_telegram_report_task: Optional[asyncio.Task] = None
 _scheduler_seen: set[str] = set()
 _auto_run_task: Optional[asyncio.Task] = None
 _interval_skip_logged: bool = False
@@ -660,16 +674,128 @@ async def _process_auto_store(
                 only_auto_add=bool(ozon_actions_cfg.get("only_auto_add", True)),
                 action_ids=watched if watched else None,
             )
+            oa = result["ozon_actions"] if isinstance(result.get("ozon_actions"), dict) else {}
+            log.info(
+                "auto_run store_id=%s ozon_actions: matched=%s processed=%s removed=%s skipped=%s reason=%s",
+                store.id,
+                oa.get("actions_matched"),
+                oa.get("actions_processed"),
+                oa.get("products_removed"),
+                oa.get("skipped"),
+                oa.get("reason") or "",
+            )
+            try:
+                db.add_audit_event(
+                    actor="system",
+                    action="ozon_actions_auto_remove",
+                    item_type="ozon_action",
+                    store_id=store.id,
+                    result="skipped" if oa.get("skipped") else "ok",
+                    meta=oa,
+                )
+            except Exception:
+                pass
         else:
             result["ozon_actions"] = {
                 "skipped": 1,
                 "reason": "not_ozon_or_no_keys",
             }
+
+    summary_parts: list[str] = []
+    if item_types:
+        summary_parts.append(
+            f"Отзывы/вопросы: +{result.get('added', 0)}, "
+            f"к ответу {result.get('candidates', 0)}, "
+            f"сгенерировано {result.get('gen_ok', 0)}, "
+            f"отправлено {result.get('sent_ok', 0)}"
+        )
+        if result.get("sent_failed"):
+            summary_parts.append(f"ошибок отправки {result['sent_failed']}")
+    wb = result.get("wb_chats") if isinstance(result.get("wb_chats"), dict) else {}
+    if wb:
+        if wb.get("reason"):
+            summary_parts.append(f"Чаты WB: пропуск ({wb.get('reason')})")
+        elif wb.get("wb_chat_sent") or wb.get("wb_chat_candidates"):
+            summary_parts.append(
+                f"Чаты WB: отправлено {int(wb.get('wb_chat_sent') or 0)} "
+                f"(кандидатов {int(wb.get('wb_chat_candidates') or 0)})"
+            )
+    oz = result.get("ozon_chats") if isinstance(result.get("ozon_chats"), dict) else {}
+    if oz:
+        if oz.get("reason"):
+            summary_parts.append(f"Чаты Ozon: пропуск ({oz.get('reason')})")
+        elif oz.get("ozon_chat_skip_reason") or oz.get("message"):
+            summary_parts.append(
+                f"Чаты Ozon: пропуск ({oz.get('ozon_chat_skip_reason') or oz.get('message')})"
+            )
+        elif oz.get("ozon_chat_sent") or oz.get("ozon_chat_candidates"):
+            summary_parts.append(
+                f"Чаты Ozon: отправлено {int(oz.get('ozon_chat_sent') or 0)} "
+                f"(кандидатов {int(oz.get('ozon_chat_candidates') or 0)})"
+            )
+    oa = result.get("ozon_actions") if isinstance(result.get("ozon_actions"), dict) else {}
+    if oa:
+        if oa.get("skipped"):
+            summary_parts.append(f"Акции Ozon: пропуск ({oa.get('reason') or oa.get('message') or '—'})")
+        else:
+            summary_parts.append(
+                f"Акции Ozon: удалено {int(oa.get('products_removed') or 0)} товаров "
+                f"из {int(oa.get('actions_processed') or 0)} акций"
+            )
+    if result.get("reviews_phase_error"):
+        summary_parts.append(f"ошибка отзывов: {result['reviews_phase_error'][:200]}")
+    try:
+        db.add_audit_event(
+            actor="system",
+            action="store_auto",
+            item_type="activity",
+            store_id=store.id,
+            result="partial" if result.get("reviews_phase_error") else "ok",
+            meta={
+                "store_name": store.name,
+                "marketplace": store.marketplace,
+                "summary": " · ".join(summary_parts) if summary_parts else "без действий",
+                "added": result.get("added"),
+                "candidates": result.get("candidates"),
+                "gen_ok": result.get("gen_ok"),
+                "sent_ok": result.get("sent_ok"),
+                "wb_chats": wb or None,
+                "ozon_chats": oz or None,
+                "ozon_actions": oa or None,
+            },
+        )
+    except Exception:
+        pass
     return result
 
 
 def _sum_store_results(stores_results: list[dict], key: str) -> int:
     return sum(int(r.get(key) or 0) for r in stores_results)
+
+
+def _aggregate_ozon_actions_stats(stores_results: list[dict]) -> dict:
+    out = {
+        "actions_matched": 0,
+        "actions_processed": 0,
+        "products_removed": 0,
+        "products_rejected": 0,
+        "stores_skipped": 0,
+        "stores_with_removals": 0,
+    }
+    for row in stores_results:
+        oa = row.get("ozon_actions")
+        if not isinstance(oa, dict):
+            continue
+        if oa.get("skipped"):
+            out["stores_skipped"] += 1
+            continue
+        out["actions_matched"] += int(oa.get("actions_matched") or 0)
+        out["actions_processed"] += int(oa.get("actions_processed") or 0)
+        out["products_removed"] += int(oa.get("products_removed") or 0)
+        out["products_rejected"] += int(oa.get("products_rejected") or 0)
+        if int(oa.get("products_removed") or 0) > 0:
+            out["stores_with_removals"] += 1
+    return out
 
 
 async def _run_auto_slot(slot: str) -> None:
@@ -746,11 +872,13 @@ async def _run_auto_slot(slot: str) -> None:
                 ozon_actions_cfg=ozon_actions_cfg,
             )
             stores_results.append(store_meta)
+        ozon_actions_totals = _aggregate_ozon_actions_stats(stores_results)
         meta_run = {
             "slot": slot,
             "store_ids": [s.id for s in sorted_stores],
             "stores_processed": n_stores,
             "stores_results": stores_results,
+            "ozon_actions_totals": ozon_actions_totals,
             "item_types": item_types,
             "deleted_before_load": _sum_store_results(stores_results, "deleted_before_load"),
             "added": _sum_store_results(stores_results, "added"),
@@ -795,6 +923,114 @@ async def _run_auto_slot(slot: str) -> None:
             db.set_setting(AUTO_LAST_RUN_KEY, finished_dt.isoformat(timespec="seconds"))
         except Exception:
             pass
+
+def _telegram_report_period_seconds(interval: str) -> int:
+    return 86400 if (interval or "").strip() == "day" else 3600
+
+
+def _format_report_period_label(since_dt: dt.datetime, until_dt: dt.datetime) -> str:
+    fmt = "%d.%m.%Y %H:%M"
+    return f"{since_dt.strftime(fmt)} — {until_dt.strftime(fmt)} (МСК)"
+
+
+async def _send_telegram_report(
+    db: Database,
+    *,
+    since_dt: dt.datetime,
+    until_dt: dt.datetime,
+    interval: str,
+    manual: bool = False,
+) -> dict:
+    token = (db.get_setting("telegram_bot_token") or "").strip()
+    chat_id = (db.get_setting("telegram_chat_id") or "").strip()
+    if not token or not chat_id:
+        raise HTTPException(400, "Укажите токен бота и ID чата в настройках Telegram")
+    since_iso = since_dt.isoformat(timespec="seconds")
+    stats = db.get_activity_stats_since(since_iso)
+    period_label = _format_report_period_label(since_dt, until_dt)
+    include_card_errors = (db.get_setting(SETTING_CARD_CHECK_IN_REPORT) or "1").strip() != "0"
+    ok = await send_activity_report(
+        token,
+        chat_id,
+        stats,
+        period_label=period_label,
+        interval=interval,
+        include_card_errors=include_card_errors,
+    )
+    if not ok:
+        raise HTTPException(502, "Не удалось отправить сообщение в Telegram")
+    try:
+        db.set_setting(TELEGRAM_REPORT_LAST_SENT, until_dt.isoformat(timespec="seconds"))
+        db.add_audit_event(
+            actor="system",
+            action="telegram_report",
+            item_type="activity",
+            result="ok",
+            meta={
+                "interval": interval,
+                "period_label": period_label,
+                "since": since_iso,
+                "manual": manual,
+                **stats,
+            },
+        )
+    except Exception:
+        pass
+    log.info(
+        "telegram_report sent interval=%s manual=%s reviews=%s questions=%s chats=%s ozon_removed=%s",
+        interval,
+        manual,
+        stats.get("reviews_sent"),
+        stats.get("questions_sent"),
+        stats.get("chat_replies_total"),
+        stats.get("ozon_products_removed"),
+    )
+    return {"ok": True, "period_label": period_label, **stats}
+
+
+async def _maybe_send_telegram_report() -> None:
+    db = get_db()
+    if (db.get_setting(TELEGRAM_REPORT_ENABLED) or "").strip() != "1":
+        return
+    token = (db.get_setting("telegram_bot_token") or "").strip()
+    chat_id = (db.get_setting("telegram_chat_id") or "").strip()
+    if not token or not chat_id:
+        return
+    interval = (db.get_setting(TELEGRAM_REPORT_INTERVAL) or "hour").strip()
+    if interval not in ("hour", "day"):
+        interval = "hour"
+    period_sec = _telegram_report_period_seconds(interval)
+    now = dt.datetime.now(MSK_TZ)
+    last_s = (db.get_setting(TELEGRAM_REPORT_LAST_SENT) or "").strip()
+    since_dt: dt.datetime
+    if last_s:
+        try:
+            last_dt = dt.datetime.fromisoformat(last_s)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=MSK_TZ)
+            if (now - last_dt).total_seconds() < period_sec:
+                return
+            since_dt = last_dt
+        except Exception:
+            since_dt = now - dt.timedelta(seconds=period_sec)
+    else:
+        since_dt = now - dt.timedelta(seconds=period_sec)
+    try:
+        await _send_telegram_report(db, since_dt=since_dt, until_dt=now, interval=interval)
+    except HTTPException as e:
+        log.warning("telegram_report: %s", e.detail)
+
+
+async def _telegram_report_loop() -> None:
+    while True:
+        try:
+            await _maybe_send_telegram_report()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("telegram report loop failed")
+        await asyncio.sleep(60)
+
 
 async def _auto_scheduler_loop() -> None:
     global _scheduler_seen, _auto_run_task, _interval_skip_logged
@@ -1244,7 +1480,21 @@ def api_items_bulk(body: BulkItemsBody, db: Database = Depends(get_db), _: UserR
 # ---------- API: settings ----------
 @app.get("/api/settings")
 def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
-    keys = ["openai_key", "telegram_bot_token", "telegram_chat_id", "telegram_enabled", "theme", SETTING_REPLY_FROM, SETTING_AUTO_CHAT_MAX_AGE_DAYS]
+    keys = [
+        "openai_key",
+        "telegram_bot_token",
+        "telegram_chat_id",
+        "telegram_enabled",
+        TELEGRAM_REPORT_ENABLED,
+        TELEGRAM_REPORT_INTERVAL,
+        SETTING_CARD_CHECK_ENABLED,
+        SETTING_CARD_CHECK_TELEGRAM,
+        SETTING_CARD_CHECK_TEMPLATE,
+        SETTING_CARD_CHECK_IN_REPORT,
+        "theme",
+        SETTING_REPLY_FROM,
+        SETTING_AUTO_CHAT_MAX_AGE_DAYS,
+    ]
     return {k: db.get_setting(k) or "" for k in keys}
 
 
@@ -1253,6 +1503,21 @@ def api_set_settings(body: dict[str, str], db: Database = Depends(get_db), _: Us
     for k, v in body.items():
         db.set_setting(k, v or "")
     return {"ok": True}
+
+
+@app.post("/api/telegram/report-now")
+async def api_telegram_report_now(
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_permission("view_settings")),
+):
+    """Отправить отчёт за последний час/сутки вручную (для проверки настроек)."""
+    interval = (db.get_setting(TELEGRAM_REPORT_INTERVAL) or "hour").strip()
+    if interval not in ("hour", "day"):
+        interval = "hour"
+    period_sec = _telegram_report_period_seconds(interval)
+    now = dt.datetime.now(MSK_TZ)
+    since_dt = now - dt.timedelta(seconds=period_sec)
+    return await _send_telegram_report(db, since_dt=since_dt, until_dt=now, interval=interval, manual=True)
 
 
 @app.get("/api/auto-schedule")
@@ -1297,6 +1562,59 @@ def api_list_prompts(db: Database = Depends(get_db), _: UserRow = Depends(requir
 @app.patch("/api/prompts/{prompt_id}")
 def api_update_prompt(prompt_id: int, body: PromptUpdate, db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
     db.update_prompt(prompt_id, body.prompt_text)
+    return {"ok": True}
+
+
+class CardErrorStatusBody(BaseModel):
+    status: str
+
+
+def _card_error_to_out(row: CardErrorAlertRow, store_name: str = "") -> dict:
+    return {
+        "id": row.id,
+        "ts": row.ts,
+        "store_id": row.store_id,
+        "store_name": store_name,
+        "source_type": row.source_type,
+        "source_ref": row.source_ref,
+        "product_title": row.product_title,
+        "customer_text": row.customer_text,
+        "error_kind": row.error_kind,
+        "explanation": row.explanation,
+        "status": row.status,
+        "telegram_sent": row.telegram_sent,
+    }
+
+
+@app.get("/api/card-errors")
+def api_list_card_errors(
+    store_id: Optional[int] = None,
+    status: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    rows = db.list_card_error_alerts(
+        store_id=store_id,
+        status=(status or "").strip() or None,
+        limit=limit,
+        offset=offset,
+    )
+    store_names = {s.id: s.name for s in db.list_stores()}
+    return [_card_error_to_out(r, store_names.get(r.store_id, "")) for r in rows]
+
+
+@app.patch("/api/card-errors/{alert_id}")
+def api_update_card_error_status(
+    alert_id: int,
+    body: CardErrorStatusBody,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    ok = db.update_card_error_status(alert_id, body.status)
+    if not ok:
+        raise HTTPException(400, "Некорректный статус")
     return {"ok": True}
 
 
@@ -1528,7 +1846,7 @@ async def api_wb_buyer_chat_list(
 async def api_wb_buyer_chat_thread(
     store_id: int,
     chat_id: str,
-    pages: int = Query(6, ge=1, le=12, description="Сколько страниц ленты /events обойти для этого чата"),
+    pages: int = Query(12, ge=1, le=15, description="Сколько страниц ленты /events обойти для этого чата"),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):
@@ -1609,12 +1927,27 @@ async def api_wb_buyer_chat_generate(
         label = "Покупатель" if role == "client" else "Продавец" if role == "seller" else role
         excerpt_parts.append(f"{label}: {text}")
     conversation = "\n".join(excerpt_parts) if excerpt_parts else "(сообщений пока нет)"
+    client_msg_key = ""
+    last_client_text = ""
+    info = wb_last_client_info(lines_ts)
+    if info:
+        client_msg_key, _ts = info
+        for role, text, _t, mk in reversed(lines_ts):
+            if role == "client":
+                last_client_text = text or ""
+                if not client_msg_key:
+                    client_msg_key = mk
+                break
     try:
         draft = await generate_wb_buyer_chat_reply(
             db,
             key,
             product_title=product_title,
             conversation_excerpt=conversation,
+            store_id=store_id,
+            chat_id=chat_id,
+            client_message_key=client_msg_key or None,
+            customer_text=last_client_text or conversation,
         )
     except json.JSONDecodeError:
         raise HTTPException(502, "Модель вернула не JSON — попробуйте сгенерировать ещё раз")
@@ -1947,9 +2280,25 @@ async def api_ozon_buyer_chat_generate(
         label = "Покупатель" if role == "client" else "Продавец" if role == "seller" else role
         excerpt_parts.append(f"{label}: {text}")
     conversation = "\n".join(excerpt_parts) if excerpt_parts else "(сообщений пока нет)"
+    client_msg_key = ""
+    last_client_text = ""
+    info = ozon_last_client_info(lines_raw)
+    if info:
+        client_msg_key, _created = info
+        for role, text, _mid, _ca in reversed(lines_raw):
+            if role == "client":
+                last_client_text = text or ""
+                break
     try:
         draft = await generate_ozon_buyer_chat_reply(
-            db, key, product_title=product_title, conversation_excerpt=conversation
+            db,
+            key,
+            product_title=product_title,
+            conversation_excerpt=conversation,
+            store_id=store_id,
+            chat_id=chat_id,
+            client_message_key=client_msg_key or None,
+            customer_text=last_client_text or conversation,
         )
     except json.JSONDecodeError:
         raise HTTPException(502, "Модель вернула не JSON — попробуйте сгенерировать ещё раз")
@@ -2301,7 +2650,7 @@ def api_log_tail(db: Database = Depends(get_db), _: UserRow = Depends(require_pe
 
 @app.on_event("startup")
 async def _startup_scheduler():
-    global _scheduler_task
+    global _scheduler_task, _telegram_report_task
     # После инициализации uvicorn — ещё раз, чтобы формат логов не затирался дефолтом воркера
     setup_logging(LOG_PATH)
     try:
@@ -2312,11 +2661,14 @@ async def _startup_scheduler():
     if _scheduler_task is None or _scheduler_task.done():
         _scheduler_task = asyncio.create_task(_auto_scheduler_loop())
         log.info("Auto-scheduler started (MSK)")
+    if _telegram_report_task is None or _telegram_report_task.done():
+        _telegram_report_task = asyncio.create_task(_telegram_report_loop())
+        log.info("Telegram report scheduler started (MSK)")
 
 
 @app.on_event("shutdown")
 async def _shutdown_scheduler():
-    global _scheduler_task
+    global _scheduler_task, _telegram_report_task
     if _scheduler_task and not _scheduler_task.done():
         _scheduler_task.cancel()
         try:
@@ -2324,6 +2676,13 @@ async def _shutdown_scheduler():
         except Exception:
             pass
     _scheduler_task = None
+    if _telegram_report_task and not _telegram_report_task.done():
+        _telegram_report_task.cancel()
+        try:
+            await _telegram_report_task
+        except Exception:
+            pass
+    _telegram_report_task = None
 
 
 # ---------- Static SPA & PWA ----------

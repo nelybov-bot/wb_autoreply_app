@@ -125,6 +125,8 @@ async def remove_products_from_actions(
         for p in products:
             pid = p.get("id")
             if pid is None:
+                pid = p.get("product_id")
+            if pid is None:
                 continue
             try:
                 pids.append(int(pid))
@@ -182,6 +184,7 @@ async def auto_remove_from_ozon_auto_actions(
         raw,
         only_auto_add=only_auto_add,
         action_ids=action_ids,
+        require_participating=False,
     )
     ids = [int(a.get("id")) for a in picked if a.get("id") is not None]
     stats = await remove_products_from_actions(client, ids)

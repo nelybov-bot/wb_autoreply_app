@@ -277,6 +277,7 @@
       loadSettings();
     }
     if (tabId === 'log') loadLog();
+    if (tabId === 'card-errors') loadCardErrors();
   }
 
   function wireAppNav() {
@@ -674,6 +675,20 @@
       }
       setTimeout(() => { ozonChatsSuppressSelectChange = false; }, 0);
     }
+    const logStoreSel = document.getElementById('log-store');
+    if (logStoreSel) {
+      const prevLog = String(logStoreSel.value || '').trim();
+      logStoreSel.innerHTML = '<option value="">Все магазины</option>'
+        + stores.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+      if (prevLog && stores.some(s => String(s.id) === prevLog)) logStoreSel.value = prevLog;
+    }
+    const cardErrStoreSel = document.getElementById('card-errors-store');
+    if (cardErrStoreSel) {
+      const prevCe = String(cardErrStoreSel.value || '').trim();
+      cardErrStoreSel.innerHTML = '<option value="">Все магазины</option>'
+        + stores.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+      if (prevCe && stores.some(s => String(s.id) === prevCe)) cardErrStoreSel.value = prevCe;
+    }
     const ozActSel = document.getElementById('ozon-actions-store');
     if (ozActSel) {
       const oz = storesForMarketplace('ozon');
@@ -768,7 +783,7 @@
   let wbChatSelectedId = null;
   let wbChatReplySign = '';
   let wbChatClientMessageKey = '';
-  let wbChatThreadPages = 4;
+  let wbChatThreadPages = 12;
   /** кэш переписки: ключ «storeId:chatId» */
   const wbChatThreadCache = new Map();
   /** защита от гонок: быстрая смена вкладки / чата / магазина */
@@ -853,9 +868,9 @@
     const cached = wbChatThreadCache.get(wbChatThreadCacheKey(wbChatSelectedId, sid));
     if (cached) {
       applyWbChatThreadData(cached);
-      setChatStatusBar('wb-chats-status-bar', 'ok', 'Переписка загружена ранее. «Обновить переписку» — обновить с WB.');
-    } else {
-      setChatStatusBar('wb-chats-status-bar', 'info', 'Нажмите «Обновить переписку» для полной истории.');
+      setChatStatusBar('wb-chats-status-bar', 'ok', 'Переписка из кэша. «Обновить переписку» — заново с WB.');
+    } else if (wbChatSelectedId) {
+      void loadWbChatThread(wbChatSelectedId);
     }
   }
 
@@ -912,7 +927,7 @@
       btn.addEventListener('click', () => {
         const chatId = decodeURIComponent(btn.getAttribute('data-chat-id') || '');
         wbChatSelectedId = chatId;
-        wbChatThreadPages = 4;
+        wbChatThreadPages = 12;
         renderWbChatsList();
         restoreWbChatDetailForSelected();
       });
@@ -1014,7 +1029,7 @@
     setPanelLoading('wb-chats-loading', true, 'Загружаю переписку…');
     setChatToolbarBusy('wb-chats', true);
     try {
-      const pages = Math.max(1, Math.min(8, wbChatThreadPages || 2));
+      const pages = Math.max(1, Math.min(15, wbChatThreadPages || 12));
       const path = `/wb/buyer-chats/${sid}/${encodeURIComponent(chatId)}/thread?pages=${pages}`;
       const t = await api(path, { timeoutMs: 90000 });
       if (gen !== wbChatThreadFetchGen) return;
@@ -1214,7 +1229,7 @@
         toast('Выберите чат', 'error');
         return;
       }
-      wbChatThreadPages = 4;
+      wbChatThreadPages = 12;
       void loadWbChatThread(wbChatSelectedId);
     });
     const bMore = document.getElementById('btn-wb-chats-more-history');
@@ -1223,7 +1238,7 @@
         toast('Выберите чат', 'error');
         return;
       }
-      wbChatThreadPages = Math.min(8, (wbChatThreadPages || 2) + 2);
+      wbChatThreadPages = Math.min(15, (wbChatThreadPages || 12) + 3);
       void loadWbChatThread(wbChatSelectedId);
     });
     const b3 = document.getElementById('btn-wb-chats-generate');
@@ -2194,6 +2209,61 @@
   document.getElementById('btn-more-questions').addEventListener('click', () => loadQuestions(false));
 
   // ---- Settings ----
+  const DEFAULT_CARD_CHECK_TELEGRAM_TEMPLATE = (
+    'Ошибка в карточке (вероятно)\n'
+    + 'Магазин: {store_name}\n'
+    + 'Товар: {product_title}\n'
+    + 'Источник: {source_label}\n'
+    + 'Текст покупателя:\n{customer_text}\n\n'
+    + 'Возможная ошибка: {error_kind}\n'
+    + '{explanation}'
+  );
+
+  const PROMPT_GROUP_ORDER = ['review', 'question', 'buyer_chat', 'card_check'];
+  const PROMPT_GROUP_TITLES = {
+    review: 'Отзывы',
+    question: 'Вопросы',
+    buyer_chat: 'Чаты с покупателями (WB и Ozon)',
+    card_check: 'Проверка карточки товара',
+  };
+
+  function promptRatingLabel(itemType, ratingGroup) {
+    if (itemType === 'review') return ratingGroup;
+    return ratingGroup === 'general' ? 'общий' : ratingGroup;
+  }
+
+  function renderPromptsList(prompts) {
+    const wrap = document.getElementById('prompts-list');
+    if (!wrap) return;
+    const byType = {};
+    (prompts || []).forEach(p => {
+      if (!byType[p.item_type]) byType[p.item_type] = [];
+      byType[p.item_type].push(p);
+    });
+    const parts = [];
+    PROMPT_GROUP_ORDER.forEach(type => {
+      const rows = byType[type];
+      if (!rows || !rows.length) return;
+      parts.push(`<h3 class="prompts-group-title" style="margin:18px 0 10px; font-size:1rem;">${escapeHtml(PROMPT_GROUP_TITLES[type] || type)}</h3>`);
+      rows.sort((a, b) => String(a.rating_group).localeCompare(String(b.rating_group)));
+      rows.forEach(p => {
+        parts.push(`
+          <div class="form-group" style="margin-top: 10px;">
+            <label>${escapeHtml(promptRatingLabel(p.item_type, p.rating_group))}</label>
+            <textarea data-prompt-id="${p.id}" class="prompt-text">${escapeHtml(p.prompt_text)}</textarea>
+          </div>`);
+      });
+    });
+    wrap.innerHTML = parts.join('') || '<div class="form-hint">Нет промптов</div>';
+    wrap.querySelectorAll('.prompt-text').forEach(ta => {
+      ta.addEventListener('blur', async () => {
+        const id = Number(ta.getAttribute('data-prompt-id'));
+        await api('/prompts/' + id, { method: 'PATCH', body: JSON.stringify({ prompt_text: ta.value }) });
+        toast('Промпт сохранён');
+      });
+    });
+  }
+
   async function loadSettings() {
     syncSettingsSectionUI();
     const apiBaseEl = document.getElementById('setting-api_base');
@@ -2224,20 +2294,22 @@
       if (autoAgeEl) autoAgeEl.value = String(data.buyer_chat_auto_max_age_days || '3');
       const tgEnabled = document.getElementById('setting-telegram_enabled');
       if (tgEnabled) tgEnabled.checked = String(data.telegram_enabled || '1') !== '0';
+      const tgReport = document.getElementById('setting-telegram_report_enabled');
+      if (tgReport) tgReport.checked = String(data.telegram_report_enabled || '0') === '1';
+      const tgInterval = document.getElementById('setting-telegram_report_interval');
+      if (tgInterval) tgInterval.value = (data.telegram_report_interval || 'hour') === 'day' ? 'day' : 'hour';
+      const cardEnabled = document.getElementById('setting-card_check_enabled');
+      if (cardEnabled) cardEnabled.checked = String(data.card_check_enabled || '1') !== '0';
+      const cardTg = document.getElementById('setting-card_check_telegram_enabled');
+      if (cardTg) cardTg.checked = String(data.card_check_telegram_enabled || '1') !== '0';
+      const cardInReport = document.getElementById('setting-card_check_include_in_periodic_report');
+      if (cardInReport) cardInReport.checked = String(data.card_check_include_in_periodic_report || '1') !== '0';
+      const cardTpl = document.getElementById('setting-card_check_telegram_template');
+      if (cardTpl) {
+        cardTpl.value = data.card_check_telegram_template || DEFAULT_CARD_CHECK_TELEGRAM_TEMPLATE;
+      }
       const prompts = await api('/prompts');
-      const wrap = document.getElementById('prompts-list');
-      wrap.innerHTML = prompts.map(p => `
-        <div class="form-group" style="margin-top: 12px;">
-          <label>${p.item_type} / ${p.rating_group}</label>
-          <textarea data-prompt-id="${p.id}" class="prompt-text">${escapeHtml(p.prompt_text)}</textarea>
-        </div>`).join('');
-      wrap.querySelectorAll('.prompt-text').forEach(ta => {
-        ta.addEventListener('blur', async () => {
-          const id = Number(ta.getAttribute('data-prompt-id'));
-          await api('/prompts/' + id, { method: 'PATCH', body: JSON.stringify({ prompt_text: ta.value }) });
-          toast('Промпт сохранён');
-        });
-      });
+      renderPromptsList(prompts);
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -2382,6 +2454,12 @@
       telegram_bot_token: document.getElementById('setting-telegram_bot_token').value,
       telegram_chat_id: document.getElementById('setting-telegram_chat_id').value,
       telegram_enabled: document.getElementById('setting-telegram_enabled')?.checked ? '1' : '0',
+      telegram_report_enabled: document.getElementById('setting-telegram_report_enabled')?.checked ? '1' : '0',
+      telegram_report_interval: document.getElementById('setting-telegram_report_interval')?.value === 'day' ? 'day' : 'hour',
+      card_check_enabled: document.getElementById('setting-card_check_enabled')?.checked ? '1' : '0',
+      card_check_telegram_enabled: document.getElementById('setting-card_check_telegram_enabled')?.checked ? '1' : '0',
+      card_check_include_in_periodic_report: document.getElementById('setting-card_check_include_in_periodic_report')?.checked ? '1' : '0',
+      card_check_telegram_template: document.getElementById('setting-card_check_telegram_template')?.value || '',
       buyer_chat_reply_from_date: document.getElementById('setting-buyer_chat_reply_from_date')?.value || '',
       buyer_chat_auto_max_age_days: String(parseInt(document.getElementById('setting-buyer_chat_auto_max_age_days')?.value || '3', 10) || 3),
     };
@@ -2399,6 +2477,21 @@
     });
   });
 
+  const btnTgReportNow = document.getElementById('btn-telegram-report-now');
+  if (btnTgReportNow) {
+    btnTgReportNow.addEventListener('click', async () => {
+      btnTgReportNow.disabled = true;
+      try {
+        const res = await api('/telegram/report-now', { method: 'POST' });
+        toast(`Отчёт отправлен: отзывы ${res.reviews_sent || 0}, вопросы ${res.questions_sent || 0}, чаты ${res.chat_replies_total || 0}`);
+      } catch (err) {
+        toast(err.message, 'error');
+      } finally {
+        btnTgReportNow.disabled = false;
+      }
+    });
+  }
+
   // ---- Log ----
   function safeJsonParse(s) {
     try { return JSON.parse(s); } catch (_) { return null; }
@@ -2411,25 +2504,142 @@
       send: 'Отправка',
       template_apply: 'Шаблон',
       auto_run: 'Автозапуск',
+      auto_run_skipped: 'Автозапуск: пропуск слота',
+      store_auto: 'Автозапуск: магазин',
+      store_wb_chats_auto: 'Автозапуск: чаты WB',
+      store_ozon_chats_auto: 'Автозапуск: чаты Ozon',
+      ozon_actions_auto_remove: 'Акции Ozon: автоудаление',
+      ozon_actions_remove: 'Акции Ozon: удаление',
       wb_buyer_chat_generate: 'Чат WB: генерация',
       wb_buyer_chat_send: 'Чат WB: отправка',
       wb_buyer_chat_mass_send: 'Чат WB: массово ИИ+отправка',
       ozon_buyer_chat_generate: 'Чат Ozon: генерация',
       ozon_buyer_chat_send: 'Чат Ozon: отправка',
       ozon_buyer_chat_mass_send: 'Чат Ozon: массово ИИ+отправка',
+      telegram_report: 'Telegram: отчёт',
+      card_error_detected: 'Ошибка в карточке',
     };
     return m[a] || a || '—';
+  }
+
+  function formatStoreAutoLine(r) {
+    if (!r || typeof r !== 'object') return '';
+    const parts = [`маг. ${r.store_id} (${r.marketplace || '?'})`];
+    if (r.added || r.candidates || r.sent_ok) {
+      parts.push(`отзывы/вопросы: +${r.added || 0}, к ответу ${r.candidates || 0}, отправлено ${r.sent_ok || 0}`);
+    }
+    const wb = r.wb_chats;
+    if (wb && (wb.wb_chat_sent || wb.wb_chat_candidates)) {
+      parts.push(`чаты WB: ${wb.wb_chat_sent || 0} отв.`);
+    }
+    const oz = r.ozon_chats;
+    if (oz && (oz.ozon_chat_sent || oz.ozon_chat_candidates)) {
+      parts.push(`чаты Ozon: ${oz.ozon_chat_sent || 0} отв.`);
+    }
+    const oa = r.ozon_actions;
+    if (oa) {
+      if (oa.skipped) {
+        parts.push(`акции: пропуск (${oa.reason || oa.message || '—'})`);
+      } else {
+        parts.push(`акции: ${oa.products_removed || 0} товаров из ${oa.actions_processed || 0} акций (подошло ${oa.actions_matched || 0})`);
+      }
+    }
+    if (r.reviews_phase_error) parts.push(`ошибка отзывов: ${r.reviews_phase_error}`);
+    return parts.join(' · ');
+  }
+
+  function formatOpsLogSummary(action, meta) {
+    if (!meta || typeof meta !== 'object') return '';
+    if (action === 'auto_run_skipped') {
+      return `Слот ${meta.slot || '—'} не запущен: ${meta.reason === 'previous_run_still_running' ? 'предыдущий цикл ещё идёт' : (meta.reason || '—')}${meta.current_store_id ? ` (был на маг. ${meta.current_store_id})` : ''}`;
+    }
+    if (action === 'ozon_actions_auto_remove' || action === 'ozon_actions_remove') {
+      if (meta.skipped) {
+        return `Пропуск: ${meta.message || meta.reason || 'нет доступа'}`;
+      }
+      const errs = Array.isArray(meta.errors) && meta.errors.length ? `, ошибок ${meta.errors.length}` : '';
+      return `Акций: подошло ${meta.actions_matched ?? 0}, обработано ${meta.actions_processed ?? 0}, удалено товаров ${meta.products_removed ?? 0}, отклонено ${meta.products_rejected ?? 0}${errs}`;
+    }
+    if (action === 'auto_run') {
+      const lines = [];
+      const slot = meta.slot || '—';
+      lines.push(`Слот ${slot} · магазинов ${meta.stores_processed ?? (meta.store_ids || []).length}`);
+      const rev = [];
+      if (meta.added != null) rev.push(`загружено ${meta.added}`);
+      if (meta.candidates != null) rev.push(`к ответу ${meta.candidates}`);
+      if (meta.gen_ok != null) rev.push(`сгенерировано ${meta.gen_ok}`);
+      if (meta.sent_ok != null) rev.push(`отправлено ${meta.sent_ok}`);
+      if (meta.sent_failed) rev.push(`ошибок отправки ${meta.sent_failed}`);
+      if (rev.length) lines.push('Отзывы/вопросы: ' + rev.join(', '));
+      if (meta.run_wb_chats) lines.push(`Чаты WB: отправлено ${meta.wb_chat_sent ?? 0}`);
+      if (meta.run_ozon_chats) lines.push(`Чаты Ozon: отправлено ${meta.ozon_chat_sent ?? 0}`);
+      if (meta.run_ozon_actions_remove) {
+        const oa = meta.ozon_actions_totals || {};
+        lines.push(
+          `Акции Ozon: удалено ${oa.products_removed ?? 0} товаров из ${oa.actions_processed ?? 0} акций`
+          + ` (магазинов с удалением: ${oa.stores_with_removals ?? 0}, пропущено: ${oa.stores_skipped ?? 0})`,
+        );
+      }
+      const perStore = (meta.stores_results || []).map(formatStoreAutoLine).filter(Boolean);
+      if (perStore.length) lines.push('По магазинам: ' + perStore.join(' | '));
+      return lines.join('\n');
+    }
+    if (action === 'store_auto' && meta.summary) return String(meta.summary);
+    if (action === 'store_wb_chats_auto' || action === 'store_ozon_chats_auto') {
+      const sent = meta.wb_chat_sent ?? meta.ozon_chat_sent ?? 0;
+      const cand = meta.wb_chat_candidates ?? meta.ozon_chat_candidates ?? 0;
+      if (meta.ozon_chat_skip_reason || meta.message) {
+        return `Пропуск: ${meta.ozon_chat_skip_reason || meta.message}`;
+      }
+      if (meta.reason) return `Пропуск: ${meta.reason}`;
+      return `Отправлено ${sent}, кандидатов ${cand}`;
+    }
+    if (action === 'card_error_detected') {
+      const parts = [];
+      if (meta.error_kind) parts.push(meta.error_kind);
+      if (meta.product_title) parts.push(meta.product_title);
+      if (meta.customer_text_preview) parts.push('«' + String(meta.customer_text_preview).slice(0, 120) + '…»');
+      return parts.join(' · ') || '—';
+    }
+    if (action === 'telegram_report') {
+      const intervalRu = meta.interval === 'day' ? 'за сутки' : 'за час';
+      let line = `${intervalRu}: отзывы ${meta.reviews_sent ?? 0}, вопросы ${meta.questions_sent ?? 0}, `
+        + `чаты ${meta.chat_replies_total ?? 0} (WB ${meta.wb_chat_replies ?? 0}, Ozon ${meta.ozon_chat_replies ?? 0}), `
+        + `удалено с акций ${meta.ozon_products_removed ?? 0}`;
+      if (meta.card_errors != null) line += `, ошибки карточек ${meta.card_errors}`;
+      return line;
+    }
+    if (action === 'wb_buyer_chat_send' || action === 'ozon_buyer_chat_send') {
+      const parts = [];
+      if (meta.source) parts.push(meta.source === 'auto' ? 'авто' : 'вручную');
+      if (meta.chat_id) parts.push(`чат ${meta.chat_id}`);
+      if (meta.product_title) parts.push(meta.product_title);
+      if (meta.message_preview) {
+        const p = String(meta.message_preview);
+        parts.push('«' + (p.length > 160 ? p.slice(0, 160) + '…' : p) + '»');
+      }
+      return parts.join(' · ') || '—';
+    }
+    if (meta.applied != null) return `Шаблон: применено ${meta.applied}, пропущено ${meta.skipped ?? 0}`;
+    if (meta.sent_ok != null) {
+      return `Отправка: ok ${meta.sent_ok}, без текста ${meta.sent_skipped ?? meta.skipped ?? 0}, ошибок ${meta.sent_failed ?? meta.failed ?? 0}`;
+    }
+    if (meta.ok != null) return `Генерация: ok ${meta.ok}, ошибок ${meta.failed ?? 0}`;
+    if (meta.added != null) return `Загрузка: добавлено ${meta.added}`;
+    if (meta.error) return String(meta.error).slice(0, 500);
+    return '';
   }
 
   async function loadLog() {
     const mode = (document.getElementById('log-mode')?.value || 'ops');
     const action = (document.getElementById('log-action')?.value || '').trim();
+    const storeId = (document.getElementById('log-store')?.value || '').trim();
     const level = (document.getElementById('log-level')?.value || '').trim();
     const q = (document.getElementById('log-q')?.value || '').trim();
     const devPre = document.getElementById('log-content');
     const opsWrap = document.getElementById('ops-log-wrap');
     if (devPre) devPre.style.display = (mode === 'dev') ? 'block' : 'none';
-    if (opsWrap) opsWrap.style.display = (mode === 'ops') ? 'grid' : 'none';
+    if (opsWrap) opsWrap.style.display = (mode === 'ops') ? 'block' : 'none';
     try {
       if (mode === 'dev') {
         const data = await api('/log/dev?limit=600' + (level ? '&level=' + encodeURIComponent(level) : '') + (action ? '&action=' + encodeURIComponent(action) : '') + (q ? '&q=' + encodeURIComponent(q) : ''));
@@ -2437,33 +2647,40 @@
         return;
       }
 
-      const data = await api('/log/ops?limit=200' + (action ? '&action=' + encodeURIComponent(action) : '') + (q ? '&q=' + encodeURIComponent(q) : ''));
+      try { await ensureStoresLoaded(); } catch (_) { /* журнал без списка магазинов */ }
+      fillStoreSelects();
+      let opsUrl = '/log/ops?limit=300';
+      if (action) opsUrl += '&action=' + encodeURIComponent(action);
+      if (storeId) opsUrl += '&store_id=' + encodeURIComponent(storeId);
+      if (q) opsUrl += '&q=' + encodeURIComponent(q);
+      const data = await api(opsUrl);
       const items = data.items || [];
       if (!items.length) {
-        opsWrap.innerHTML = '<div class="empty-state" style="grid-column:1/-1; padding:24px;">Нет событий</div>';
+        opsWrap.innerHTML = '<div class="empty-state" style="padding:24px;">Нет событий</div>';
         return;
       }
-      opsWrap.innerHTML = items.map(ev => {
+      const rowsHtml = items.map(ev => {
         const meta = safeJsonParse(ev.meta_json || '') || {};
-        const store = ev.store_id ? ('store_id=' + ev.store_id) : '';
+        const storeName = meta.store_name || getStoreNameById(ev.store_id) || (ev.store_id ? `ID ${ev.store_id}` : '—');
+        const summary = formatOpsLogSummary(ev.action, meta);
+        const result = ev.result || 'ok';
+        const resultCls = result === 'ok' ? 'ops-log-result-ok' : (result === 'error' ? 'ops-log-result-err' : 'ops-log-result-other');
+        const detail = escapeHtml(summary || '—').replace(/\n/g, '<br>');
         const itemIds = Array.isArray(meta.item_ids) ? meta.item_ids : [];
-        const summary = meta.applied != null ? (`применено ${meta.applied}, пропущено ${meta.skipped ?? 0}`) :
-          meta.sent_ok != null ? (`ok ${meta.sent_ok}, пропущено ${meta.skipped ?? 0}, ошибок ${meta.failed ?? 0}`) :
-          meta.ok != null ? (`ok ${meta.ok}, ошибок ${meta.failed ?? 0}`) :
-          (meta.added != null ? (`добавлено ${meta.added}`) : '');
-        const result = ev.result || '';
-        return `
-          <div class="store-card">
-            <div class="store-head">
-              <div class="store-name">${escapeHtml(actionRu(ev.action))}</div>
-              <span class="badge">${escapeHtml(result || 'ok')}</span>
-            </div>
-            <div class="meta">${escapeHtml(ev.ts)} · ${escapeHtml(ev.actor)} ${store ? '· ' + escapeHtml(store) : ''}</div>
-            <div class="text-preview" style="max-width:unset;">${escapeHtml(summary || (meta.error || '') || '')}</div>
-            ${itemIds.length ? `<div class="actions" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;"><button type="button" class="btn btn-secondary btn-sm" data-ops-show="${ev.id}">Показать ответы (20)</button><span class="form-hint">items: ${itemIds.length}</span></div><div class="ops-items\" id=\"ops-items-${ev.id}\" style=\"display:none; margin-top:10px;\"></div>` : ''}
-          </div>
-        `;
+        const extraBtn = itemIds.length
+          ? `<button type="button" class="btn btn-secondary btn-sm" data-ops-show="${ev.id}">Ответы (${Math.min(itemIds.length, 20)})</button>`
+          : '';
+        return `<tr>
+          <td class="ops-log-ts">${escapeHtml(ev.ts || '')}</td>
+          <td class="ops-log-action">${escapeHtml(actionRu(ev.action))}</td>
+          <td class="ops-log-store">${escapeHtml(storeName)}</td>
+          <td class="ops-log-result"><span class="ops-log-badge ${resultCls}">${escapeHtml(result)}</span></td>
+          <td class="ops-log-detail"><div class="ops-log-summary">${detail}</div>${extraBtn ? `<div class="ops-log-extra">${extraBtn}</div>` : ''}<div class="ops-items" id="ops-items-${ev.id}" style="display:none; margin-top:8px;"></div></td>
+        </tr>`;
       }).join('');
+      opsWrap.innerHTML = `<table class="ops-log-table"><thead><tr>
+        <th>Время</th><th>Действие</th><th>Магазин</th><th>Итог</th><th>Детали</th>
+      </tr></thead><tbody>${rowsHtml}</tbody></table>`;
       opsWrap.querySelectorAll('[data-ops-show]').forEach(btn => {
         btn.addEventListener('click', async () => {
           const evId = Number(btn.getAttribute('data-ops-show'));
@@ -2519,11 +2736,94 @@
       });
     } catch (err) {
       if (mode === 'dev') devPre.textContent = 'Ошибка: ' + err.message;
-      else opsWrap.innerHTML = '<div class="empty-state" style="grid-column:1/-1; padding:24px;">Ошибка: ' + escapeHtml(err.message) + '</div>';
+      else opsWrap.innerHTML = '<div class="empty-state" style="padding:24px;">Ошибка: ' + escapeHtml(err.message) + '</div>';
     }
   }
 
+  const CARD_ERROR_SOURCE_LABELS = {
+    review: 'Отзыв',
+    question: 'Вопрос',
+    wb_chat: 'Чат WB',
+    ozon_chat: 'Чат Ozon',
+  };
+
+  async function loadCardErrors() {
+    const wrap = document.getElementById('card-errors-wrap');
+    if (!wrap) return;
+    try {
+      await ensureStoresLoaded();
+      fillStoreSelects();
+    } catch (_) { /* список магазинов опционален */ }
+    const storeId = (document.getElementById('card-errors-store')?.value || '').trim();
+    const status = (document.getElementById('card-errors-status')?.value || '').trim();
+    let url = '/card-errors?limit=300';
+    if (storeId) url += '&store_id=' + encodeURIComponent(storeId);
+    if (status) url += '&status=' + encodeURIComponent(status);
+    wrap.innerHTML = '<div class="form-hint" style="padding:16px;">Загрузка…</div>';
+    try {
+      const items = await api(url);
+      if (!items.length) {
+        wrap.innerHTML = '<div class="empty-state" style="padding:24px;">Нет записей</div>';
+        return;
+      }
+      const rows = items.map(row => {
+        const storeName = row.store_name || getStoreNameById(row.store_id) || `ID ${row.store_id}`;
+        const src = CARD_ERROR_SOURCE_LABELS[row.source_type] || row.source_type || '—';
+        const statusCls = row.status === 'resolved' ? 'ops-log-result-ok' : 'ops-log-result-other';
+        const tg = row.telegram_sent ? 'да' : 'нет';
+        const text = escapeHtml((row.customer_text || '').slice(0, 300)) + ((row.customer_text || '').length > 300 ? '…' : '');
+        const resolveBtn = row.status === 'new'
+          ? `<button type="button" class="btn btn-secondary btn-sm" data-card-resolve="${row.id}">Отметить обработанным</button>`
+          : '';
+        return `<tr>
+          <td class="ops-log-ts">${escapeHtml(row.ts || '')}</td>
+          <td class="ops-log-store">${escapeHtml(storeName)}</td>
+          <td>${escapeHtml(src)}</td>
+          <td>${escapeHtml((row.product_title || '').slice(0, 80))}</td>
+          <td><div class="ops-log-summary">${text}</div></td>
+          <td>${escapeHtml(row.error_kind || '—')}<div class="form-hint" style="margin-top:4px;">${escapeHtml(row.explanation || '')}</div></td>
+          <td><span class="ops-log-badge ${statusCls}">${escapeHtml(row.status === 'resolved' ? 'обработано' : 'новое')}</span><div class="form-hint">TG: ${tg}</div>${resolveBtn}</td>
+        </tr>`;
+      }).join('');
+      wrap.innerHTML = `<table class="ops-log-table"><thead><tr>
+        <th>Время</th><th>Магазин</th><th>Источник</th><th>Товар</th><th>Текст</th><th>Ошибка</th><th>Статус</th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+      wrap.querySelectorAll('[data-card-resolve]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = Number(btn.getAttribute('data-card-resolve'));
+          btn.disabled = true;
+          try {
+            await api('/card-errors/' + id, { method: 'PATCH', body: JSON.stringify({ status: 'resolved' }) });
+            toast('Отмечено как обработанное');
+            await loadCardErrors();
+          } catch (err) {
+            toast(err.message, 'error');
+            btn.disabled = false;
+          }
+        });
+      });
+    } catch (err) {
+      wrap.innerHTML = '<div class="empty-state" style="padding:24px;">Ошибка: ' + escapeHtml(err.message) + '</div>';
+    }
+  }
+
+  document.getElementById('btn-refresh-card-errors')?.addEventListener('click', () => { void loadCardErrors(); });
+  document.getElementById('card-errors-store')?.addEventListener('change', () => { void loadCardErrors(); });
+  document.getElementById('card-errors-status')?.addEventListener('change', () => { void loadCardErrors(); });
+
   document.getElementById('btn-refresh-log').addEventListener('click', loadLog);
+  ['log-mode', 'log-action', 'log-store'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', () => { void loadLog(); });
+  });
+  const logQ = document.getElementById('log-q');
+  if (logQ) {
+    let logQTimer = null;
+    logQ.addEventListener('input', () => {
+      clearTimeout(logQTimer);
+      logQTimer = setTimeout(() => { void loadLog(); }, 400);
+    });
+  }
 
   // ---- API base (для доступа с телефона к ПК) ----
   const apiBaseInput = document.getElementById('setting-api_base');

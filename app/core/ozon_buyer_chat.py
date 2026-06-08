@@ -8,18 +8,29 @@ from typing import Any, Dict, List, Optional, Tuple
 from .chat_common import parse_api_error_detail
 
 
-def _ozon_user_role(user: Any) -> str:
-    if not isinstance(user, dict):
-        return "other"
-    raw = str(user.get("type") or "").strip().lower()
-    # в документации иногда «Customer», иногда с кириллической «С»
-    if raw in ("customer", "сustomer", "client", "buyer"):
-        return "client"
-    if raw == "seller":
-        return "seller"
-    if raw in ("support", "crm", "courier"):
-        return raw
-    return raw or "other"
+def _ozon_user_role(user: Any, msg: Optional[dict] = None) -> str:
+    if isinstance(user, dict):
+        raw = str(user.get("type") or user.get("role") or "").strip().lower()
+        if raw in ("customer", "сustomer", "client", "buyer"):
+            return "client"
+        if raw == "seller":
+            return "seller"
+        if raw in ("support", "crm", "courier"):
+            return raw
+        if raw:
+            return raw
+    if isinstance(msg, dict):
+        for key in ("author_type", "from_type", "type"):
+            raw = str(msg.get(key) or "").strip().lower()
+            if raw in ("customer", "сustomer", "client", "buyer"):
+                return "client"
+            if raw == "seller":
+                return "seller"
+        if msg.get("is_mine") is True or msg.get("isMine") is True:
+            return "seller"
+        if msg.get("is_mine") is False or msg.get("isMine") is False:
+            return "client"
+    return "other"
 
 
 def _message_text(msg: dict) -> str:
@@ -45,7 +56,7 @@ def collect_ozon_thread_lines(messages: List[dict]) -> List[Tuple[str, str, str,
         text = _message_text(msg)
         if not text:
             continue
-        role = _ozon_user_role(msg.get("user"))
+        role = _ozon_user_role(msg.get("user"), msg)
         mid = str(msg.get("message_id") or "").strip()
         created = str(msg.get("created_at") or "").strip()
         if not mid:

@@ -351,6 +351,12 @@ def merge_good_card(chat_row: dict, events: List[dict]) -> dict:
 
 def _event_role(ev: dict) -> str:
     """Роль автора события: client / seller / other."""
+    if not isinstance(ev, dict):
+        return "other"
+    if ev.get("isSeller") is True:
+        return "seller"
+    if ev.get("isSeller") is False:
+        return "client"
     sender = str(ev.get("sender") or "").strip().lower()
     if sender == "client":
         return "client"
@@ -361,7 +367,27 @@ def _event_role(ev: dict) -> str:
         return "client"
     if source.startswith("seller") or source in ("seller-portal", "seller-public-api", "seller-web"):
         return "seller"
+    msg = ev.get("message")
+    if isinstance(msg, dict):
+        ms = str(msg.get("sender") or "").strip().lower()
+        if ms == "client":
+            return "client"
+        if ms in ("seller", "seller-public-api"):
+            return "seller"
     return sender or source or "other"
+
+
+def _last_message_role(lm: dict, chat_row: Optional[dict] = None) -> str:
+    """Роль автора lastMessage из списка чатов WB."""
+    if isinstance(lm, dict) and lm:
+        role = _event_role(lm)
+        if role in ("client", "seller"):
+            return role
+    if isinstance(chat_row, dict):
+        role = _event_role(chat_row)
+        if role in ("client", "seller"):
+            return role
+    return "other"
 
 
 def collect_thread_lines(events: List[dict], chat_id: str) -> List[Tuple[str, str, int, str]]:
@@ -398,7 +424,7 @@ def fallback_line_from_chat_row(chat_row: dict) -> List[Tuple[str, str, int, str
     if not t:
         return []
     ts = int(lm.get("addTimestamp") or 0)
-    role = _event_role({**chat_row, **lm})
+    role = _last_message_role(lm, chat_row)
     return [(role, t, ts, str(ts))]
 
 

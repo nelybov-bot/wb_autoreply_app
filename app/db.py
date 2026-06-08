@@ -68,6 +68,21 @@ class AuditEventRow:
     result: str
     meta_json: str
 
+
+@dataclass(frozen=True)
+class CardErrorAlertRow:
+    id: int
+    ts: str
+    store_id: int
+    source_type: str
+    source_ref: str
+    product_title: str
+    customer_text: str
+    error_kind: str
+    explanation: str
+    status: str
+    telegram_sent: bool
+
 class Database:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
@@ -190,8 +205,31 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_buyer_chat_replies_store "
                 "ON buyer_chat_replies(store_id, marketplace)"
             )
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS card_error_alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    store_id INTEGER NOT NULL,
+                    source_type TEXT NOT NULL,
+                    source_ref TEXT NOT NULL,
+                    product_title TEXT NOT NULL DEFAULT '',
+                    customer_text TEXT NOT NULL DEFAULT '',
+                    error_kind TEXT NOT NULL DEFAULT '',
+                    explanation TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'new',
+                    telegram_sent INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(store_id, source_type, source_ref)
+                )
+            """)
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_card_errors_ts ON card_error_alerts(ts)"
+            )
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_card_errors_status ON card_error_alerts(status)"
+            )
             self._conn.commit()
             self._seed_prompts_if_empty()
+            self._seed_missing_prompts()
 
     # ---------- Users ----------
     def count_users(self) -> int:
@@ -374,12 +412,151 @@ class Database:
                 ("review","4-5","Ты отвечаешь на положительный отзыв (4-5/5). Поблагодари, коротко, 1-3 предложения. Русский, без эмодзи. Не повторять название товара в ответе. Не уточняй в чем проблема"),
                 ("review","general","Ты отвечаешь на отзыв. Русский, 2-4 предложения, без эмодзи. Не повторять название товара в ответе. Не уточняй в чем проблема"),
                 ("question","general","Ты отвечаешь на вопрос покупателя по товару. Учитывай название товара, но не повторяй его в ответе.  Русский, по делу, 1-4 предложения, без эмодзи, Если модель товара не подходит, то кратко пиши что не подойдет. Не проси покупателя писать еще раз для уточнения. Категорически нельзя никого винить в ошибке. Всегда все признаем и говорим что будем работать над улучшениями. Не предлагай компенсации или обращения в поддержку. Не уточняй в чем проблема, просто извинись. Не рекомендуй оформить замену "),
+                ("buyer_chat", "general", "Ты отвечаешь покупателю в чате по товару. Учитывай контекст переписки. Русский, 2–4 предложения, без эмодзи. Не повторяй полное название товара. Не предлагай компенсации и обращения в поддержку. Не задавай вопросов покупателю."),
+                ("card_check", "general", "Дополнительно проверь, указывает ли текст покупателя на вероятную ошибку в карточке товара на маркетплейсе: неверное описание, характеристики, комплектация, размерная сетка, совместимость, цвет или модель в названии. НЕ считай ошибкой карточки: доставку, упаковку, пересорт, брак при транспортировке, субъективное «не понравилось». card_error.suspected = true только при явном несоответствии карточки."),
             ]
             self._conn.executemany(
                 "INSERT INTO prompts(item_type, rating_group, prompt_text) VALUES(?,?,?)",
                 prompts
             )
             self._conn.commit()
+
+    def _seed_missing_prompts(self) -> None:
+        from app.core.card_check import DEFAULT_BUYER_CHAT_PROMPT, DEFAULT_CARD_CHECK_PROMPT
+
+        extra = [
+            ("buyer_chat", "general", DEFAULT_BUYER_CHAT_PROMPT),
+            ("card_check", "general", DEFAULT_CARD_CHECK_PROMPT),
+        ]
+        with _DB_LOCK:
+            for item_type, rating_group, text in extra:
+                row = self._conn.execute(
+                    "SELECT id FROM prompts WHERE item_type=? AND rating_group=?",
+                    (item_type, rating_group),
+                ).fetchone()
+                if not row:
+                    self._conn.execute(
+                        "INSERT INTO prompts(item_type, rating_group, prompt_text) VALUES(?,?,?)",
+                        (item_type, rating_group, text),
+                    )
+            self._conn.commit()
+
+    # ---------- Card error alerts ----------
+    def has_card_error_alert(self, store_id: int, source_type: str, source_ref: str) -> bool:
+        with _DB_LOCK:
+            row = self._conn.execute(
+                """SELECT 1 FROM card_error_alerts
+                   WHERE store_id=? AND source_type=? AND source_ref=?""",
+                (int(store_id), (source_type or "").strip(), (source_ref or "").strip()),
+            ).fetchone()
+            return row is not None
+
+    def add_card_error_alert(
+        self,
+        *,
+        store_id: int,
+        source_type: str,
+        source_ref: str,
+        product_title: str,
+        customer_text: str,
+        error_kind: str,
+        explanation: str,
+    ) -> int:
+        ts = dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                """INSERT INTO card_error_alerts(
+                       ts, store_id, source_type, source_ref, product_title,
+                       customer_text, error_kind, explanation, status, telegram_sent
+                   ) VALUES(?,?,?,?,?,?,?,?, 'new', 0)""",
+                (
+                    ts,
+                    int(store_id),
+                    (source_type or "").strip(),
+                    (source_ref or "").strip(),
+                    (product_title or "").strip(),
+                    (customer_text or "").strip(),
+                    (error_kind or "").strip(),
+                    (explanation or "").strip(),
+                ),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def mark_card_error_telegram_sent(self, alert_id: int) -> None:
+        with _DB_LOCK:
+            self._conn.execute(
+                "UPDATE card_error_alerts SET telegram_sent=1 WHERE id=?",
+                (int(alert_id),),
+            )
+            self._conn.commit()
+
+    def update_card_error_status(self, alert_id: int, status: str) -> bool:
+        st = (status or "").strip().lower()
+        if st not in ("new", "resolved"):
+            return False
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                "UPDATE card_error_alerts SET status=? WHERE id=?",
+                (st, int(alert_id)),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def list_card_error_alerts(
+        self,
+        *,
+        store_id: Optional[int] = None,
+        status: Optional[str] = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[CardErrorAlertRow]:
+        where = []
+        params: list = []
+        if store_id is not None:
+            where.append("store_id=?")
+            params.append(int(store_id))
+        if status:
+            where.append("status=?")
+            params.append(status.strip())
+        w = ("WHERE " + " AND ".join(where)) if where else ""
+        safe_limit = max(1, min(int(limit), 500))
+        safe_offset = max(0, int(offset))
+        with _DB_LOCK:
+            rows = self._conn.execute(
+                f"""SELECT id, ts, store_id, source_type, source_ref, product_title,
+                           customer_text, error_kind, explanation, status, telegram_sent
+                    FROM card_error_alerts {w}
+                    ORDER BY id DESC LIMIT ? OFFSET ?""",
+                params + [safe_limit, safe_offset],
+            ).fetchall()
+            return [
+                CardErrorAlertRow(
+                    id=int(r["id"]),
+                    ts=str(r["ts"] or ""),
+                    store_id=int(r["store_id"]),
+                    source_type=str(r["source_type"] or ""),
+                    source_ref=str(r["source_ref"] or ""),
+                    product_title=str(r["product_title"] or ""),
+                    customer_text=str(r["customer_text"] or ""),
+                    error_kind=str(r["error_kind"] or ""),
+                    explanation=str(r["explanation"] or ""),
+                    status=str(r["status"] or "new"),
+                    telegram_sent=bool(r["telegram_sent"]),
+                )
+                for r in rows
+            ]
+
+    def count_card_error_alerts_since(self, since_iso: str) -> int:
+        since = (since_iso or "").strip()
+        if not since:
+            return 0
+        with _DB_LOCK:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM card_error_alerts WHERE ts >= ?",
+                (since,),
+            ).fetchone()
+            return int(row["n"]) if row else 0
 
     # ---------- Stores ----------
     def list_stores(self) -> list[Store]:
@@ -876,6 +1053,70 @@ class Database:
                 (item_id,)
             )
             self._conn.commit()
+
+    def get_activity_stats_since(self, since_iso: str) -> dict:
+        """Счётчики действий с момента since_iso (ISO, локальная TZ в ts/sent_at)."""
+        since = (since_iso or "").strip()
+        if not since:
+            return {
+                "reviews_sent": 0,
+                "questions_sent": 0,
+                "ozon_products_removed": 0,
+                "wb_chat_replies": 0,
+                "ozon_chat_replies": 0,
+                "chat_replies_total": 0,
+                "card_errors": 0,
+            }
+        with _DB_LOCK:
+            rev = self._conn.execute(
+                """SELECT COUNT(*) AS n FROM items
+                   WHERE status='sent' AND item_type='review' AND sent_at >= ?""",
+                (since,),
+            ).fetchone()
+            qu = self._conn.execute(
+                """SELECT COUNT(*) AS n FROM items
+                   WHERE status='sent' AND item_type='question' AND sent_at >= ?""",
+                (since,),
+            ).fetchone()
+            wb = self._conn.execute(
+                """SELECT COUNT(*) AS n FROM audit_events
+                   WHERE action='wb_buyer_chat_send' AND result='ok' AND ts >= ?""",
+                (since,),
+            ).fetchone()
+            oz = self._conn.execute(
+                """SELECT COUNT(*) AS n FROM audit_events
+                   WHERE action='ozon_buyer_chat_send' AND result='ok' AND ts >= ?""",
+                (since,),
+            ).fetchone()
+            audit_rows = self._conn.execute(
+                """SELECT meta_json FROM audit_events
+                   WHERE action IN ('ozon_actions_auto_remove', 'ozon_actions_remove')
+                     AND result IN ('ok', 'skipped')
+                     AND ts >= ?""",
+                (since,),
+            ).fetchall()
+        products_removed = 0
+        for row in audit_rows:
+            raw = row["meta_json"] if isinstance(row, dict) else row[0]
+            if not raw:
+                continue
+            try:
+                meta = json.loads(str(raw))
+                products_removed += int(meta.get("products_removed") or 0)
+            except Exception:
+                continue
+        wb_chats = int(wb["n"]) if wb else 0
+        oz_chats = int(oz["n"]) if oz else 0
+        card_errors = self.count_card_error_alerts_since(since)
+        return {
+            "reviews_sent": int(rev["n"]) if rev else 0,
+            "questions_sent": int(qu["n"]) if qu else 0,
+            "ozon_products_removed": products_removed,
+            "wb_chat_replies": wb_chats,
+            "ozon_chat_replies": oz_chats,
+            "chat_replies_total": wb_chats + oz_chats,
+            "card_errors": card_errors,
+        }
 
     def get_stats(self) -> dict:
         """Операционная сводка: отправки + текущая очередь + активные магазины."""

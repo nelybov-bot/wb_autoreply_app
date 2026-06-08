@@ -18,6 +18,7 @@ from .wb_client import WbClient
 from .yam_client import YamClient
 from .ozon_client import OzonClient
 from .openai_client import OpenAIClient
+from .card_check import build_generation_user_prompt, maybe_record_card_error
 from .telegram_notify import send_review_to_chat
 from .chat_common import (
     SETTING_REPLY_FROM,
@@ -42,8 +43,9 @@ from .ozon_buyer_chat import (
 )
 from .wb_buyer_chat import (
     WbBuyerChatClient,
-    collect_global_events_by_chat,
     collect_thread_lines,
+    fallback_line_from_chat_row,
+    fetch_events_for_chat,
     last_client_message_info as wb_last_client_info,
     merge_good_card,
     product_title_from_wb_chat,
@@ -77,6 +79,29 @@ def _store_name(db: Database, store_id: int) -> str:
         if s.id == store_id:
             return s.name
     return str(store_id)
+
+
+def _audit_activity(
+    db: Database,
+    *,
+    action: str,
+    store_id: Optional[int],
+    result: str,
+    meta: dict,
+    actor: str = "system",
+    item_type: str = "activity",
+) -> None:
+    try:
+        db.add_audit_event(
+            actor=actor,
+            action=action,
+            item_type=item_type,
+            store_id=store_id,
+            result=result,
+            meta=meta,
+        )
+    except Exception:
+        pass
 
 
 def _put_progress(q: Optional[Queue], current: int, total: int) -> None:
@@ -618,12 +643,36 @@ async def load_new_all(
 GENERATE_CONCURRENCY = 5
 
 
-_JSON_FORMAT_INSTRUCTION = (
-    ' Ответь строго одним JSON-объектом, без текста до или после. '
-    'Формат: {"reply": "текст ответа продавца", "packer_issue": true или false}. '
-    'packer_issue = true только если отзыв касается упаковки, повреждения товара, пересорта, не того товара, недоложенного товара, проблем комплектации. '
-    'Для вопросов всегда packer_issue: false.'
-)
+async def _apply_packer_issue_telegram(
+    db: Database,
+    row: ItemRow,
+    packer_issue: bool,
+) -> None:
+    if row.item_type != "review" or not packer_issue:
+        return
+    telegram_enabled = (db.get_setting("telegram_enabled") or "1").strip() != "0"
+    telegram_token = db.get_setting("telegram_bot_token")
+    telegram_chat_id = db.get_setting("telegram_chat_id")
+    if not (telegram_enabled and telegram_token and telegram_chat_id):
+        return
+    store_name = _store_name(db, row.store_id)
+    await send_review_to_chat(
+        telegram_token,
+        telegram_chat_id,
+        row.product_title or row.external_id,
+        row.text or "",
+        store_name=store_name,
+    )
+
+
+def _parse_generation_json(txt: str, *, context: str) -> dict:
+    obj = json.loads(txt)
+    if not isinstance(obj, dict):
+        raise ValueError(f"{context}: ответ не объект JSON")
+    reply = (obj.get("reply") or "").strip()
+    if not reply:
+        raise ValueError(f"{context}: в JSON нет reply")
+    return obj
 
 
 async def _generate_one(
@@ -641,13 +690,28 @@ async def _generate_one(
         if row.item_type == "review":
             rg = _rating_group(row.rating)
             p = db.get_prompt("review", "general" if not row.text.strip() else rg)
-            if row.text.strip():
-                user = f"{p}\n\nТовар: {row.product_title}\nОценка: {row.rating}\nТекст отзыва:\n{row.text}\n\nСформируй ответ.{_JSON_FORMAT_INSTRUCTION}"
-            else:
-                user = f"{p}\n\nТовар: {row.product_title}\nОценка: {row.rating}\nОтзыв без текста.\n\nСформируй ответ.{_JSON_FORMAT_INSTRUCTION}"
+            body_text = row.text.strip() if row.text.strip() else "Отзыв без текста."
+            body_label = f"Оценка: {row.rating}\nТекст отзыва"
+            user = build_generation_user_prompt(
+                db,
+                task_prompt=p,
+                product_title=row.product_title or row.external_id,
+                body_label=body_label,
+                body_text=body_text,
+                closing="Сформируй ответ на отзыв.",
+            )
+            source_type = "review"
         else:
             p = db.get_prompt("question", "general")
-            user = f"{p}\n\nТовар: {row.product_title}\nВопрос:\n{row.text}\n\nСформируй ответ.{_JSON_FORMAT_INSTRUCTION}"
+            user = build_generation_user_prompt(
+                db,
+                task_prompt=p,
+                product_title=row.product_title or row.external_id,
+                body_label="Вопрос",
+                body_text=row.text or "",
+                closing="Сформируй ответ на вопрос.",
+            )
+            source_type = "question"
         try:
             txt = await client.generate(system, user)
             txt = (txt or "").strip()
@@ -655,29 +719,23 @@ async def _generate_one(
                 log.warning("Generate item_id=%s: пустой ответ от модели", item_id)
                 return False
             try:
-                obj = json.loads(txt)
-            except json.JSONDecodeError as e:
-                log.warning("Generate item_id=%s: ответ не JSON (%s), пропуск: %s", item_id, e, txt[:200])
+                obj = _parse_generation_json(txt, context=f"item_id={item_id}")
+            except (json.JSONDecodeError, ValueError) as e:
+                log.warning("Generate item_id=%s: %s — %s", item_id, e, txt[:200])
                 return False
             reply = (obj.get("reply") or "").strip()
-            if not reply:
-                log.warning("Generate item_id=%s: в JSON нет reply или он пустой", item_id)
-                return False
             db.set_generated(item_id, reply)
-            packer_issue = bool(obj.get("packer_issue"))
-            if row.item_type == "review" and packer_issue:
-                telegram_enabled = (db.get_setting("telegram_enabled") or "1").strip() != "0"
-                telegram_token = db.get_setting("telegram_bot_token")
-                telegram_chat_id = db.get_setting("telegram_chat_id")
-                if telegram_enabled and telegram_token and telegram_chat_id:
-                    store_name = _store_name(db, row.store_id)
-                    await send_review_to_chat(
-                        telegram_token,
-                        telegram_chat_id,
-                        row.product_title or row.external_id,
-                        row.text or "",
-                        store_name=store_name,
-                    )
+            await _apply_packer_issue_telegram(db, row, bool(obj.get("packer_issue")))
+            await maybe_record_card_error(
+                db,
+                obj,
+                store_id=row.store_id,
+                store_name=_store_name(db, row.store_id),
+                product_title=row.product_title or row.external_id,
+                customer_text=row.text or "",
+                source_type=source_type,
+                source_ref=str(item_id),
+            )
             return True
         except (asyncio.CancelledError, GeneratorExit):
             raise
@@ -915,6 +973,10 @@ async def generate_wb_buyer_chat_reply(
     conversation_excerpt: str,
     model: str = "gpt-5.2",
     openai_client: Optional[OpenAIClient] = None,
+    store_id: Optional[int] = None,
+    chat_id: Optional[str] = None,
+    client_message_key: Optional[str] = None,
+    customer_text: Optional[str] = None,
 ) -> str:
     """
     Черновик ответа продавца в чате WB: тот же JSON-формат, что и для вопросов/отзывов.
@@ -927,19 +989,32 @@ async def generate_wb_buyer_chat_reply(
         "Без предложений компенсаций или обращений в поддержку. Не задавай вопросов покупателю. "
         "Не выдумывай факты. 2–4 коротких предложения. Не повторяй полное название товара в ответе."
     )
-    p = db.get_prompt("question", "general")
-    user = (
-        f"{p}\n\nТовар: {product_title}\nПереписка (покупатель / продавец):\n{conversation_excerpt}\n\n"
-        f"Сформируй ответ продавца на последние сообщения покупателя.{_JSON_FORMAT_INSTRUCTION}"
+    p = db.get_prompt("buyer_chat", "general")
+    user = build_generation_user_prompt(
+        db,
+        task_prompt=p,
+        product_title=product_title,
+        body_label="Переписка (покупатель / продавец)",
+        body_text=conversation_excerpt,
+        closing="Сформируй ответ продавца на последние сообщения покупателя.",
     )
     txt = await client.generate(system, user)
     txt = (txt or "").strip()
     if not txt:
         raise ValueError("Пустой ответ модели")
-    obj = json.loads(txt)
+    obj = _parse_generation_json(txt, context="wb_chat")
     reply = (obj.get("reply") or "").strip()
-    if not reply:
-        raise ValueError("В ответе модели нет поля reply")
+    if store_id is not None and chat_id and client_message_key:
+        await maybe_record_card_error(
+            db,
+            obj,
+            store_id=int(store_id),
+            store_name=_store_name(db, int(store_id)),
+            product_title=product_title,
+            customer_text=customer_text or conversation_excerpt,
+            source_type="wb_chat",
+            source_ref=f"{chat_id}:{client_message_key}",
+        )
     return reply
 
 
@@ -1012,6 +1087,10 @@ async def generate_ozon_buyer_chat_reply(
     conversation_excerpt: str,
     model: str = "gpt-5.2",
     openai_client: Optional[OpenAIClient] = None,
+    store_id: Optional[int] = None,
+    chat_id: Optional[str] = None,
+    client_message_key: Optional[str] = None,
+    customer_text: Optional[str] = None,
 ) -> str:
     client = openai_client or OpenAIClient(openai_key, model=model)
     system = (
@@ -1020,20 +1099,40 @@ async def generate_ozon_buyer_chat_reply(
         "Без предложений компенсаций или обращений в поддержку. Не задавай вопросов покупателю. "
         "Не выдумывай факты. 2–4 коротких предложения. Не повторяй полное название товара в ответе."
     )
-    p = db.get_prompt("question", "general")
-    user = (
-        f"{p}\n\nТовар: {product_title}\nПереписка (покупатель / продавец):\n{conversation_excerpt}\n\n"
-        f"Сформируй ответ продавца на последние сообщения покупателя.{_JSON_FORMAT_INSTRUCTION}"
+    p = db.get_prompt("buyer_chat", "general")
+    user = build_generation_user_prompt(
+        db,
+        task_prompt=p,
+        product_title=product_title,
+        body_label="Переписка (покупатель / продавец)",
+        body_text=conversation_excerpt,
+        closing="Сформируй ответ продавца на последние сообщения покупателя.",
     )
     txt = await client.generate(system, user)
     txt = (txt or "").strip()
     if not txt:
         raise ValueError("Пустой ответ модели")
-    obj = json.loads(txt)
+    obj = _parse_generation_json(txt, context="ozon_chat")
     reply = (obj.get("reply") or "").strip()
-    if not reply:
-        raise ValueError("В ответе модели нет поля reply")
+    if store_id is not None and chat_id and client_message_key:
+        await maybe_record_card_error(
+            db,
+            obj,
+            store_id=int(store_id),
+            store_name=_store_name(db, int(store_id)),
+            product_title=product_title,
+            customer_text=customer_text or conversation_excerpt,
+            source_type="ozon_chat",
+            source_ref=f"{chat_id}:{client_message_key}",
+        )
     return reply
+
+
+def _last_client_text_from_lines(lines_ts: List[tuple]) -> str:
+    for role, text, *_ in reversed(lines_ts):
+        if role == "client" and (text or "").strip():
+            return str(text).strip()
+    return ""
 
 
 async def wb_buyer_chats_mass_generate_send_for_store(
@@ -1041,11 +1140,12 @@ async def wb_buyer_chats_mass_generate_send_for_store(
     store: Store,
     *,
     openai_key: str,
-    event_pages: int = 6,
+    event_pages: int = 12,
     max_chats: int = 50,
     model: str = "gpt-5.2",
     pause_between_chats_sec: float = 0.0,
     max_message_age_days: Optional[int] = None,
+    audit_actor: str = "system",
 ) -> Dict[str, int]:
     """
     Чаты WB, где в треде последнее сообщение от покупателя: сгенерировать ответ (OpenAI) и сразу отправить в WB.
@@ -1072,11 +1172,30 @@ async def wb_buyer_chats_mass_generate_send_for_store(
     oai = OpenAIClient(openai_key, model=model)
     client = WbBuyerChatClient(store.api_key)
     chats = await client.list_chats()
-    by_chat = await collect_global_events_by_chat(client, max_pages=event_pages)
-    chat_by_id = {str(c.get("chatID") or ""): c for c in chats if c.get("chatID")}
-    candidates: List[str] = []
-    for cid, evs in by_chat.items():
+    chat_rows = [c for c in chats if isinstance(c, dict) and c.get("chatID")]
+    chat_rows.sort(
+        key=lambda c: int((c.get("lastMessage") or {}).get("addTimestamp") or 0),
+        reverse=True,
+    )
+    candidates: List[tuple[str, dict, List[tuple], str, List[dict]]] = []
+    max_scan = min(len(chat_rows), max(30, int(max_chats) * 6))
+    for row in chat_rows[:max_scan]:
+        cid = str(row.get("chatID") or "").strip()
+        if not cid:
+            continue
+        try:
+            evs, _ = await fetch_events_for_chat(client, cid, max_wb_requests=event_pages)
+        except HttpStatusError as e:
+            log.warning("wb_chat_mass events store=%s chat=%s: HTTP %s", store.id, cid, e.status)
+            continue
+        except (asyncio.CancelledError, GeneratorExit):
+            raise
+        except Exception:
+            log.exception("wb_chat_mass events store=%s chat=%s", store.id, cid)
+            continue
         lines_ts = collect_thread_lines(evs, cid)
+        if not lines_ts:
+            lines_ts = fallback_line_from_chat_row(row)
         ok, reason, _mk, _ts = _wb_chat_eligibility(
             db, store.id, cid, lines_ts, reply_from, max_age_days=max_message_age_days
         )
@@ -1088,19 +1207,14 @@ async def wb_buyer_chats_mass_generate_send_for_store(
             elif reason == "too_old":
                 stats["wb_chat_skipped_too_old"] += 1
             continue
-        if cid not in chat_by_id:
-            continue
-        candidates.append(cid)
+        candidates.append((cid, row, lines_ts, _mk, evs))
+        if len(candidates) >= max(0, int(max_chats)):
+            break
     stats["wb_chat_eligible"] = len(candidates)
     take = candidates[: max(0, int(max_chats))]
     stats["wb_chat_candidates"] = len(take)
-    for i, cid in enumerate(take):
-        row = chat_by_id.get(cid)
-        if not row or not isinstance(row, dict):
-            continue
-        evs = by_chat.get(cid) or []
+    for i, (cid, row, lines_ts, _pre_mk, evs) in enumerate(take):
         gc = merge_good_card(row, evs)
-        lines_ts = collect_thread_lines(evs, cid)
         _ok, _reason, client_msg_key, _ts = _wb_chat_eligibility(
             db, store.id, cid, lines_ts, reply_from, max_age_days=max_message_age_days
         )
@@ -1123,6 +1237,10 @@ async def wb_buyer_chats_mass_generate_send_for_store(
                 conversation_excerpt=conversation,
                 model=model,
                 openai_client=oai,
+                store_id=store.id,
+                chat_id=cid,
+                client_message_key=client_msg_key,
+                customer_text=_last_client_text_from_lines(lines_ts),
             )
         except (asyncio.CancelledError, GeneratorExit):
             raise
@@ -1142,6 +1260,20 @@ async def wb_buyer_chats_mass_generate_send_for_store(
             await client.send_message(reply_sign, draft)
             db.mark_buyer_chat_replied(store.id, "wb", cid, client_msg_key)
             stats["wb_chat_sent"] += 1
+            _audit_activity(
+                db,
+                action="wb_buyer_chat_send",
+                store_id=store.id,
+                result="ok",
+                item_type="wb_chat",
+                actor=audit_actor,
+                meta={
+                    "chat_id": cid,
+                    "product_title": title[:200],
+                    "message_preview": draft[:400],
+                    "source": "auto" if audit_actor == "system" else "manual",
+                },
+            )
         except HttpStatusError:
             log.warning("wb_chat_mass send HTTP store=%s chat=%s", store.id, cid)
             stats["wb_chat_send_failed"] += 1
@@ -1160,7 +1292,7 @@ async def auto_process_wb_buyer_chats(
     stores: List[Store],
     *,
     openai_key: str,
-    event_pages: int = 6,
+    event_pages: int = 12,
     max_autosend_per_store: int = 5,
     model: str = "gpt-5.2",
 ) -> Dict[str, int]:
@@ -1207,6 +1339,17 @@ async def auto_process_wb_buyer_chats(
         stats["wb_chat_send_failed"] += int(
             int(part.get("wb_chat_send_failed") or 0) + int(part.get("wb_chat_skipped_no_reply_sign") or 0)
         )
+        _audit_activity(
+            db,
+            action="store_wb_chats_auto",
+            store_id=store.id,
+            result="ok" if int(part.get("wb_chat_sent") or 0) else "skip",
+            item_type="wb_chat",
+            meta={
+                "store_name": store.name,
+                **part,
+            },
+        )
     return stats
 
 
@@ -1219,6 +1362,8 @@ async def ozon_buyer_chats_mass_generate_send_for_store(
     model: str = "gpt-5.2",
     pause_between_chats_sec: float = 1.0,
     max_message_age_days: Optional[int] = None,
+    audit_actor: str = "system",
+    history_limit: int = 100,
 ) -> Dict[str, int]:
     stats: Dict[str, int] = {
         "ozon_chat_candidates": 0,
@@ -1263,7 +1408,7 @@ async def ozon_buyer_chats_mass_generate_send_for_store(
         if not is_ozon_buyer_chat_row(row):
             stats["ozon_chat_skipped_support"] += 1
             continue
-        hist = await client.chat_history(chat_id, limit=50)
+        hist = await client.chat_history(chat_id, limit=history_limit)
         messages = hist.get("messages") or []
         if not isinstance(messages, list):
             messages = []
@@ -1304,6 +1449,10 @@ async def ozon_buyer_chats_mass_generate_send_for_store(
                 conversation_excerpt=conversation,
                 model=model,
                 openai_client=oai,
+                store_id=store.id,
+                chat_id=chat_id,
+                client_message_key=client_msg_key,
+                customer_text=_last_client_text_from_lines(lines),
             )
         except (asyncio.CancelledError, GeneratorExit):
             raise
@@ -1323,6 +1472,20 @@ async def ozon_buyer_chats_mass_generate_send_for_store(
             await client.send_chat_message(chat_id, draft)
             db.mark_buyer_chat_replied(store.id, "ozon", chat_id, client_msg_key)
             stats["ozon_chat_sent"] += 1
+            _audit_activity(
+                db,
+                action="ozon_buyer_chat_send",
+                store_id=store.id,
+                result="ok",
+                item_type="ozon_chat",
+                actor=audit_actor,
+                meta={
+                    "chat_id": chat_id,
+                    "product_title": title[:200],
+                    "message_preview": draft[:400],
+                    "source": "auto" if audit_actor == "system" else "manual",
+                },
+            )
         except HttpStatusError:
             log.warning("ozon_chat_mass send HTTP store=%s chat=%s", store.id, chat_id)
             stats["ozon_chat_send_failed"] += 1
@@ -1384,6 +1547,19 @@ async def auto_process_ozon_buyer_chats(
         stats["ozon_chat_gen_failed"] += int(part.get("ozon_chat_gen_failed") or 0)
         stats["ozon_chat_send_failed"] += int(part.get("ozon_chat_send_failed") or 0)
         stats["ozon_chat_skipped_no_access"] += int(part.get("ozon_chat_skipped_no_access") or 0)
+        sent = int(part.get("ozon_chat_sent") or 0)
+        no_access = int(part.get("ozon_chat_skipped_no_access") or 0)
+        _audit_activity(
+            db,
+            action="store_ozon_chats_auto",
+            store_id=store.id,
+            result="ok" if sent else ("skip" if no_access or part.get("ozon_chat_skip_reason") else "skip"),
+            item_type="ozon_chat",
+            meta={
+                "store_name": store.name,
+                **part,
+            },
+        )
     return stats
 
 
