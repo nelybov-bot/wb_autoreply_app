@@ -125,6 +125,28 @@ class OzonClient:
             "questions": len(q_list) > 0,
         }
 
+    @staticmethod
+    def _review_status_v2(status: str) -> Optional[str]:
+        """v2: NEW | VIEWED | PROCESSED. None — без фильтра (все)."""
+        st = (status or "").strip().upper()
+        if st in ("NEW", "VIEWED", "PROCESSED"):
+            return st
+        if st == "UNPROCESSED":
+            return "NEW"
+        if st == "ALL":
+            return None
+        return "NEW"
+
+    @staticmethod
+    def _review_status_v1(status: str) -> str:
+        """v1: ALL | UNPROCESSED | PROCESSED."""
+        st = (status or "").strip().upper()
+        if st in ("ALL", "UNPROCESSED", "PROCESSED"):
+            return st
+        if st in ("NEW", "VIEWED"):
+            return "UNPROCESSED"
+        return "UNPROCESSED"
+
     async def list_feedbacks(
         self,
         *,
@@ -133,16 +155,17 @@ class OzonClient:
         sort_dir: str = "DESC",
         status: str = "UNPROCESSED",
     ) -> dict:
-        """Список отзывов: сначала /v2/review/list (filters.status), затем /v1/review/list."""
+        """Список отзывов: /v2/review/list (filters.status), при ошибке — /v1/review/list."""
         lim = min(max(limit, 20), 100)
-        st = (status or "UNPROCESSED").strip().upper() or "UNPROCESSED"
         lid = last_id or ""
+        v2_filter = self._review_status_v2(status)
         v2_body: Dict[str, Any] = {
             "last_id": lid,
             "limit": lim,
             "sort_dir": sort_dir,
-            "filters": {"status": st},
         }
+        if v2_filter:
+            v2_body["filters"] = {"status": v2_filter}
         try:
             data = await self._request("POST", "/v2/review/list", json_body=v2_body)
             if isinstance(data, dict):
@@ -150,12 +173,12 @@ class OzonClient:
         except HttpStatusError as e:
             if e.status not in (400, 404, 405):
                 raise
-            log.info("Ozon review/list v2 unavailable HTTP %s, fallback to v1", e.status)
+            log.info("Ozon review/list v2 HTTP %s, fallback to v1", e.status)
         v1_body: Dict[str, Any] = {
             "last_id": lid,
             "limit": lim,
             "sort_dir": sort_dir,
-            "status": st,
+            "status": self._review_status_v1(status),
         }
         return await self._request("POST", "/v1/review/list", json_body=v1_body)
 

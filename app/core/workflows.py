@@ -405,14 +405,38 @@ def _ozon_sku_from_item(it: dict) -> Optional[int]:
         return None
 
 
-def _ozon_http_user_message(e: HttpStatusError, *, feature: str) -> str:
+def _ozon_reviews_http_message(e: HttpStatusError) -> str:
     if e.status == 401:
         return "неверный Client-Id или Api-Key"
     if e.status == 403:
         return (
-            f"нет доступа к {feature}. Нужна подписка Premium Plus и права "
-            "review/list и question/list в API-ключе (ЛК Ozon → Настройки → Seller API)"
+            "нет доступа к отзывам. По документации Ozon нужна подписка "
+            "«Управление отзывами» или Premium Pro и роль с /v2/review/list "
+            "(Review read only) у API-ключа именно этого магазина"
         )
+    body = _wb_http_body_one_line(e.body or "", max_len=180)
+    return f"HTTP {e.status}" + (f": {body}" if body else "")
+
+
+def _ozon_questions_http_message(e: HttpStatusError) -> str:
+    if e.status == 401:
+        return "неверный Client-Id или Api-Key"
+    if e.status == 403:
+        return (
+            "нет доступа к вопросам. Нужна подписка Premium Plus "
+            "и права question/list в API-ключе этого магазина"
+        )
+    body = _wb_http_body_one_line(e.body or "", max_len=180)
+    return f"HTTP {e.status}" + (f": {body}" if body else "")
+
+
+def _ozon_http_user_message(e: HttpStatusError, *, feature: str) -> str:
+    if "вопрос" in (feature or ""):
+        return _ozon_questions_http_message(e)
+    if "отзыв" in (feature or ""):
+        return _ozon_reviews_http_message(e)
+    if e.status == 401:
+        return "неверный Client-Id или Api-Key"
     body = _wb_http_body_one_line(e.body or "", max_len=180)
     return f"HTTP {e.status}" + (f": {body}" if body else "")
 
@@ -464,46 +488,52 @@ async def _ozon_collect_reviews(
     max_pages: int = 50,
     max_items: int = 5000,
 ) -> List[dict]:
+    """Новые/необработанные отзывы: v2 — статусы NEW и VIEWED."""
     out: List[dict] = []
-    last_id = ""
-    page = 0
-    while page < max_pages and len(out) < max_items:
-        page += 1
-        f = await ozon.list_feedbacks(limit=100, last_id=last_id, status="UNPROCESSED")
-        reviews = ozon._feedback_list(f or {})
-        if page == 1 and not reviews:
-            log.info(
-                "Ozon reviews page 1 empty store client_id=%s…%s keys=%s",
-                (ozon.client_id or "")[:4],
-                (ozon.client_id or "")[-4:] if len(ozon.client_id or "") > 4 else "",
-                list((f or {}).keys())[:8],
-            )
-        if not reviews:
-            break
-        for it in reviews:
-            ext_id = str(it.get("id") or it.get("review_id") or it.get("review_id_str") or "")
-            if not ext_id:
-                continue
-            rating_val = it.get("rating") or it.get("score")
-            try:
-                rating_i = int(rating_val) if rating_val is not None else None
-            except (TypeError, ValueError):
-                rating_i = None
-            product_title_raw = _ozon_product_title(it, ext_id)
-            sku_int = _ozon_sku_from_item(it)
-            out.append({
-                "ext_id": ext_id,
-                "text": str(it.get("text") or it.get("comment") or it.get("review_text") or ""),
-                "created": str(
-                    it.get("published_at") or it.get("created_at") or it.get("createdAt") or it.get("create_date") or _iso_now()
-                ),
-                "rating_i": rating_i,
-                "sku_int": sku_int,
-                "product_title_raw": product_title_raw,
-            })
-        last_id, has_next = OzonClient.pagination_state(f or {})
-        if not has_next or not last_id:
-            break
+    seen: set[str] = set()
+    _logged_empty = False
+    for api_status in ("NEW", "VIEWED"):
+        last_id = ""
+        page = 0
+        while page < max_pages and len(out) < max_items:
+            page += 1
+            f = await ozon.list_feedbacks(limit=100, last_id=last_id, status=api_status)
+            reviews = ozon._feedback_list(f or {})
+            if page == 1 and not reviews and not _logged_empty:
+                log.info(
+                    "Ozon reviews status=%s page 1 empty client_id=%s…%s",
+                    api_status,
+                    (ozon.client_id or "")[:4],
+                    (ozon.client_id or "")[-4:] if len(ozon.client_id or "") > 4 else "",
+                )
+                _logged_empty = True
+            if not reviews:
+                break
+            for it in reviews:
+                ext_id = str(it.get("id") or it.get("review_id") or it.get("review_id_str") or "")
+                if not ext_id or ext_id in seen:
+                    continue
+                seen.add(ext_id)
+                rating_val = it.get("rating") or it.get("score")
+                try:
+                    rating_i = int(rating_val) if rating_val is not None else None
+                except (TypeError, ValueError):
+                    rating_i = None
+                product_title_raw = _ozon_product_title(it, ext_id)
+                sku_int = _ozon_sku_from_item(it)
+                out.append({
+                    "ext_id": ext_id,
+                    "text": str(it.get("text") or it.get("comment") or it.get("review_text") or ""),
+                    "created": str(
+                        it.get("published_at") or it.get("created_at") or it.get("createdAt") or it.get("create_date") or _iso_now()
+                    ),
+                    "rating_i": rating_i,
+                    "sku_int": sku_int,
+                    "product_title_raw": product_title_raw,
+                })
+            last_id, has_next = OzonClient.pagination_state(f or {})
+            if not has_next or not last_id:
+                break
     return out
 
 
@@ -645,8 +675,7 @@ async def _ozon_recheck_processed(db: Database, store: Store) -> int:
     while page < max_pages and seen < max_items:
         page += 1
         f = await ozon.list_feedbacks(limit=100, last_id=last_id, status="PROCESSED")
-        f_result = (f or {}).get("result") or (f or {})
-        reviews = f_result.get("reviews") or f_result.get("items") or f_result.get("list") or []
+        reviews = ozon._feedback_list(f or {})
         if not reviews:
             break
         for it in reviews:
@@ -661,8 +690,7 @@ async def _ozon_recheck_processed(db: Database, store: Store) -> int:
                 db.set_sent(item_id, _iso_now())
                 updated += 1
         seen += len(reviews)
-        last_id = (f_result.get("last_id") or (f or {}).get("last_id") or "").strip()
-        has_next = f_result.get("has_next") if f_result.get("has_next") is not None else (f or {}).get("has_next")
+        last_id, has_next = OzonClient.pagination_state(f or {})
         if not has_next or not last_id:
             break
     return updated
