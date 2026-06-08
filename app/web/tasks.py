@@ -10,8 +10,8 @@ import uuid
 from typing import Any, Optional
 
 from app.db import Database, Store
+from app.core.net import OzonApiAccessError, UnauthorizedStoreError
 from app.core.workflows import load_new_all, generate_mass, send_mass_all
-from app.core.net import UnauthorizedStoreError
 
 log = logging.getLogger("web.tasks")
 
@@ -85,6 +85,14 @@ async def run_load_new(db: Database, store_ids: Optional[list[int]]) -> str:
             async with _tasks_lock:
                 _tasks[task_id]["status"] = "error"
                 _tasks[task_id]["error"] = f"Магазин «{e.store_name}»: неверный ключ или доступ запрещён."
+            try:
+                db.add_audit_event(actor="system", action="load_new", item_type="", result="error", meta={"error": str(e), "store": e.store_name})
+            except Exception:
+                pass
+        except OzonApiAccessError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e.message or e)
             try:
                 db.add_audit_event(actor="system", action="load_new", item_type="", result="error", meta={"error": str(e), "store": e.store_name})
             except Exception:

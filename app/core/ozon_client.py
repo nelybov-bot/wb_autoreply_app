@@ -61,26 +61,65 @@ class OzonClient:
 
         return await retry(_do)
 
+    def _list_block(self, data: dict) -> dict:
+        if not isinstance(data, dict):
+            return {}
+        res = data.get("result")
+        return res if isinstance(res, dict) else data
+
     def _feedback_list(self, data: dict) -> list:
-        """Из ответа review/list извлекает список отзывов (reviews или items)."""
-        if not data:
-            return []
-        res = data.get("result") or data
-        return res.get("reviews") or res.get("items") or []
+        """Из ответа review/list извлекает список отзывов."""
+        block = self._list_block(data or {})
+        for key in ("reviews", "items", "list"):
+            rows = block.get(key)
+            if isinstance(rows, list):
+                return rows
+        return []
 
     def _question_list(self, data: dict) -> list:
-        """Из ответа question/list извлекает список вопросов (questions или items)."""
-        if not data:
-            return []
-        res = data.get("result") or data
-        return res.get("questions") or res.get("items") or []
+        """Из ответа question/list извлекает список вопросов."""
+        block = self._list_block(data or {})
+        for key in ("questions", "items", "list"):
+            rows = block.get(key)
+            if isinstance(rows, list):
+                return rows
+        return []
+
+    @staticmethod
+    def pagination_state(data: dict) -> tuple[str, bool]:
+        """last_id и has_next из ответа Ozon (с result или без)."""
+        block = OzonClient._list_block_static(data or {})
+        last_id = str(block.get("last_id") or (data or {}).get("last_id") or "").strip()
+        has_next = block.get("has_next")
+        if has_next is None:
+            has_next = (data or {}).get("has_next")
+        return last_id, bool(has_next)
+
+    @staticmethod
+    def _list_block_static(data: dict) -> dict:
+        if not isinstance(data, dict):
+            return {}
+        res = data.get("result")
+        return res if isinstance(res, dict) else data
 
     async def has_new(self) -> dict:
         """Есть ли отзывы/вопросы, требующие ответа. Возвращает {feedbacks: bool, questions: bool}."""
-        fb = await self.list_feedbacks(limit=20, status="UNPROCESSED")
-        q = await self.list_questions(status="NEW")
-        fb_list = self._feedback_list(fb or {})
-        q_list = self._question_list(q or {})
+        fb_list: list = []
+        q_list: list = []
+        try:
+            fb = await self.list_feedbacks(limit=20, status="UNPROCESSED")
+            fb_list = self._feedback_list(fb or {})
+        except HttpStatusError:
+            pass
+        try:
+            for st in ("NEW", "UNPROCESSED"):
+                q = await self.list_questions(status=st)
+                chunk = self._question_list(q or {})
+                if chunk:
+                    q_list = chunk
+                    break
+        except HttpStatusError:
+            pass
         return {
             "feedbacks": len(fb_list) > 0,
             "questions": len(q_list) > 0,

@@ -13,7 +13,7 @@ from queue import Queue
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..db import Database, Store
-from .net import HttpStatusError, UnauthorizedStoreError
+from .net import HttpStatusError, OzonApiAccessError, UnauthorizedStoreError
 from .wb_client import WbClient
 from .yam_client import YamClient
 from .ozon_client import OzonClient
@@ -405,83 +405,139 @@ def _ozon_sku_from_item(it: dict) -> Optional[int]:
         return None
 
 
-async def _load_new_ozon(db: Database, store: Store) -> int:
-    store_id = store.id
-    assert (store.client_id or "").strip()
-    ozon = OzonClient(store.client_id, store.api_key)
-    try:
-        trig = await ozon.has_new()
-        if not (trig.get("feedbacks") or trig.get("questions")):
-            return 0
+def _ozon_http_user_message(e: HttpStatusError, *, feature: str) -> str:
+    if e.status == 401:
+        return "неверный Client-Id или Api-Key"
+    if e.status == 403:
+        return (
+            f"нет доступа к {feature}. Нужна подписка Premium Plus и права "
+            "review/list и question/list в API-ключе (ЛК Ozon → Настройки → Seller API)"
+        )
+    body = _wb_http_body_one_line(e.body or "", max_len=180)
+    return f"HTTP {e.status}" + (f": {body}" if body else "")
 
-        # Собираем вопросы и отзывы в память, затем подгрузим названия батчами и сохраним
-        questions_to_save: List[dict] = []
-        reviews_to_save: List[dict] = []
-        _logged_ozon_question_keys = False
-        max_ozon_pages = 50
-        max_ozon_items = 5000
+
+async def _ozon_collect_questions(
+    ozon: OzonClient,
+    *,
+    max_pages: int = 50,
+    max_items: int = 5000,
+) -> List[dict]:
+    out: List[dict] = []
+    seen: set[str] = set()
+    _logged_keys = False
+    for q_status in ("NEW", "UNPROCESSED"):
         last_id = ""
         page = 0
-        while page < max_ozon_pages and len(questions_to_save) < max_ozon_items:
+        while page < max_pages and len(out) < max_items:
             page += 1
-            q = await ozon.list_questions(last_id=last_id, status="NEW")
-            q_result = (q or {}).get("result") or (q or {})
-            questions = q_result.get("questions") or q_result.get("items") or q_result.get("list") or []
+            q = await ozon.list_questions(last_id=last_id, status=q_status)
+            questions = ozon._question_list(q or {})
             if not questions:
                 break
             for it in questions:
-                if not _logged_ozon_question_keys and isinstance(it, dict):
+                if not _logged_keys and isinstance(it, dict):
                     log.debug("Ozon question item keys: %s", list(it.keys()))
-                    _logged_ozon_question_keys = True
+                    _logged_keys = True
                 ext_id = str(it.get("id") or it.get("question_id") or it.get("question_id_str") or "")
-                if not ext_id:
+                if not ext_id or ext_id in seen:
                     continue
+                seen.add(ext_id)
                 product_title_raw = _ozon_product_title(it, ext_id)
                 sku_int = _ozon_sku_from_item(it)
-                questions_to_save.append({
+                out.append({
                     "ext_id": ext_id,
                     "text": str(it.get("text") or it.get("question_text") or it.get("comment") or ""),
                     "created": str(it.get("created_at") or it.get("createdAt") or it.get("create_date") or _iso_now()),
                     "sku_int": sku_int,
                     "product_title_raw": product_title_raw,
                 })
-            last_id = (q_result.get("last_id") or (q or {}).get("last_id") or "").strip()
-            if not last_id:
-                break
-
-        last_id = ""
-        page = 0
-        while page < max_ozon_pages and len(reviews_to_save) < max_ozon_items:
-            page += 1
-            f = await ozon.list_feedbacks(limit=100, last_id=last_id, status="UNPROCESSED")
-            f_result = (f or {}).get("result") or (f or {})
-            reviews = f_result.get("reviews") or f_result.get("items") or f_result.get("list") or []
-            if not reviews:
-                break
-            for it in reviews:
-                ext_id = str(it.get("id") or it.get("review_id") or it.get("review_id_str") or "")
-                if not ext_id:
-                    continue
-                rating_val = it.get("rating") or it.get("score")
-                try:
-                    rating_i = int(rating_val) if rating_val is not None else None
-                except (TypeError, ValueError):
-                    rating_i = None
-                product_title_raw = _ozon_product_title(it, ext_id)
-                sku_int = _ozon_sku_from_item(it)
-                reviews_to_save.append({
-                    "ext_id": ext_id,
-                    "text": str(it.get("text") or it.get("comment") or it.get("review_text") or ""),
-                    "created": str(it.get("published_at") or it.get("created_at") or it.get("createdAt") or it.get("create_date") or _iso_now()),
-                    "rating_i": rating_i,
-                    "sku_int": sku_int,
-                    "product_title_raw": product_title_raw,
-                })
-            last_id = (f_result.get("last_id") or (f or {}).get("last_id") or "").strip()
-            has_next = f_result.get("has_next") if f_result.get("has_next") is not None else (f or {}).get("has_next")
+            last_id, has_next = OzonClient.pagination_state(q or {})
             if not has_next or not last_id:
                 break
+    return out
 
+
+async def _ozon_collect_reviews(
+    ozon: OzonClient,
+    *,
+    max_pages: int = 50,
+    max_items: int = 5000,
+) -> List[dict]:
+    out: List[dict] = []
+    last_id = ""
+    page = 0
+    while page < max_pages and len(out) < max_items:
+        page += 1
+        f = await ozon.list_feedbacks(limit=100, last_id=last_id, status="UNPROCESSED")
+        reviews = ozon._feedback_list(f or {})
+        if not reviews:
+            break
+        for it in reviews:
+            ext_id = str(it.get("id") or it.get("review_id") or it.get("review_id_str") or "")
+            if not ext_id:
+                continue
+            rating_val = it.get("rating") or it.get("score")
+            try:
+                rating_i = int(rating_val) if rating_val is not None else None
+            except (TypeError, ValueError):
+                rating_i = None
+            product_title_raw = _ozon_product_title(it, ext_id)
+            sku_int = _ozon_sku_from_item(it)
+            out.append({
+                "ext_id": ext_id,
+                "text": str(it.get("text") or it.get("comment") or it.get("review_text") or ""),
+                "created": str(
+                    it.get("published_at") or it.get("created_at") or it.get("createdAt") or it.get("create_date") or _iso_now()
+                ),
+                "rating_i": rating_i,
+                "sku_int": sku_int,
+                "product_title_raw": product_title_raw,
+            })
+        last_id, has_next = OzonClient.pagination_state(f or {})
+        if not has_next or not last_id:
+            break
+    return out
+
+
+async def _load_new_ozon(db: Database, store: Store) -> int:
+    store_id = store.id
+    assert (store.client_id or "").strip()
+    ozon = OzonClient(store.client_id, store.api_key)
+    load_errors: List[str] = []
+    questions_to_save: List[dict] = []
+    reviews_to_save: List[dict] = []
+
+    try:
+        questions_to_save = await _ozon_collect_questions(ozon)
+    except HttpStatusError as e:
+        if e.status == 401:
+            raise UnauthorizedStoreError(store_id, store.name, str(e)) from e
+        load_errors.append(f"вопросы: {_ozon_http_user_message(e, feature='вопросам')}")
+        log.warning("Ozon questions store_id=%s: HTTP %s %s", store_id, e.status, _wb_http_body_one_line(e.body or ""))
+    except Exception:
+        log.exception("Ozon questions store_id=%s", store_id)
+        load_errors.append("вопросы: ошибка загрузки")
+
+    try:
+        reviews_to_save = await _ozon_collect_reviews(ozon)
+    except HttpStatusError as e:
+        if e.status == 401:
+            raise UnauthorizedStoreError(store_id, store.name, str(e)) from e
+        load_errors.append(f"отзывы: {_ozon_http_user_message(e, feature='отзывам')}")
+        log.warning("Ozon reviews store_id=%s: HTTP %s %s", store_id, e.status, _wb_http_body_one_line(e.body or ""))
+    except Exception:
+        log.exception("Ozon reviews store_id=%s", store_id)
+        load_errors.append("отзывы: ошибка загрузки")
+
+    if not questions_to_save and not reviews_to_save and load_errors:
+        raise OzonApiAccessError(
+            store_id,
+            store.name,
+            f"Магазин «{store.name}»: " + "; ".join(load_errors),
+        )
+
+    try:
         # SKU без имени (product_title_raw == "SKU <sku>")
         sku_without_name = set()
         for row in questions_to_save:
@@ -550,14 +606,17 @@ async def _load_new_ozon(db: Database, store: Store) -> int:
             if was_new:
                 added += 1
 
+        if load_errors:
+            log.warning("Ozon partial load store_id=%s added=%s: %s", store_id, added, "; ".join(load_errors))
         return added
     except HttpStatusError as e:
         if e.status == 401:
             raise UnauthorizedStoreError(store_id, store.name, str(e)) from e
-        if e.status in (400, 403, 404):
-            log.warning("Ozon API %s: %s", e.status, e.body)
-            return 0
-        raise
+        raise OzonApiAccessError(
+            store_id,
+            store.name,
+            f"Магазин «{store.name}»: {_ozon_http_user_message(e, feature='товарам')}",
+        ) from e
 
 
 async def _ozon_recheck_processed(db: Database, store: Store) -> int:
@@ -631,7 +690,7 @@ async def load_new_all(
             total += n
         except (asyncio.CancelledError, GeneratorExit):
             raise
-        except UnauthorizedStoreError:
+        except (UnauthorizedStoreError, OzonApiAccessError):
             raise
         except Exception as e:
             if isinstance(e, HttpStatusError):

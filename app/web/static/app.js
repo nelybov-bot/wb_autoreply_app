@@ -2175,8 +2175,20 @@
     }
     try {
       const res = await api('/load-new', { method: 'POST', body: JSON.stringify({ store_ids: [sid] }) });
+      const storeMeta = stores.find(s => Number(s.id) === sid);
       pollTask(res.task_id, 'progress-' + panelPrefix, 'progress-' + panelPrefix + '-fill', 'progress-' + panelPrefix + '-text', (result) => {
-        toast('Загружено записей: ' + (result ?? 0));
+        const n = Number(result ?? 0);
+        if (n > 0) {
+          toast(`Загружено записей: ${n}`);
+        } else if (String(storeMeta?.marketplace || '').toLowerCase() === 'ozon') {
+          toast(
+            'Загружено 0. На Ozon новых отзывов/вопросов в API не найдено. '
+            + 'Если в ЛК они есть — проверьте Premium Plus и права review/list + question/list у API-ключа.',
+            'info',
+          );
+        } else {
+          toast('Загружено записей: 0');
+        }
         loadReviews();
         loadQuestions();
       }, panelPrefix);

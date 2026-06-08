@@ -40,6 +40,15 @@ class UnauthorizedStoreError(Exception):
         self.message = message
         super().__init__(message)
 
+
+class OzonApiAccessError(Exception):
+    """Нет доступа к Premium-методам Ozon (отзывы/вопросы) или ошибка API."""
+    def __init__(self, store_id: int, store_name: str, message: str) -> None:
+        self.store_id = store_id
+        self.store_name = store_name
+        self.message = message
+        super().__init__(message)
+
 # Backoff в секундах: после попытки 1 → 1s, 2 → 2s, 3 → 4s, 4 → 8s (всего 5 попыток)
 _RETRY_DELAYS = (1, 2, 4, 8)
 
