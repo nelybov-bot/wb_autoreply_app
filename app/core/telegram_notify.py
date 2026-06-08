@@ -72,6 +72,7 @@ def format_activity_report(
     chat_total = int(stats.get("chat_replies_total") or 0) or (wb_chats + ozon_chats)
     removed = int(stats.get("ozon_products_removed") or 0)
     card_errors = int(stats.get("card_errors") or 0)
+    ozon_alerts = int(stats.get("ozon_alerts") or 0)
     interval_ru = "за час" if interval == "hour" else "за сутки"
     lines = [
         f"Отчёт MarketAI ({interval_ru})",
@@ -80,6 +81,7 @@ def format_activity_report(
         f"Отзывы: отвечено {reviews}",
         f"Вопросы: отвечено {questions}",
         f"Чаты с покупателями: {chat_total} (WB: {wb_chats}, Ozon: {ozon_chats})",
+        f"Важные уведомления Ozon: {ozon_alerts}",
         f"Автоакции Ozon: удалено товаров {removed}",
     ]
     if include_card_errors:

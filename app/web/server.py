@@ -638,7 +638,7 @@ async def _process_auto_store(
     if item_types:
         try:
             _auto_state["phase"] = "load_new"
-            result["deleted_before_load"] = db.clear_items([store.id], item_types=item_types)
+            # Не очищаем БД до загрузки: при ошибке API (403 Ozon и т.д.) локальные записи сохраняются.
             result["added"] = await load_new_all(db, [store])
             _auto_state["phase"] = "generate"
             item_ids = _collect_pending_item_ids(db, [store.id], item_types=item_types)
@@ -825,6 +825,7 @@ async def _process_auto_store(
                 "sent_ok": result.get("sent_ok"),
                 "wb_chats": wb or None,
                 "ozon_chats": oz or None,
+                "ozon_alerts": oz_al or None,
                 "ozon_actions": oa or None,
             },
         )
@@ -969,11 +970,19 @@ async def _run_auto_slot(slot: str) -> None:
                 int((r.get("ozon_alerts") or {}).get("ozon_alert_new") or 0) for r in stores_results
             ),
         }
+        phase_errors = [
+            f"{r.get('store_id')}: {r['reviews_phase_error'][:200]}"
+            for r in stores_results
+            if r.get("reviews_phase_error")
+        ]
+        if phase_errors:
+            meta_run["reviews_phase_errors"] = phase_errors
+        run_result = "partial" if phase_errors else "ok"
         db.add_audit_event(
             actor="system",
             action="auto_run",
             item_type="mixed",
-            result="ok",
+            result=run_result,
             meta=meta_run,
         )
         _auto_state["phase"] = "done"
@@ -1060,6 +1069,7 @@ async def _send_telegram_report(
         stats.get("questions_sent"),
         stats.get("chat_replies_total"),
         stats.get("ozon_products_removed"),
+        stats.get("ozon_alerts"),
     )
     return {"ok": True, "period_label": period_label, **stats}
 
@@ -1228,6 +1238,25 @@ def _schedule_hint(cfg: dict, db: Database) -> str:
         slots = cfg.get("slots") or []
         if not slots:
             return "Режим «по слотам»: укажите время как 09:00, 14:30 (два символа в часе) и сохраните."
+    if not (
+        cfg.get("run_reviews")
+        or cfg.get("run_questions")
+        or cfg.get("run_wb_chats")
+        or cfg.get("run_ozon_chats")
+        or cfg.get("run_ozon_alerts")
+        or cfg.get("run_ozon_actions_remove")
+    ):
+        return "Включите хотя бы один тип задач в автозапуске и сохраните."
+    openai_key = (db.get_setting("openai_key") or "").strip()
+    if (cfg.get("run_reviews") or cfg.get("run_questions")) and not openai_key:
+        return "Для автоответов на отзывы и вопросы нужен ключ OpenAI в «Настройки»."
+    if (db.get_setting(TELEGRAM_REPORT_ENABLED) or "").strip() == "1":
+        tg_token = (db.get_setting("telegram_bot_token") or "").strip()
+        tg_chat = resolve_telegram_chat_id(db, "report")
+        if not tg_token:
+            return "Включён периодический отчёт в Telegram — укажите токен бота в «Настройки»."
+        if not tg_chat:
+            return "Включён периодический отчёт — укажите ID чата для отчётов или основной чат Telegram."
     if cfg.get("run_wb_chats"):
         wb_stores = [s for s in stores if s.marketplace == "wb" and (s.api_key or "").strip()]
         if not wb_stores:

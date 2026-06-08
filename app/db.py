@@ -1275,6 +1275,7 @@ class Database:
                 "ozon_chat_replies": 0,
                 "chat_replies_total": 0,
                 "card_errors": 0,
+                "ozon_alerts": 0,
             }
         with _DB_LOCK:
             rev = self._conn.execute(
@@ -1295,6 +1296,11 @@ class Database:
             oz = self._conn.execute(
                 """SELECT COUNT(*) AS n FROM audit_events
                    WHERE action='ozon_buyer_chat_send' AND result='ok' AND ts >= ?""",
+                (since,),
+            ).fetchone()
+            oz_alerts = self._conn.execute(
+                """SELECT COUNT(*) AS n FROM audit_events
+                   WHERE action='ozon_alert_detected' AND result='ok' AND ts >= ?""",
                 (since,),
             ).fetchone()
             audit_rows = self._conn.execute(
@@ -1325,6 +1331,7 @@ class Database:
             "ozon_chat_replies": oz_chats,
             "chat_replies_total": wb_chats + oz_chats,
             "card_errors": card_errors,
+            "ozon_alerts": int(oz_alerts["n"]) if oz_alerts else 0,
         }
 
     def get_stats(self) -> dict:

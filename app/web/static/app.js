@@ -2628,7 +2628,11 @@
       btnTgReportNow.disabled = true;
       try {
         const res = await api('/telegram/report-now', { method: 'POST' });
-        toast(`Отчёт отправлен: отзывы ${res.reviews_sent || 0}, вопросы ${res.questions_sent || 0}, чаты ${res.chat_replies_total || 0}`);
+        toast(
+          `Отчёт отправлен: отзывы ${res.reviews_sent || 0}, вопросы ${res.questions_sent || 0}, `
+          + `чаты ${res.chat_replies_total || 0}, уведомл. Ozon ${res.ozon_alerts || 0}, `
+          + `акции −${res.ozon_products_removed || 0}`,
+        );
       } catch (err) {
         toast(err.message, 'error');
       } finally {
@@ -2725,6 +2729,9 @@
       if (meta.run_wb_chats) lines.push(`Чаты WB: отправлено ${meta.wb_chat_sent ?? 0}`);
       if (meta.run_ozon_chats) lines.push(`Чаты Ozon: отправлено ${meta.ozon_chat_sent ?? 0}`);
       if (meta.run_ozon_alerts) lines.push(`Уведомления Ozon: важных ${meta.ozon_alert_new ?? 0}`);
+      if (Array.isArray(meta.reviews_phase_errors) && meta.reviews_phase_errors.length) {
+        lines.push('Ошибки отзывов/вопросов: ' + meta.reviews_phase_errors.join('; '));
+      }
       if (meta.run_ozon_actions_remove) {
         const oa = meta.ozon_actions_totals || {};
         lines.push(
@@ -2764,7 +2771,7 @@
       const intervalRu = meta.interval === 'day' ? 'за сутки' : 'за час';
       let line = `${intervalRu}: отзывы ${meta.reviews_sent ?? 0}, вопросы ${meta.questions_sent ?? 0}, `
         + `чаты ${meta.chat_replies_total ?? 0} (WB ${meta.wb_chat_replies ?? 0}, Ozon ${meta.ozon_chat_replies ?? 0}), `
-        + `удалено с акций ${meta.ozon_products_removed ?? 0}`;
+        + `уведомл. Ozon ${meta.ozon_alerts ?? 0}, удалено с акций ${meta.ozon_products_removed ?? 0}`;
       if (meta.card_errors != null) line += `, ошибки карточек ${meta.card_errors}`;
       return line;
     }
