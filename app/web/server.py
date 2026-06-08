@@ -1819,6 +1819,32 @@ def _ozon_chat_http_error(e: HttpStatusError) -> HTTPException:
     return HTTPException(e.status, ozon_chat_error_message(e.status, e.body or ""))
 
 
+def _wb_chat_list_payload(db: Database, store: Store, chats: list, **extra: object) -> dict:
+    """Ответ списка чатов WB с привязкой к магазину (фронт сверяет store_id)."""
+    sid = int(store.id)
+    key = (store.api_key or "").strip()
+    same_key_names: list[str] = []
+    if key:
+        for o in db.list_stores():
+            if o.marketplace != "wb" or int(o.id) == sid:
+                continue
+            if (o.api_key or "").strip() == key:
+                same_key_names.append(str(o.name or f"ID {o.id}"))
+    payload: dict = {
+        "store_id": sid,
+        "store_name": store.name,
+        "chats": chats,
+    }
+    if same_key_names:
+        others = ", ".join(same_key_names[:5])
+        payload["same_api_key_warning"] = (
+            f"У «{store.name}» тот же API-ключ, что у: {others}. "
+            "WB отдаёт одни и те же чаты для одного ключа — укажите разные ключи кабинетов."
+        )
+    payload.update(extra)
+    return payload
+
+
 @app.get("/api/wb/buyer-chats/{store_id}")
 async def api_wb_buyer_chat_list(
     store_id: int,
@@ -1836,29 +1862,33 @@ async def api_wb_buyer_chat_list(
         )
     except asyncio.TimeoutError:
         if stale_ent and stale_ent[1]:
-            return {
-                "chats": list(stale_ent[1]),
-                "stale": True,
-                "warning": (
+            return _wb_chat_list_payload(
+                db,
+                s,
+                list(stale_ent[1]),
+                stale=True,
+                warning=(
                     "WB не ответил за 90 с (лимит API или автозапуск). Показан сохранённый список — "
                     "нажмите «Обновить список чатов» через 1–2 мин."
                 ),
-            }
+            )
         raise HTTPException(
             504,
             "WB чаты: таймаут 90 с. WB buyer-chat отвечает медленно или 429 — подождите 1–2 мин и нажмите «Обновить».",
         ) from None
     except HttpStatusError as e:
         if e.status == 429 and stale_ent and stale_ent[1]:
-            return {
-                "chats": list(stale_ent[1]),
-                "stale": True,
-                "warning": (
+            return _wb_chat_list_payload(
+                db,
+                s,
+                list(stale_ent[1]),
+                stale=True,
+                warning=(
                     "WB: лимит запросов (429). Показан сохранённый список чатов — повторите обновление позже."
                 ),
-            }
+            )
         raise _wb_chat_http_error(e) from e
-    return {"chats": chats}
+    return _wb_chat_list_payload(db, s, chats)
 
 
 @app.get("/api/wb/buyer-chats/{store_id}/{chat_id}/thread")
