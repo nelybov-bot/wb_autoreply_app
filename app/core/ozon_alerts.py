@@ -165,7 +165,10 @@ async def classify_ozon_support_message(
         user += f"Контекст переписки (раньше):\n{conversation_excerpt}\n\n"
     user += f"Анализируемое сообщение от Ozon/системы:\n{message_text}\n\n{JSON_SUFFIX}"
     try:
-        txt = await client.generate(system="Ты помощник продавца на Ozon. Отвечай только JSON.", user=user)
+        txt = await client.generate(
+            "Ты помощник продавца на Ozon. Отвечай только JSON.",
+            user,
+        )
     except Exception as e:
         log.warning("ozon_alert classify failed: %s", e)
         return None
