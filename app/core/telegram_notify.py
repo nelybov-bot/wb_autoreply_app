@@ -281,10 +281,11 @@ def format_activity_report(
     chat_total = int(stats.get("chat_replies_total") or 0) or (wb_chats + ozon_chats)
     removed = int(stats.get("ozon_products_removed") or 0)
     card_errors = int(stats.get("card_errors") or 0)
-    ozon_alerts = int(stats.get("ozon_alerts") or 0)
     cert_products = int(stats.get("ozon_cert_requests_products") or 0)
     hidden_products = int(stats.get("ozon_hidden_products") or 0)
-    hidden_by_reason = stats.get("ozon_hidden_by_reason") or {}
+    threat_hide = int(stats.get("ozon_threat_hide_products") or 0)
+    threat_fine = int(stats.get("ozon_threat_fine_products") or 0)
+    threat_fine_by_amount = stats.get("ozon_threat_fine_by_amount") or {}
     interval_ru = "за час" if interval == "hour" else "за сутки"
     period = escape_tg_html(period_label)
     lines = [
@@ -296,15 +297,32 @@ def format_activity_report(
         f"<b>Вопросы:</b> отвечено {questions}",
         f"<b>Чаты с покупателями:</b> {chat_total} "
         f"<i>(WB: {wb_chats}, Ozon: {ozon_chats})</i>",
-        f"<b>Уведомления Ozon:</b> {ozon_alerts} <i>(сообщений)</i>",
-        f"<b>Запрос документов:</b> {cert_products} "
-        f"<i>товаров (сертификаты/декларации, уник.)</i>",
-        f"<b>Скрытия товаров:</b> {hidden_products} <i>(уник.)</i>",
-        f"<b>Автоакции Ozon:</b> удалено товаров {removed}",
     ]
-    if hidden_products and isinstance(hidden_by_reason, dict):
-        for reason, cnt in sorted(hidden_by_reason.items(), key=lambda x: -int(x[1]))[:6]:
-            lines.append(f"  · {escape_tg_html(reason)} — {int(cnt)}")
+    ozon_lines: list[str] = []
+    if cert_products:
+        ozon_lines.append(
+            f"<b>Запросы документов {escape_tg_html(interval_ru)}:</b> {cert_products} товаров"
+        )
+    if threat_hide:
+        ozon_lines.append(
+            f"<b>Угроза скрытия {escape_tg_html(interval_ru)}:</b> {threat_hide} товаров"
+        )
+    if threat_fine:
+        ozon_lines.append(
+            f"<b>Угроза со штрафом {escape_tg_html(interval_ru)}:</b> {threat_fine} товаров"
+        )
+        if isinstance(threat_fine_by_amount, dict):
+            for amt, cnt in sorted(threat_fine_by_amount.items(), key=lambda x: -int(x[1]))[:5]:
+                ozon_lines.append(f"  · {escape_tg_html(amt)} — {int(cnt)}")
+    if hidden_products:
+        ozon_lines.append(
+            f"<b>Снято с продажи {escape_tg_html(interval_ru)}:</b> {hidden_products} товаров"
+        )
+    if ozon_lines:
+        lines.append("")
+        lines.append("<b>Ozon:</b>")
+        lines.extend(ozon_lines)
+    lines.append(f"<b>Автоакции Ozon:</b> удалено товаров {removed}")
     if include_card_errors:
         lines.append(f"<b>Ошибки в карточках:</b> {card_errors}")
     return "\n".join(lines)

@@ -38,16 +38,17 @@ DEFAULT_TELEGRAM_TEMPLATE = (
     "⚠️ <b>{telegram_title}</b>\n\n"
     "🏪 <b>Магазин:</b> {store_name}\n"
     "{optional_threat_type}"
-    "📅 <b>Срок:</b> {deadline}\n"
+    "📅 <b>Срок до:</b> {deadline_html}\n"
     "⚡ <b>Последствия:</b> {consequence}\n"
     "{optional_amount}{optional_product}"
     "\n<blockquote>{summary}</blockquote>\n\n"
     "✅ <b>Действия:</b> {action_needed}\n"
-    "🕐 {message_at} · {chat_type}"
+    "🕐 {message_at_html} · {chat_type}"
 )
 
 ALERT_CAT_CERT = "cert_request"
 ALERT_CAT_HIDDEN = "product_hidden"
+ALERT_CAT_THREAT = "threat"
 ALERT_CAT_OTHER = "other"
 
 _SKU_RE = re.compile(r"\b(\d{6,12})\b")
@@ -72,7 +73,8 @@ JSON_SUFFIX = (
     '"summary": "одно короткое предложение, до 120 символов", '
     '"action_needed": "одна короткая фраза до 100 символов, без путей меню целиком", '
     '"alert_category": "cert_request — запрос сертификата/декларации/документов; '
-    'product_hidden — товар уже скрыт/снят; other — прочее"}'
+    'product_hidden — товар уже скрыт/снят с продажи; '
+    'threat — угроза скрытия/штрафа (ещё не скрыли); other — прочее"}'
 )
 
 
@@ -89,6 +91,42 @@ def extract_product_skus(*texts: str) -> list[str]:
     return out
 
 
+def _alert_text_blob(*parts: str) -> str:
+    return " ".join(x for x in parts if (x or "").strip())
+
+
+def _has_fine_in_alert(amount: str, *texts: str) -> bool:
+    a = (amount or "").strip()
+    if a and a not in ("—", "-", "нет", "не указано"):
+        return True
+    blob = _alert_text_blob(*texts).lower()
+    return bool(re.search(r"штраф|балл|₽|\bруб", blob))
+
+
+def _fine_amount_label(amount: str, *texts: str) -> str:
+    a = (amount or "").strip()
+    if a and a not in ("—", "-", "нет", "не указано"):
+        return _truncate_text(a, 70)
+    blob = _alert_text_blob(*texts)
+    m = re.search(r"(\d[\d\s]*\s*₽[^\n.]{0,50})", blob)
+    if m:
+        return _truncate_text(m.group(1).strip(), 70)
+    if re.search(r"штраф|балл", blob.lower()):
+        return "штраф (сумма в уведомлении)"
+    return "сумма не указана"
+
+
+def _classify_threat_for_report(amount: str, threat_type: str, summary: str, message_text: str) -> tuple[str, str]:
+    """
+    Угроза для отчёта: либо скрытие без штрафа, либо со штрафом (с суммой).
+    Возвращает (kind, amount_label), kind = 'fine' | 'hide'.
+    """
+    blob = _alert_text_blob(threat_type, summary, message_text)
+    if _has_fine_in_alert(amount, blob):
+        return "fine", _fine_amount_label(amount, blob)
+    return "hide", ""
+
+
 def classify_alert_category(
     *,
     threat_type: str = "",
@@ -100,7 +138,7 @@ def classify_alert_category(
 ) -> str:
     """Категория для отчётов: запрос документов vs фактическое скрытие."""
     raw_cat = (alert_category or "").strip().lower()
-    if raw_cat in (ALERT_CAT_CERT, ALERT_CAT_HIDDEN, ALERT_CAT_OTHER):
+    if raw_cat in (ALERT_CAT_CERT, ALERT_CAT_HIDDEN, ALERT_CAT_THREAT, ALERT_CAT_OTHER):
         return raw_cat
     blob = " ".join(
         x for x in (threat_type, summary, message_text, telegram_title, consequence) if x
@@ -108,6 +146,7 @@ def classify_alert_category(
     hidden_markers = (
         r"скрыли\b",
         r"был скрыт",
+        r"товар скрыт",
         r"скрыт с",
         r"снят с продаж",
         r"сняли с продаж",
@@ -131,16 +170,22 @@ def classify_alert_category(
     for pat in cert_markers:
         if re.search(pat, blob):
             return ALERT_CAT_CERT
-    if re.search(r"скрыть|скроем|придётся скрыть|снять с продаж", blob):
-        return ALERT_CAT_CERT
+    threat_markers = (
+        r"скроют",
+        r"скроем",
+        r"придётся скрыть",
+        r"будет скрыт",
+        r"скрыть карточ",
+        r"снять с продаж",
+        r"снимем",
+        r"начисл",
+        r"штраф",
+        r"претенз",
+    )
+    for pat in threat_markers:
+        if re.search(pat, blob):
+            return ALERT_CAT_THREAT
     return ALERT_CAT_OTHER
-
-
-def hide_reason_label(threat_type: str, summary: str) -> str:
-    t = _truncate_text((threat_type or "").strip(), 55)
-    if t and t != "—":
-        return t
-    return _truncate_text((summary or "").strip(), 55) or "причина не указана"
 
 
 def enrich_alert_record_fields(
@@ -196,7 +241,7 @@ def ozon_product_stats_for_period(
                 summary=str(row.get("summary") or ""),
                 message_text=str(row.get("message_text") or ""),
             )
-        if cat not in (ALERT_CAT_CERT, ALERT_CAT_HIDDEN):
+        if cat not in (ALERT_CAT_CERT, ALERT_CAT_HIDDEN, ALERT_CAT_THREAT):
             continue
         skus_raw = (row.get("product_skus") or "").strip()
         if skus_raw:
@@ -212,19 +257,30 @@ def ozon_product_stats_for_period(
         if ts_u <= 0:
             continue
         store_id = int(row.get("store_id") or 0)
-        reason = hide_reason_label(
-            str(row.get("threat_type") or ""),
-            str(row.get("summary") or ""),
-        )
+        threat_kind = ""
+        fine_amount = ""
+        if cat == ALERT_CAT_THREAT:
+            threat_kind, fine_amount = _classify_threat_for_report(
+                str(row.get("amount") or ""),
+                str(row.get("threat_type") or ""),
+                str(row.get("summary") or ""),
+                str(row.get("message_text") or ""),
+            )
         for sku in skus:
             key = (store_id, sku, cat)
             prev = first_seen.get(key)
             if prev is None or ts_u < prev["ts_u"]:
-                first_seen[key] = {"ts_u": ts_u, "reason": reason}
+                first_seen[key] = {
+                    "ts_u": ts_u,
+                    "threat_kind": threat_kind,
+                    "fine_amount": fine_amount,
+                }
 
     cert_n = 0
     hidden_n = 0
-    hidden_reasons: dict[str, int] = {}
+    threat_hide_n = 0
+    threat_fine_n = 0
+    threat_fine_by_amount: dict[str, int] = {}
     for (_store, _sku, cat), info in first_seen.items():
         ts_u = info["ts_u"]
         if ts_u < since_u or ts_u >= until_u:
@@ -233,13 +289,20 @@ def ozon_product_stats_for_period(
             cert_n += 1
         elif cat == ALERT_CAT_HIDDEN:
             hidden_n += 1
-            r = info["reason"]
-            hidden_reasons[r] = hidden_reasons.get(r, 0) + 1
+        elif cat == ALERT_CAT_THREAT:
+            if info.get("threat_kind") == "fine":
+                threat_fine_n += 1
+                amt = str(info.get("fine_amount") or "сумма не указана")
+                threat_fine_by_amount[amt] = threat_fine_by_amount.get(amt, 0) + 1
+            else:
+                threat_hide_n += 1
 
     return {
         "ozon_cert_requests_products": cert_n,
         "ozon_hidden_products": hidden_n,
-        "ozon_hidden_by_reason": hidden_reasons,
+        "ozon_threat_hide_products": threat_hide_n,
+        "ozon_threat_fine_products": threat_fine_n,
+        "ozon_threat_fine_by_amount": threat_fine_by_amount,
     }
 
 
@@ -247,7 +310,9 @@ def _empty_ozon_product_stats() -> dict:
     return {
         "ozon_cert_requests_products": 0,
         "ozon_hidden_products": 0,
-        "ozon_hidden_by_reason": {},
+        "ozon_threat_hide_products": 0,
+        "ozon_threat_fine_products": 0,
+        "ozon_threat_fine_by_amount": {},
     }
 
 
@@ -421,6 +486,20 @@ def render_telegram_message(
     template = get_telegram_template(db)
     esc = escape_tg_html
 
+    def _deadline_html(val: str) -> str:
+        if _dash(val):
+            return "—"
+        return f"<b><u>{esc(val.strip())}</u></b>"
+
+    def _message_at_html(val: str) -> str:
+        s = (val or "").strip()
+        if not s:
+            return "—"
+        parts = s.split()
+        if len(parts) >= 2:
+            return f"<b>{esc(parts[0])}</b> {esc(' '.join(parts[1:]))}"
+        return esc(s)
+
     title = _truncate_text(telegram_title or "Важное уведомление Ozon", 60)
     threat_short = _truncate_text(threat_type, 45) if not _dash(threat_type) else ""
     known_titles = {label for _, label in _TITLE_RULES}
@@ -434,6 +513,7 @@ def render_telegram_message(
         "store_name": esc(store_name),
         "chat_type": esc(chat_type),
         "message_at": esc(message_at),
+        "message_at_html": _message_at_html(message_at),
         "message_text": esc(_truncate_text(message_text, 200)),
         "message_text_short": esc(_truncate_text(message_text, 80)),
         "threat_type": esc(threat_short or "—"),
@@ -443,6 +523,7 @@ def render_telegram_message(
         "action_needed": esc(action_needed),
         "telegram_title": esc(title),
         "deadline": esc(deadline if not _dash(deadline) else "—"),
+        "deadline_html": _deadline_html(deadline),
         "consequence": esc(consequence if not _dash(consequence) else "—"),
         "optional_threat_type": _optional_html_line("Тип", threat_short, "📋 ") if show_type else "",
         "optional_amount": _optional_html_line("Сумма", amount, "💰 "),

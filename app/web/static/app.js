@@ -775,6 +775,7 @@
         send: 'отправка',
         wb_chats: 'чаты WB',
         ozon_chats: 'чаты Ozon',
+        ozon_alerts: 'уведомления Ozon',
         ozon_actions: 'акции Ozon',
         idle_items: 'без отзывов/вопросов',
         done: 'завершено',
@@ -793,6 +794,8 @@
       el.textContent = `${run} · этап: ${phase}${storeProg} · ${slot} · ${next}${err}${hint}`;
       const stopBtn = document.getElementById('btn-stop-auto');
       if (stopBtn) stopBtn.disabled = !s.running;
+      const runBtn = document.getElementById('btn-run-auto-now');
+      if (runBtn) runBtn.disabled = !!s.running;
     } catch (e) {
       el.textContent = 'Не удалось получить статус автозапуска';
     }
@@ -2562,6 +2565,23 @@
 
   const autoModeEl = document.getElementById('auto-schedule-mode');
   if (autoModeEl) autoModeEl.addEventListener('change', syncAutoScheduleModeUi);
+
+  const btnRunAutoNow = document.getElementById('btn-run-auto-now');
+  if (btnRunAutoNow) {
+    btnRunAutoNow.addEventListener('click', async () => {
+      if (!confirmDanger('Запустить цикл автозапуска сейчас (без ожидания расписания)?')) return;
+      btnRunAutoNow.disabled = true;
+      try {
+        const r = await api('/auto-schedule/run-now', { method: 'POST', body: JSON.stringify({}) });
+        toast(r && r.started ? 'Автозапуск запущен' : 'Запуск не начался');
+        refreshAutoStatus();
+      } catch (err) {
+        toast(err.message, 'error');
+      } finally {
+        btnRunAutoNow.disabled = false;
+      }
+    });
+  }
 
   const btnStopAuto = document.getElementById('btn-stop-auto');
   if (btnStopAuto) {

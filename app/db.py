@@ -51,7 +51,9 @@ def _empty_activity_stats() -> dict:
         "ozon_alerts": 0,
         "ozon_cert_requests_products": 0,
         "ozon_hidden_products": 0,
-        "ozon_hidden_by_reason": {},
+        "ozon_threat_hide_products": 0,
+        "ozon_threat_fine_products": 0,
+        "ozon_threat_fine_by_amount": {},
     }
 
 
@@ -660,7 +662,7 @@ class Database:
         """Все значимые уведомления Ozon для подсчёта уникальных SKU в отчётах."""
         with _DB_LOCK:
             rows = self._conn.execute(
-                """SELECT store_id, ts, threat_type, product_ref, summary, message_text,
+                """SELECT store_id, ts, threat_type, amount, product_ref, summary, message_text,
                           alert_category, product_skus, status
                    FROM ozon_important_alerts
                    WHERE status IN ('new', 'resolved')
@@ -673,6 +675,7 @@ class Database:
                     "store_id": int(r["store_id"]),
                     "ts": str(r["ts"] or ""),
                     "threat_type": str(r["threat_type"] or ""),
+                    "amount": str(r["amount"] or ""),
                     "product_ref": str(r["product_ref"] or ""),
                     "summary": str(r["summary"] or ""),
                     "message_text": str(r["message_text"] or ""),
@@ -1432,7 +1435,9 @@ class Database:
             "ozon_alerts": int(oz_alerts["n"]) if oz_alerts else 0,
             "ozon_cert_requests_products": 0,
             "ozon_hidden_products": 0,
-            "ozon_hidden_by_reason": {},
+            "ozon_threat_hide_products": 0,
+            "ozon_threat_fine_products": 0,
+            "ozon_threat_fine_by_amount": {},
         }
         try:
             from app.core.ozon_alerts import ozon_product_stats_for_period

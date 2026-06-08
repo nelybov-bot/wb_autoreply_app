@@ -878,11 +878,11 @@ def _aggregate_ozon_actions_stats(stores_results: list[dict]) -> dict:
     return out
 
 
-async def _run_auto_slot(slot: str) -> None:
+async def _run_auto_slot(slot: str, *, force: bool = False) -> None:
     global _auto_state
     db = get_db()
     cfg = _get_auto_schedule(db)
-    if not cfg.get("enabled"):
+    if not force and not cfg.get("enabled"):
         return
     store_ids = [int(x) for x in (cfg.get("store_ids") or [])]
     stores = [s for s in db.list_stores() if s.active and s.id in store_ids]
@@ -1254,21 +1254,20 @@ async def _auto_scheduler_loop() -> None:
             log.exception("auto scheduler loop failed")
             await asyncio.sleep(15)
 
-def _schedule_hint(cfg: dict, db: Database) -> str:
-    """Почему автозапуск включён, но цикл не пойдет (для UI)."""
-    if not cfg.get("enabled"):
-        return ""
+def _auto_run_readiness(cfg: dict, db: Database, *, check_schedule: bool = True) -> str:
+    """Проверка готовности цикла (магазины, задачи, ключи)."""
     sids = [int(x) for x in (cfg.get("store_ids") or [])]
     if not sids:
-        return "Включён автозапуск, но не выбраны магазины — отметьте их и нажмите «Сохранить автозапуск»."
+        return "Не выбраны магазины — отметьте их и нажмите «Сохранить автозапуск»."
     stores = [s for s in db.list_stores() if s.active and s.id in sids]
     if not stores:
         return "Выбранные магазины не найдены или снята галочка «активен» — проверьте вкладку «Магазины»."
-    mode = str(cfg.get("schedule_mode") or "slots")
-    if mode == "slots":
-        slots = cfg.get("slots") or []
-        if not slots:
-            return "Режим «по слотам»: укажите время как 09:00, 14:30 (два символа в часе) и сохраните."
+    if check_schedule:
+        mode = str(cfg.get("schedule_mode") or "slots")
+        if mode == "slots":
+            slots = cfg.get("slots") or []
+            if not slots:
+                return "Режим «по слотам»: укажите время как 09:00, 14:30 (два символа в часе) и сохраните."
     if not (
         cfg.get("run_reviews")
         or cfg.get("run_questions")
@@ -1327,6 +1326,13 @@ def _schedule_hint(cfg: dict, db: Database) -> str:
         if not ozon_stores:
             return "В цикле включено автоудаление из акций Ozon, но нет Ozon-магазина с Client-Id и Api-Key."
     return ""
+
+
+def _schedule_hint(cfg: dict, db: Database) -> str:
+    """Почему автозапуск включён, но цикл не пойдет (для UI)."""
+    if not cfg.get("enabled"):
+        return ""
+    return _auto_run_readiness(cfg, db, check_schedule=True)
 
 
 def _auto_status(db: Database) -> dict:
@@ -1733,6 +1739,23 @@ def api_set_auto_schedule(body: AutoScheduleBody, db: Database = Depends(get_db)
 @app.get("/api/auto-schedule/status")
 def api_auto_schedule_status(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
     return _auto_status(db)
+
+
+@app.post("/api/auto-schedule/run-now")
+async def api_auto_schedule_run_now(
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_permission("view_settings")),
+):
+    """Принудительный запуск цикла автозапуска (без ожидания слота/интервала)."""
+    global _auto_run_task
+    if _auto_run_task is not None and not _auto_run_task.done():
+        raise HTTPException(409, "Автозапуск уже выполняется — дождитесь завершения или нажмите «Остановить»")
+    cfg = _get_auto_schedule(db)
+    hint = _auto_run_readiness(cfg, db, check_schedule=False)
+    if hint:
+        raise HTTPException(400, hint)
+    _auto_run_task = asyncio.create_task(_run_auto_slot("manual", force=True))
+    return {"ok": True, "started": True}
 
 
 @app.post("/api/auto-schedule/stop")
