@@ -75,7 +75,7 @@ from app.core.card_check import (
     SETTING_CARD_CHECK_TELEGRAM,
     SETTING_CARD_CHECK_TEMPLATE,
 )
-from app.core.telegram_notify import send_activity_report
+from app.core.telegram_notify import resolve_telegram_chat_id, send_activity_report
 from app.core.workflows import (
     auto_process_ozon_buyer_chats,
     auto_process_wb_buyer_chats,
@@ -942,9 +942,14 @@ async def _send_telegram_report(
     manual: bool = False,
 ) -> dict:
     token = (db.get_setting("telegram_bot_token") or "").strip()
-    chat_id = (db.get_setting("telegram_chat_id") or "").strip()
-    if not token or not chat_id:
-        raise HTTPException(400, "Укажите токен бота и ID чата в настройках Telegram")
+    chat_id = resolve_telegram_chat_id(db, "report")
+    if not token:
+        raise HTTPException(400, "Укажите токен бота в настройках Telegram")
+    if not chat_id:
+        raise HTTPException(
+            400,
+            "Укажите ID чата для отчётов или основной ID чата в настройках Telegram",
+        )
     since_iso = since_dt.isoformat(timespec="seconds")
     stats = db.get_activity_stats_since(since_iso)
     period_label = _format_report_period_label(since_dt, until_dt)
@@ -993,7 +998,7 @@ async def _maybe_send_telegram_report() -> None:
     if (db.get_setting(TELEGRAM_REPORT_ENABLED) or "").strip() != "1":
         return
     token = (db.get_setting("telegram_bot_token") or "").strip()
-    chat_id = (db.get_setting("telegram_chat_id") or "").strip()
+    chat_id = resolve_telegram_chat_id(db, "report")
     if not token or not chat_id:
         return
     interval = (db.get_setting(TELEGRAM_REPORT_INTERVAL) or "hour").strip()
@@ -1484,6 +1489,8 @@ def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(requir
         "openai_key",
         "telegram_bot_token",
         "telegram_chat_id",
+        "telegram_report_chat_id",
+        "telegram_card_error_chat_id",
         "telegram_enabled",
         TELEGRAM_REPORT_ENABLED,
         TELEGRAM_REPORT_INTERVAL,

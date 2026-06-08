@@ -570,20 +570,25 @@
 
         <div id="settings-section-telegram" class="settings-section form-card" hidden>
           <h2>Telegram</h2>
-          <p class="form-hint" style="margin-bottom: 14px;">Токен и ID чата — для всех уведомлений. Мгновенные сообщения — только по отзывам 1–3★ с проблемой упаковки (packer_issue).</p>
+          <p class="form-hint" style="margin-bottom: 14px;">Один токен бота — разные чаты для разных типов сообщений. Пустой «отдельный» чат = используется основной.</p>
           <div class="form-group">
             <label>Токен бота</label>
             <input type="password" id="setting-telegram_bot_token" placeholder="токен бота">
           </div>
           <div class="form-group">
-            <label>ID чата</label>
+            <label>ID чата по умолчанию</label>
             <input type="text" id="setting-telegram_chat_id" placeholder="chat_id">
+            <div class="form-hint">Мгновенные уведомления по отзывам 1–3★ (упаковка, пересорт).</div>
+          </div>
+          <div class="form-group">
+            <label>ID чата для периодических отчётов</label>
+            <input type="text" id="setting-telegram_report_chat_id" placeholder="необязательно — иначе как выше">
           </div>
           <div class="form-group">
             <label class="checkbox-row"><input type="checkbox" id="setting-telegram_enabled"> Мгновенные уведомления (отзывы 1–3★, упаковка)</label>
           </div>
           <div class="form-group">
-            <label class="checkbox-row"><input type="checkbox" id="setting-telegram_report_enabled"> Периодический отчёт в этот чат</label>
+            <label class="checkbox-row"><input type="checkbox" id="setting-telegram_report_enabled"> Периодический отчёт в чат отчётов</label>
           </div>
           <div class="form-group">
             <label>Период отчёта</label>
@@ -650,6 +655,10 @@
           <p class="form-hint" style="margin-bottom: 14px;">При генерации ответа (вручную и в автозапуске) ИИ одним запросом формирует ответ и проверяет, нет ли в тексте покупателя признаков ошибки в карточке товара.</p>
           <div class="form-group">
             <label class="checkbox-row"><input type="checkbox" id="setting-card_check_enabled" checked> Включить проверку карточки</label>
+          </div>
+          <div class="form-group">
+            <label>ID чата Telegram для ошибок карточки</label>
+            <input type="text" id="setting-telegram_card_error_chat_id" placeholder="необязательно — иначе чат по умолчанию">
           </div>
           <div class="form-group">
             <label class="checkbox-row"><input type="checkbox" id="setting-card_check_telegram_enabled" checked> Мгновенно в Telegram при обнаружении</label>
@@ -791,6 +800,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=25"></script>
+  <script src="/static/app.js?v=26"></script>
 </body>
 </html>

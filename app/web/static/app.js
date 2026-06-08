@@ -2370,7 +2370,14 @@
     try {
       await loadMe(true);
       const data = await api('/settings');
-      ['openai_key', 'telegram_bot_token', 'telegram_chat_id', 'buyer_chat_reply_from_date'].forEach(k => {
+      [
+        'openai_key',
+        'telegram_bot_token',
+        'telegram_chat_id',
+        'telegram_report_chat_id',
+        'telegram_card_error_chat_id',
+        'buyer_chat_reply_from_date',
+      ].forEach(k => {
         const el = document.getElementById('setting-' + k);
         if (el) el.value = data[k] || '';
       });
@@ -2537,6 +2544,8 @@
       openai_key: document.getElementById('setting-openai_key').value,
       telegram_bot_token: document.getElementById('setting-telegram_bot_token').value,
       telegram_chat_id: document.getElementById('setting-telegram_chat_id').value,
+      telegram_report_chat_id: document.getElementById('setting-telegram_report_chat_id')?.value || '',
+      telegram_card_error_chat_id: document.getElementById('setting-telegram_card_error_chat_id')?.value || '',
       telegram_enabled: document.getElementById('setting-telegram_enabled')?.checked ? '1' : '0',
       telegram_report_enabled: document.getElementById('setting-telegram_report_enabled')?.checked ? '1' : '0',
       telegram_report_interval: document.getElementById('setting-telegram_report_interval')?.value === 'day' ? 'day' : 'hour',

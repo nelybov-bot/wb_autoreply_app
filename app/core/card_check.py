@@ -5,7 +5,7 @@ import logging
 from typing import Any, Optional
 
 from ..db import Database
-from .telegram_notify import send_telegram_message
+from .telegram_notify import resolve_telegram_chat_id, send_telegram_message
 
 log = logging.getLogger("card_check")
 
@@ -159,7 +159,7 @@ async def maybe_record_card_error(
         pass
     if card_check_telegram_enabled(db):
         token = (db.get_setting("telegram_bot_token") or "").strip()
-        chat_id = (db.get_setting("telegram_chat_id") or "").strip()
+        chat_id = resolve_telegram_chat_id(db, "card_error")
         if token and chat_id:
             body = render_telegram_message(
                 db,
