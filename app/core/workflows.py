@@ -770,6 +770,7 @@ async def _apply_packer_issue_telegram(
         row.product_title or row.external_id,
         row.text or "",
         store_name=store_name,
+        db=db,
     )
 
 

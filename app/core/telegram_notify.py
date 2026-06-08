@@ -24,6 +24,13 @@ SETTING_REPORT_CHAT_ID = "telegram_report_chat_id"
 SETTING_CARD_ERROR_CHAT_ID = "telegram_card_error_chat_id"
 SETTING_OZON_ALERTS_CHAT_ID = "ozon_alerts_telegram_chat_id"
 
+_CHAT_ID_SETTING_KEYS = (
+    "telegram_chat_id",
+    SETTING_REPORT_CHAT_ID,
+    SETTING_CARD_ERROR_CHAT_ID,
+    SETTING_OZON_ALERTS_CHAT_ID,
+)
+
 
 TELEGRAM_MAX_MESSAGE_LEN = 4096
 
@@ -71,6 +78,34 @@ def is_plausible_telegram_token(token: str) -> bool:
     return bool(_TOKEN_RE.match(normalize_telegram_bot_token(token)))
 
 
+def telegram_migrate_chat_id(data: dict) -> Optional[int]:
+    """Новый chat_id, если Telegram перевёл группу в супергруппу."""
+    params = data.get("parameters")
+    if not isinstance(params, dict):
+        return None
+    raw = params.get("migrate_to_chat_id")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def persist_migrated_chat_id(db, old_chat_id: Union[str, int], new_chat_id: int) -> int:
+    """Обновляет в настройках все поля chat_id, совпадающие со старым значением."""
+    old_s = str(old_chat_id).strip()
+    new_s = str(int(new_chat_id))
+    if not old_s or old_s == new_s:
+        return 0
+    updated = 0
+    for key in _CHAT_ID_SETTING_KEYS:
+        if (db.get_setting(key) or "").strip() == old_s:
+            db.set_setting(key, new_s)
+            updated += 1
+    return updated
+
+
 def describe_telegram_api_error(resp_status: int, data: dict) -> str:
     """Понятное описание ошибки Telegram для UI и логов."""
     code = int(data.get("error_code") or resp_status or 0)
@@ -91,6 +126,12 @@ def describe_telegram_api_error(resp_status: int, data: dict) -> str:
     if "bot was blocked" in low:
         return "бот заблокирован пользователем — разблокируйте бота в Telegram"
     if "group chat was upgraded" in low:
+        migrated = telegram_migrate_chat_id(data)
+        if migrated is not None:
+            return (
+                f"группа стала супергруппой — укажите chat_id {migrated} "
+                f"(Telegram вернул migrate_to_chat_id)"
+            )
         return "группа стала супергруппой — обновите chat_id (часто -100...)"
     return desc
 
@@ -158,6 +199,7 @@ async def test_telegram_delivery(
         "<b>✅ Тест MarketAI</b>\n\n"
         "Telegram настроен. <i>Форматирование HTML работает.</i>"
     ),
+    db=None,
 ) -> Tuple[bool, str, Optional[dict[str, Any]]]:
     """getMe + пробное сообщение в чат."""
     ok, err, bot = await verify_telegram_bot_token(bot_token)
@@ -167,16 +209,18 @@ async def test_telegram_delivery(
     if not cid:
         return False, "chat_id не задан", bot
     sent_ok, sent_err = await send_telegram_message(
-        bot_token, str(chat_id), text, parse_mode=TELEGRAM_PARSE_MODE
+        bot_token, chat_id, text, parse_mode=TELEGRAM_PARSE_MODE, db=db
     )
     if not sent_ok:
         return False, sent_err, bot
     return True, "", bot
 
 
-def normalize_telegram_chat_id(chat_id: str) -> Union[str, int]:
+def normalize_telegram_chat_id(chat_id: Union[str, int]) -> Union[str, int]:
     """Числовой chat_id — int (группы с минусом); @channel — строка."""
-    cid = (chat_id or "").strip()
+    if isinstance(chat_id, int):
+        return chat_id
+    cid = (chat_id or "").strip().replace("\u200b", "").replace(" ", "")
     if not cid:
         return ""
     if cid.startswith("@"):
@@ -206,10 +250,11 @@ def resolve_telegram_chat_id(db, purpose: str) -> str:
 
 async def send_telegram_message(
     bot_token: str,
-    chat_id: str,
+    chat_id: Union[str, int],
     text: str,
     *,
     parse_mode: Optional[str] = None,
+    db=None,
 ) -> Tuple[bool, str]:
     """
     Отправка в Telegram. Возвращает (успех, описание ошибки).
@@ -233,33 +278,53 @@ async def send_telegram_message(
     try:
         async with aiohttp.ClientSession() as session:
             for chunk in chunks:
-                payload: dict = {
-                    "chat_id": cid,
-                    "text": chunk,
-                    "disable_web_page_preview": True,
-                }
-                if parse_mode:
-                    payload["parse_mode"] = parse_mode
-                async with session.post(
-                    url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
-                ) as resp:
-                    raw = await resp.text()
-                    try:
-                        data = json.loads(raw) if raw else {}
-                    except json.JSONDecodeError:
-                        if resp.status != 200:
-                            err = f"HTTP {resp.status}: {raw[:200]}"
-                            log.warning("Telegram sendMessage failed: %s", err)
-                            return False, err
-                        return False, "неверный ответ Telegram"
-                    if not isinstance(data, dict) or not data.get("ok"):
+                sent = False
+                err = ""
+                for attempt in range(2):
+                    payload: dict = {
+                        "chat_id": cid,
+                        "text": chunk,
+                        "disable_web_page_preview": True,
+                    }
+                    if parse_mode:
+                        payload["parse_mode"] = parse_mode
+                    async with session.post(
+                        url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+                    ) as resp:
+                        raw = await resp.text()
+                        try:
+                            data = json.loads(raw) if raw else {}
+                        except json.JSONDecodeError:
+                            if resp.status != 200:
+                                err = f"HTTP {resp.status}: {raw[:200]}"
+                                log.warning("Telegram sendMessage failed: %s", err)
+                                return False, err
+                            return False, "неверный ответ Telegram"
+                        if isinstance(data, dict) and data.get("ok"):
+                            sent = True
+                            break
                         err = describe_telegram_api_error(int(resp.status), data)
+                        migrated = telegram_migrate_chat_id(data) if isinstance(data, dict) else None
+                        if attempt == 0 and migrated is not None and str(cid) != str(migrated):
+                            old_cid = cid
+                            cid = migrated
+                            n = persist_migrated_chat_id(db, old_cid, migrated) if db is not None else 0
+                            log.warning(
+                                "Telegram chat_id migrated %s -> %s (settings updated: %s)",
+                                old_cid,
+                                migrated,
+                                n,
+                            )
+                            continue
                         log.warning(
-                            "Telegram sendMessage failed: HTTP %s %s",
+                            "Telegram sendMessage failed: HTTP %s chat_id=%s %s",
                             resp.status,
+                            cid,
                             err[:240],
                         )
                         return False, err
+                if not sent:
+                    return False, err or "не удалось отправить в Telegram"
         return True, ""
     except Exception as e:
         log.exception("Telegram send_telegram_message: %s", e)
@@ -336,6 +401,7 @@ async def send_activity_report(
     period_label: str,
     interval: str,
     include_card_errors: bool = True,
+    db=None,
 ) -> Tuple[bool, str]:
     body = format_activity_report(
         stats,
@@ -344,7 +410,7 @@ async def send_activity_report(
         include_card_errors=include_card_errors,
     )
     return await send_telegram_message(
-        bot_token, chat_id, body, parse_mode=TELEGRAM_PARSE_MODE
+        bot_token, chat_id, body, parse_mode=TELEGRAM_PARSE_MODE, db=db
     )
 
 
@@ -356,6 +422,7 @@ async def send_review_to_chat(
     *,
     store_name: Optional[str] = None,
     alert_title: str = "Упаковка / пересорт",
+    db=None,
 ) -> Tuple[bool, str]:
     """Мгновенное уведомление по отзыву (упаковка, пересорт)."""
     token = normalize_telegram_bot_token(bot_token)
@@ -373,4 +440,4 @@ async def send_review_to_chat(
     parts.append("<b>Отзыв:</b>")
     parts.append(tg_blockquote(text))
     body = "\n".join(parts)
-    return await send_telegram_message(token, cid, body, parse_mode=TELEGRAM_PARSE_MODE)
+    return await send_telegram_message(token, cid, body, parse_mode=TELEGRAM_PARSE_MODE, db=db)

@@ -1058,6 +1058,7 @@ async def _send_telegram_report(
         period_label=period_label,
         interval=interval,
         include_card_errors=include_card_errors,
+        db=db,
     )
     if not ok:
         detail = "Не удалось отправить сообщение в Telegram"
@@ -1699,7 +1700,7 @@ async def api_telegram_test(
         raise HTTPException(400, "Укажите токен бота")
     if not chat_id:
         raise HTTPException(400, "Укажите ID чата (основной или для отчётов)")
-    ok, err, bot = await test_telegram_delivery(token, chat_id)
+    ok, err, bot = await test_telegram_delivery(token, chat_id, db=db)
     if not ok:
         raise HTTPException(502, err or "Не удалось отправить тестовое сообщение")
     username = (bot or {}).get("username") or ""
