@@ -241,7 +241,7 @@ async def maybe_record_ozon_alert(
                 summary=parsed["summary"],
                 action_needed=parsed["action_needed"],
             )
-            ok = await send_telegram_message(token, chat_tg, body)
+            ok, _ = await send_telegram_message(token, chat_tg, body)
             if ok:
                 db.mark_ozon_important_alert_telegram_sent(alert_id)
             else:

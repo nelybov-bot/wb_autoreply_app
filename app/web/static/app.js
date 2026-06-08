@@ -1225,10 +1225,13 @@
       const skip = r.wb_chat_skipped_no_reply_sign ?? 0;
       const dup = r.wb_chat_skipped_already_replied ?? 0;
       const cutoff = r.wb_chat_skipped_before_cutoff ?? 0;
+      const tooOld = r.wb_chat_skipped_too_old ?? 0;
+      const ncl = r.wb_chat_skipped_last_not_client ?? 0;
       const elig = r.wb_chat_eligible ?? 0;
       const cand = r.wb_chat_candidates ?? 0;
       toast(
-        `Отправлено: ${sent}. В партии: ${cand} из ${elig}. Уже отвечено: ${dup}, раньше даты: ${cutoff}. Ошибки ИИ: ${genF}, отправки: ${sendF}, без reply_sign: ${skip}.`,
+        `Отправлено: ${sent}. В партии: ${cand} из ${elig}. Уже отвечено: ${dup}, раньше даты: ${cutoff}, `
+        + `старше лимита: ${tooOld}, не от покупателя: ${ncl}. Ошибки ИИ: ${genF}, отправки: ${sendF}, без reply_sign: ${skip}.`,
       );
       await refreshWbChatsList(true);
     } catch (err) {
@@ -2622,6 +2625,30 @@
     });
   });
 
+  const btnTgTest = document.getElementById('btn-telegram-test');
+  if (btnTgTest) {
+    btnTgTest.addEventListener('click', async () => {
+      btnTgTest.disabled = true;
+      try {
+        const res = await api('/telegram/test', {
+          method: 'POST',
+          body: JSON.stringify({
+            telegram_bot_token: document.getElementById('setting-telegram_bot_token')?.value || '',
+            telegram_chat_id:
+              document.getElementById('setting-telegram_report_chat_id')?.value
+              || document.getElementById('setting-telegram_chat_id')?.value
+              || '',
+          }),
+        });
+        toast(res.message || 'Тест Telegram: OK');
+      } catch (err) {
+        toast(err.message, 'error');
+      } finally {
+        btnTgTest.disabled = false;
+      }
+    });
+  }
+
   const btnTgReportNow = document.getElementById('btn-telegram-report-now');
   if (btnTgReportNow) {
     btnTgReportNow.addEventListener('click', async () => {
@@ -2756,7 +2783,13 @@
         return `Пропуск: ${meta.ozon_chat_skip_reason || meta.message}`;
       }
       if (meta.reason) return `Пропуск: ${meta.reason}`;
-      return `Отправлено ${sent}, кандидатов ${cand}`;
+      if (meta.wb_chat_events_failed) return 'Ошибка загрузки ленты событий WB (429 или API)';
+      const parts = [`Отправлено ${sent}, кандидатов ${cand}`];
+      const old = meta.wb_chat_skipped_too_old ?? 0;
+      const ncl = meta.wb_chat_skipped_last_not_client ?? 0;
+      if (old) parts.push(`старше лимита: ${old}`);
+      if (ncl) parts.push(`не от покупателя: ${ncl}`);
+      return parts.join('; ');
     }
     if (action === 'ozon_alert_detected') {
       const m = meta || {};

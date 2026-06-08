@@ -85,7 +85,12 @@ from app.core.card_check import (
     SETTING_CARD_CHECK_TELEGRAM,
     SETTING_CARD_CHECK_TEMPLATE,
 )
-from app.core.telegram_notify import resolve_telegram_chat_id, send_activity_report
+from app.core.telegram_notify import (
+    normalize_telegram_bot_token,
+    resolve_telegram_chat_id,
+    send_activity_report,
+    test_telegram_delivery,
+)
 from app.core.ozon_alerts import (
     DEFAULT_TELEGRAM_TEMPLATE as DEFAULT_OZON_ALERT_TELEGRAM_TEMPLATE,
     SETTING_ENABLED as OZON_ALERTS_ENABLED,
@@ -449,6 +454,8 @@ _wb_chat_list_cache: dict[int, tuple[float, list]] = {}
 _ozon_chat_list_cache: dict[int, tuple[float, list, Optional[str]]] = {}
 _scheduler_task: Optional[asyncio.Task] = None
 _telegram_report_task: Optional[asyncio.Task] = None
+_tg_report_fail_until: float = 0.0
+_tg_report_fail_token: str = ""
 _scheduler_seen: set[str] = set()
 _auto_run_task: Optional[asyncio.Task] = None
 _interval_skip_logged: bool = False
@@ -1027,7 +1034,7 @@ async def _send_telegram_report(
     interval: str,
     manual: bool = False,
 ) -> dict:
-    token = (db.get_setting("telegram_bot_token") or "").strip()
+    token = normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or "")
     chat_id = resolve_telegram_chat_id(db, "report")
     if not token:
         raise HTTPException(400, "Укажите токен бота в настройках Telegram")
@@ -1040,7 +1047,7 @@ async def _send_telegram_report(
     stats = db.get_activity_stats_since(since_iso)
     period_label = _format_report_period_label(since_dt, until_dt)
     include_card_errors = (db.get_setting(SETTING_CARD_CHECK_IN_REPORT) or "1").strip() != "0"
-    ok = await send_activity_report(
+    ok, tg_err = await send_activity_report(
         token,
         chat_id,
         stats,
@@ -1049,7 +1056,10 @@ async def _send_telegram_report(
         include_card_errors=include_card_errors,
     )
     if not ok:
-        raise HTTPException(502, "Не удалось отправить сообщение в Telegram")
+        detail = "Не удалось отправить сообщение в Telegram"
+        if tg_err:
+            detail = f"{detail}: {tg_err}"
+        raise HTTPException(502, detail)
     try:
         db.set_setting(TELEGRAM_REPORT_LAST_SENT, until_dt.isoformat(timespec="seconds"))
         db.add_audit_event(
@@ -1081,12 +1091,15 @@ async def _send_telegram_report(
 
 
 async def _maybe_send_telegram_report() -> None:
+    global _tg_report_fail_until, _tg_report_fail_token
     db = get_db()
     if (db.get_setting(TELEGRAM_REPORT_ENABLED) or "").strip() != "1":
         return
-    token = (db.get_setting("telegram_bot_token") or "").strip()
+    token = normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or "")
     chat_id = resolve_telegram_chat_id(db, "report")
     if not token or not chat_id:
+        return
+    if time.time() < _tg_report_fail_until and token == _tg_report_fail_token:
         return
     interval = (db.get_setting(TELEGRAM_REPORT_INTERVAL) or "hour").strip()
     if interval not in ("hour", "day"):
@@ -1109,8 +1122,16 @@ async def _maybe_send_telegram_report() -> None:
         since_dt = now - dt.timedelta(seconds=period_sec)
     try:
         await _send_telegram_report(db, since_dt=since_dt, until_dt=now, interval=interval)
+        _tg_report_fail_until = 0.0
+        _tg_report_fail_token = ""
     except HTTPException as e:
-        log.warning("telegram_report: %s", e.detail)
+        detail = str(e.detail or "")
+        if "404" in detail or "неверный токен" in detail.lower() or "not found" in detail.lower():
+            _tg_report_fail_until = time.time() + 1800
+            _tg_report_fail_token = token
+            log.warning("telegram_report: %s (повтор не раньше чем через 30 мин)", detail)
+        else:
+            log.warning("telegram_report: %s", detail)
 
 
 async def _telegram_report_loop() -> None:
@@ -1635,9 +1656,45 @@ def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(requir
 
 @app.post("/api/settings")
 def api_set_settings(body: dict[str, str], db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
+    global _tg_report_fail_until, _tg_report_fail_token
     for k, v in body.items():
+        if k == "telegram_bot_token":
+            v = normalize_telegram_bot_token(v or "")
+            _tg_report_fail_until = 0.0
+            _tg_report_fail_token = ""
         db.set_setting(k, v or "")
     return {"ok": True}
+
+
+@app.post("/api/telegram/test")
+async def api_telegram_test(
+    body: dict[str, str],
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_permission("view_settings")),
+):
+    """Проверка токена (getMe) и пробная отправка в чат."""
+    token = normalize_telegram_bot_token(
+        (body.get("telegram_bot_token") or db.get_setting("telegram_bot_token") or "").strip()
+    )
+    chat_id = (
+        (body.get("telegram_chat_id") or "").strip()
+        or resolve_telegram_chat_id(db, "report")
+        or (db.get_setting("telegram_chat_id") or "").strip()
+    )
+    if not token:
+        raise HTTPException(400, "Укажите токен бота")
+    if not chat_id:
+        raise HTTPException(400, "Укажите ID чата (основной или для отчётов)")
+    ok, err, bot = await test_telegram_delivery(token, chat_id)
+    if not ok:
+        raise HTTPException(502, err or "Не удалось отправить тестовое сообщение")
+    username = (bot or {}).get("username") or ""
+    return {
+        "ok": True,
+        "bot_username": username,
+        "chat_id": chat_id,
+        "message": f"Тест отправлен (@{username})" if username else "Тест отправлен",
+    }
 
 
 @app.post("/api/telegram/report-now")

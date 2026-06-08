@@ -55,6 +55,7 @@ from .ozon_buyer_chat import (
 from .wb_buyer_chat import (
     WbBuyerChatClient,
     build_wb_thread_lines,
+    collect_global_events_by_chat,
     collect_thread_lines,
     fetch_events_for_chat,
     last_client_message_info as wb_last_client_info,
@@ -1275,6 +1276,7 @@ async def wb_buyer_chats_mass_generate_send_for_store(
         "wb_chat_skipped_already_replied": 0,
         "wb_chat_skipped_before_cutoff": 0,
         "wb_chat_skipped_too_old": 0,
+        "wb_chat_skipped_last_not_client": 0,
     }
     key = (openai_key or "").strip()
     if not key:
@@ -1290,22 +1292,25 @@ async def wb_buyer_chats_mass_generate_send_for_store(
         key=lambda c: int((c.get("lastMessage") or {}).get("addTimestamp") or 0),
         reverse=True,
     )
+    try:
+        events_by_chat = await collect_global_events_by_chat(client, max_pages=event_pages)
+    except HttpStatusError as e:
+        log.warning("wb_chat_mass global events store=%s: HTTP %s", store.id, e.status)
+        stats["wb_chat_events_failed"] = 1
+        return stats
+    except (asyncio.CancelledError, GeneratorExit):
+        raise
+    except Exception:
+        log.exception("wb_chat_mass global events store=%s", store.id)
+        stats["wb_chat_events_failed"] = 1
+        return stats
     candidates: List[tuple[str, dict, List[tuple], str, List[dict]]] = []
     max_scan = min(len(chat_rows), max(30, int(max_chats) * 6))
     for row in chat_rows[:max_scan]:
         cid = str(row.get("chatID") or "").strip()
         if not cid:
             continue
-        try:
-            evs, _ = await fetch_events_for_chat(client, cid, max_wb_requests=event_pages)
-        except HttpStatusError as e:
-            log.warning("wb_chat_mass events store=%s chat=%s: HTTP %s", store.id, cid, e.status)
-            continue
-        except (asyncio.CancelledError, GeneratorExit):
-            raise
-        except Exception:
-            log.exception("wb_chat_mass events store=%s chat=%s", store.id, cid)
-            continue
+        evs = events_by_chat.get(cid) or []
         lines_ts = build_wb_thread_lines(evs, cid, row)
         ok, reason, _mk, _ts = _wb_chat_eligibility(
             db, store.id, cid, lines_ts, reply_from, max_age_days=max_message_age_days
@@ -1317,6 +1322,8 @@ async def wb_buyer_chats_mass_generate_send_for_store(
                 stats["wb_chat_skipped_before_cutoff"] += 1
             elif reason == "too_old":
                 stats["wb_chat_skipped_too_old"] += 1
+            elif reason == "last_not_client":
+                stats["wb_chat_skipped_last_not_client"] += 1
             continue
         candidates.append((cid, row, lines_ts, _mk, evs))
         if len(candidates) >= max(0, int(max_chats)):
@@ -1433,7 +1440,7 @@ async def auto_process_wb_buyer_chats(
                 event_pages=event_pages,
                 max_chats=max_autosend_per_store,
                 model=model,
-                pause_between_chats_sec=0.0,
+                pause_between_chats_sec=1.0,
                 max_message_age_days=_buyer_chat_auto_max_age_days(db),
             )
         except HttpStatusError as e:

@@ -557,6 +557,18 @@ def collect_thread_lines(events: List[dict], chat_id: str) -> List[Tuple[str, st
     return out
 
 
+def _last_message_display_text(lm: dict) -> str:
+    """Текст lastMessage из списка чатов, включая вложения без текста."""
+    if not isinstance(lm, dict):
+        return ""
+    if lm.get("attachments") is not None:
+        return _event_display_text({"message": lm})
+    inner = lm.get("message")
+    if isinstance(inner, dict):
+        return _event_display_text({"message": inner})
+    return str(lm.get("text") or "").strip()
+
+
 def fallback_line_from_chat_row(
     chat_row: dict,
     events: Optional[List[dict]] = None,
@@ -567,7 +579,7 @@ def fallback_line_from_chat_row(
     lm = chat_row.get("lastMessage") or {}
     if not isinstance(lm, dict):
         return []
-    t = str(lm.get("text") or "").strip()
+    t = _last_message_display_text(lm)
     ts = int(lm.get("addTimestamp") or 0)
     cid = str(chat_row.get("chatID") or "").strip()
     if not t and events and cid:
@@ -593,7 +605,7 @@ def build_wb_thread_lines(
     lm = chat_row.get("lastMessage") or {}
     if not isinstance(lm, dict):
         return lines
-    text = str(lm.get("text") or "").strip()
+    text = _last_message_display_text(lm)
     ts = int(lm.get("addTimestamp") or 0)
     if text and any(
         abs(ts - ts_) <= 3000 and _messages_match_preview(text, t) for _, t, ts_, __ in lines

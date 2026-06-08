@@ -170,7 +170,7 @@ async def maybe_record_card_error(
                 error_kind=parsed["error_kind"],
                 explanation=parsed["explanation"],
             )
-            ok = await send_telegram_message(token, chat_id, body)
+            ok, _ = await send_telegram_message(token, chat_id, body)
             if ok:
                 db.mark_card_error_telegram_sent(alert_id)
             else:
