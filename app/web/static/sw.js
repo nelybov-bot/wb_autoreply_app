@@ -1,4 +1,4 @@
-const CACHE = 'marketai-v22';
+const CACHE = 'marketai-v23';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then(() => self.skipWaiting()));

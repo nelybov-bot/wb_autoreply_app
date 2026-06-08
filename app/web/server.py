@@ -1846,7 +1846,7 @@ async def api_wb_buyer_chat_list(
 async def api_wb_buyer_chat_thread(
     store_id: int,
     chat_id: str,
-    pages: int = Query(20, ge=1, le=50, description="Сколько страниц ленты /events обойти для этого чата"),
+    pages: int = Query(10, ge=1, le=50, description="Сколько страниц ленты /events обойти для этого чата"),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):

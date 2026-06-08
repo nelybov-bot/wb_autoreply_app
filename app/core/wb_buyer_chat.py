@@ -30,6 +30,9 @@ log = logging.getLogger("wb_chat")
 
 BASE = "https://buyer-chat-api.wildberries.ru"
 
+# Префикс исходящих сообщений продавца — по нему в переписке видно, кто писал последним.
+WB_SELLER_REPLY_PREFIX = "Ответ продавца:"
+
 
 def wb_chat_error_message(status: int, body: str) -> str:
     """Человекочитаемое сообщение по коду и телу ответа buyer-chat-api."""
@@ -99,7 +102,7 @@ def _wb_buyer_429_sleep_seconds(headers: Any) -> tuple[int, str]:
 
 
 class WbBuyerChatClient:
-    def __init__(self, api_key: str, *, timeout_s: float = 45.0) -> None:
+    def __init__(self, api_key: str, *, timeout_s: float = 60.0) -> None:
         self.api_key = api_key.strip()
         self.timeout = aiohttp.ClientTimeout(connect=15, total=timeout_s)
 
@@ -239,7 +242,7 @@ class WbBuyerChatClient:
 
     async def send_message(self, reply_sign: str, message: str) -> dict:
         reply_sign = (reply_sign or "").strip()
-        message = (message or "").strip()
+        message = format_wb_seller_outgoing(message)
         if not reply_sign or not message:
             raise ValueError("reply_sign и message обязательны")
         msg_cut = message[:1000]
@@ -324,6 +327,28 @@ def _event_text(ev: dict) -> str:
     if isinstance(msg, dict):
         return str(msg.get("text") or "").strip()
     return ""
+
+
+def format_wb_seller_outgoing(message: str) -> str:
+    """Текст для отправки в WB с узнаваемым префиксом продавца."""
+    body = (message or "").strip()
+    if not body:
+        return ""
+    low = body.lower()
+    if low.startswith(WB_SELLER_REPLY_PREFIX.lower()):
+        return body[:1000]
+    quoted = f'{WB_SELLER_REPLY_PREFIX} "{body}"'
+    if len(quoted) <= 1000:
+        return quoted
+    plain = f"{WB_SELLER_REPLY_PREFIX} {body}"
+    return plain[:1000]
+
+
+def role_from_prefixed_text(text: str) -> Optional[str]:
+    t = (text or "").lstrip()
+    if t.lower().startswith(WB_SELLER_REPLY_PREFIX.lower()):
+        return "seller"
+    return None
 
 
 def merge_good_card(chat_row: dict, events: List[dict]) -> dict:
@@ -457,7 +482,7 @@ def collect_thread_lines(events: List[dict], chat_id: str) -> List[Tuple[str, st
         text = _event_text(ev)
         if not text:
             continue
-        role = _event_role(ev)
+        role = role_from_prefixed_text(text) or _event_role(ev)
         ts = int(ev.get("addTimestamp") or 0)
         event_id = str(ev.get("eventID") or ev.get("id") or "").strip()
         msg_key = event_id if event_id else str(ts)
@@ -481,7 +506,7 @@ def fallback_line_from_chat_row(
         return []
     ts = int(lm.get("addTimestamp") or 0)
     cid = str(chat_row.get("chatID") or "").strip()
-    role = _resolve_last_message_role(lm, chat_row, events, cid)
+    role = role_from_prefixed_text(t) or _resolve_last_message_role(lm, chat_row, events, cid)
     return [(role, t, ts, str(ts))]
 
 
@@ -504,7 +529,7 @@ def build_wb_thread_lines(
     ts = int(lm.get("addTimestamp") or 0)
     if any(abs(ts - ts_) <= 3000 and t.strip() == text for _, t, ts_, __ in lines):
         return lines
-    role = _resolve_last_message_role(lm, chat_row, events, cid)
+    role = role_from_prefixed_text(text) or _resolve_last_message_role(lm, chat_row, events, cid)
     lines = list(lines)
     lines.append((role, text, ts, str(ts)))
     lines.sort(key=lambda x: x[2])

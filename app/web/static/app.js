@@ -783,7 +783,7 @@
   let wbChatSelectedId = null;
   let wbChatReplySign = '';
   let wbChatClientMessageKey = '';
-  let wbChatThreadPages = 20;
+  let wbChatThreadPages = 10;
   /** кэш переписки: ключ «storeId:chatId» */
   const wbChatThreadCache = new Map();
   /** защита от гонок: быстрая смена вкладки / чата / магазина */
@@ -931,7 +931,7 @@
       btn.addEventListener('click', () => {
         const chatId = decodeURIComponent(btn.getAttribute('data-chat-id') || '');
         wbChatSelectedId = chatId;
-        wbChatThreadPages = 20;
+        wbChatThreadPages = 10;
         renderWbChatsList();
         restoreWbChatDetailForSelected();
       });
@@ -1029,13 +1029,16 @@
     const sid = getWbChatsStoreId();
     if (!sid || !chatId) return;
     const gen = ++wbChatThreadFetchGen;
-    setChatStatusBar('wb-chats-status-bar', 'loading', 'Загружаю переписку…');
-    setPanelLoading('wb-chats-loading', true, 'Загружаю переписку…');
+    const pages = Math.max(1, Math.min(50, wbChatThreadPages || 10));
+    const loadHint = pages > 15
+      ? `Загружаю глубокую историю (${pages} стр. ленты WB)… до 5 минут`
+      : 'Загружаю переписку… до 2 минут при холодном сервере';
+    setChatStatusBar('wb-chats-status-bar', 'loading', loadHint);
+    setPanelLoading('wb-chats-loading', true, loadHint);
     setChatToolbarBusy('wb-chats', true);
     try {
-      const pages = Math.max(1, Math.min(50, wbChatThreadPages || 20));
       const path = `/wb/buyer-chats/${sid}/${encodeURIComponent(chatId)}/thread?pages=${pages}`;
-      const t = await api(path, { timeoutMs: 90000 });
+      const t = await api(path, { timeoutMs: 300000 });
       if (gen !== wbChatThreadFetchGen) return;
       if (Number(getWbChatsStoreId()) !== Number(sid)) return;
       if (String(wbChatSelectedId || '') !== String(chatId)) return;
@@ -1233,7 +1236,7 @@
         toast('Выберите чат', 'error');
         return;
       }
-      wbChatThreadPages = 20;
+      wbChatThreadPages = 10;
       void loadWbChatThread(wbChatSelectedId);
     });
     const bMore = document.getElementById('btn-wb-chats-more-history');
@@ -1242,7 +1245,7 @@
         toast('Выберите чат', 'error');
         return;
       }
-      wbChatThreadPages = Math.min(50, (wbChatThreadPages || 20) + 10);
+      wbChatThreadPages = Math.min(50, (wbChatThreadPages || 10) + 12);
       void loadWbChatThread(wbChatSelectedId);
     });
     const b3 = document.getElementById('btn-wb-chats-generate');
