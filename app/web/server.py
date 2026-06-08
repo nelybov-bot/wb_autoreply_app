@@ -630,6 +630,7 @@ async def _process_auto_store(
         "candidates": 0,
         "gen_ok": 0,
         "gen_failed": 0,
+        "card_errors": 0,
         "sent_ok": 0,
         "sent_skipped": 0,
         "sent_failed": 0,
@@ -644,9 +645,10 @@ async def _process_auto_store(
             item_ids = _collect_pending_item_ids(db, [store.id], item_types=item_types)
             result["candidates"] = len(item_ids)
             if item_ids and key:
-                gen_ok, gen_failed = await generate_mass(db, item_ids, key, model="gpt-5.2")
+                gen_ok, gen_failed, card_errors = await generate_mass(db, item_ids, key, model="gpt-5.2")
                 result["gen_ok"] = gen_ok
                 result["gen_failed"] = gen_failed
+                result["card_errors"] = card_errors
                 _auto_state["phase"] = "send"
                 sent_ok, sent_skipped, sent_failed = await send_mass_all(db, item_ids)
                 result["sent_ok"] = sent_ok
@@ -760,6 +762,8 @@ async def _process_auto_store(
             f"сгенерировано {result.get('gen_ok', 0)}, "
             f"отправлено {result.get('sent_ok', 0)}"
         )
+        if result.get("card_errors"):
+            summary_parts.append(f"ошибок карточек {result['card_errors']}")
         if result.get("sent_failed"):
             summary_parts.append(f"ошибок отправки {result['sent_failed']}")
     wb = result.get("wb_chats") if isinstance(result.get("wb_chats"), dict) else {}
@@ -822,6 +826,7 @@ async def _process_auto_store(
                 "added": result.get("added"),
                 "candidates": result.get("candidates"),
                 "gen_ok": result.get("gen_ok"),
+                "card_errors": result.get("card_errors"),
                 "sent_ok": result.get("sent_ok"),
                 "wb_chats": wb or None,
                 "ozon_chats": oz or None,
@@ -953,6 +958,7 @@ async def _run_auto_slot(slot: str) -> None:
             "candidates": _sum_store_results(stores_results, "candidates"),
             "gen_ok": _sum_store_results(stores_results, "gen_ok"),
             "gen_failed": _sum_store_results(stores_results, "gen_failed"),
+            "card_errors": _sum_store_results(stores_results, "card_errors"),
             "sent_ok": _sum_store_results(stores_results, "sent_ok"),
             "sent_skipped": _sum_store_results(stores_results, "sent_skipped"),
             "sent_failed": _sum_store_results(stores_results, "sent_failed"),
@@ -1250,6 +1256,11 @@ def _schedule_hint(cfg: dict, db: Database) -> str:
     openai_key = (db.get_setting("openai_key") or "").strip()
     if (cfg.get("run_reviews") or cfg.get("run_questions")) and not openai_key:
         return "Для автоответов на отзывы и вопросы нужен ключ OpenAI в «Настройки»."
+    if (
+        (cfg.get("run_reviews") or cfg.get("run_questions") or cfg.get("run_wb_chats") or cfg.get("run_ozon_chats"))
+        and (db.get_setting(SETTING_CARD_CHECK_ENABLED) or "1").strip() == "0"
+    ):
+        return "Проверка карточек выключена в «Настройки → Карточки» — при генерации ответов она не выполняется."
     if (db.get_setting(TELEGRAM_REPORT_ENABLED) or "").strip() == "1":
         tg_token = (db.get_setting("telegram_bot_token") or "").strip()
         tg_chat = resolve_telegram_chat_id(db, "report")

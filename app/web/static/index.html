@@ -503,6 +503,11 @@
             <label class="checkbox-row"><input type="checkbox" id="auto-run-ozon-chats"> Чаты Ozon</label>
             <label class="checkbox-row"><input type="checkbox" id="auto-run-ozon-alerts"> Важные уведомления Ozon (поддержка)</label>
             <label class="checkbox-row"><input type="checkbox" id="auto-run-ozon-actions-remove"> Удаление из автоакций Ozon</label>
+            <p class="form-hint" style="margin-top: 12px;">
+              <strong>Проверка карточек</strong> не отдельный шаг: она выполняется вместе с генерацией ответов
+              (отзывы, вопросы, чаты WB/Ozon), если включена в «Настройки → Карточки».
+              В журнале автозапуска будет строка «ошибок карточек N».
+            </p>
           </div>
           <div class="form-card auto-card-section auto-card-stores">
             <h3>Магазины для авто</h3>
@@ -858,6 +863,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=32"></script>
+  <script src="/static/app.js?v=33"></script>
 </body>
 </html>

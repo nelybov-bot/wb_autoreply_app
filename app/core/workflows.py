@@ -786,12 +786,12 @@ async def _generate_one(
     system: str,
     item_id: int,
     sem: asyncio.Semaphore,
-) -> bool:
-    """Генерирует ответ для одного item. Возвращает True при успехе. Ответ ИИ — строго JSON {reply, packer_issue}."""
+) -> Tuple[bool, bool]:
+    """Генерирует ответ для одного item. Возвращает (успех, найдена_ошибка_карточки)."""
     async with sem:
         row = db.get_item_by_id(item_id)
         if not row:
-            return False
+            return False, False
         if row.item_type == "review":
             rg = _rating_group(row.rating)
             p = db.get_prompt("review", "general" if not row.text.strip() else rg)
@@ -822,16 +822,16 @@ async def _generate_one(
             txt = (txt or "").strip()
             if not txt:
                 log.warning("Generate item_id=%s: пустой ответ от модели", item_id)
-                return False
+                return False, False
             try:
                 obj = _parse_generation_json(txt, context=f"item_id={item_id}")
             except (json.JSONDecodeError, ValueError) as e:
                 log.warning("Generate item_id=%s: %s — %s", item_id, e, txt[:200])
-                return False
+                return False, False
             reply = (obj.get("reply") or "").strip()
             db.set_generated(item_id, reply)
             await _apply_packer_issue_telegram(db, row, bool(obj.get("packer_issue")))
-            await maybe_record_card_error(
+            alert_id = await maybe_record_card_error(
                 db,
                 obj,
                 store_id=row.store_id,
@@ -841,7 +841,7 @@ async def _generate_one(
                 source_type=source_type,
                 source_ref=str(item_id),
             )
-            return True
+            return True, bool(alert_id)
         except (asyncio.CancelledError, GeneratorExit):
             raise
         except Exception as e:
@@ -849,7 +849,7 @@ async def _generate_one(
                 log.warning("Generate item=%s: %s", item_id, e)
             else:
                 log.exception("Generate failed item=%s: %s", item_id, e)
-            return False
+            return False, False
 
 
 async def generate_mass(
@@ -859,12 +859,12 @@ async def generate_mass(
     model: str = "gpt-5.2",
     progress_queue: Optional[Queue] = None,
     progress_cb: Optional[Callable[[int, int], None]] = None,
-) -> Tuple[int, int]:
+) -> Tuple[int, int, int]:
     """
     Генерирует ответы для items (new/generated можно перегенерить) и сохраняет в DB.
     progress_queue: при наличии в неё кладутся ("progress", current, total).
     progress_cb: при наличии вызывается с (current, total).
-    Возвращает (ok, failed).
+    Возвращает (ok, failed, card_errors).
     """
     def _progress(cur: int, tot: int) -> None:
         _put_progress(progress_queue, cur, tot)
@@ -875,7 +875,7 @@ async def generate_mass(
                 pass
 
     if not item_ids:
-        return 0, 0
+        return 0, 0, 0
     total = len(item_ids)
     _progress(0, total)
     client = OpenAIClient(openai_key, model=model)
@@ -884,7 +884,7 @@ async def generate_mass(
     done = 0
     done_lock = asyncio.Lock()
 
-    async def run_one(iid: int) -> bool:
+    async def run_one(iid: int) -> Tuple[bool, bool]:
         nonlocal done
         r = await _generate_one(db, client, system, iid, sem)
         async with done_lock:
@@ -896,8 +896,16 @@ async def generate_mass(
     results = await asyncio.gather(*tasks, return_exceptions=True)
     ok = 0
     failed = 0
+    card_errors = 0
     for r in results:
-        if r is True:
+        if isinstance(r, tuple) and len(r) == 2:
+            if r[0]:
+                ok += 1
+            else:
+                failed += 1
+            if r[1]:
+                card_errors += 1
+        elif r is True:
             ok += 1
         elif r is False:
             failed += 1
@@ -910,7 +918,7 @@ async def generate_mass(
             "generate_mass: OpenAI insufficient_quota — после первого отказа по биллингу остальные items "
             "частично пропущены без лишних запросов; проверьте https://platform.openai.com/account/billing"
         )
-    return ok, failed
+    return ok, failed, card_errors
 
 async def send_mass(
     db: Database,

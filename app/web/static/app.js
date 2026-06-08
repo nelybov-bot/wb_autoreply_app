@@ -2699,6 +2699,7 @@
         parts.push(`акции: ${oa.products_removed || 0} товаров из ${oa.actions_processed || 0} акций (подошло ${oa.actions_matched || 0})`);
       }
     }
+    if (r.card_errors) parts.push(`ошибок карточек: ${r.card_errors}`);
     if (r.reviews_phase_error) parts.push(`ошибка отзывов: ${r.reviews_phase_error}`);
     return parts.join(' · ');
   }
@@ -2723,6 +2724,7 @@
       if (meta.added != null) rev.push(`загружено ${meta.added}`);
       if (meta.candidates != null) rev.push(`к ответу ${meta.candidates}`);
       if (meta.gen_ok != null) rev.push(`сгенерировано ${meta.gen_ok}`);
+      if (meta.card_errors) rev.push(`ошибок карточек ${meta.card_errors}`);
       if (meta.sent_ok != null) rev.push(`отправлено ${meta.sent_ok}`);
       if (meta.sent_failed) rev.push(`ошибок отправки ${meta.sent_failed}`);
       if (rev.length) lines.push('Отзывы/вопросы: ' + rev.join(', '));

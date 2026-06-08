@@ -138,7 +138,9 @@ async def run_generate(db: Database, item_ids: list[int], openai_key: str) -> st
 
     async def _run() -> None:
         try:
-            ok, failed = await generate_mass(db, item_ids, openai_key, model="gpt-5.2", progress_queue=None, progress_cb=_progress)
+            ok, failed, _card_errors = await generate_mass(
+                db, item_ids, openai_key, model="gpt-5.2", progress_queue=None, progress_cb=_progress,
+            )
             async with _tasks_lock:
                 _tasks[task_id]["status"] = "done"
                 _tasks[task_id]["result"] = {"ok": ok, "failed": failed}
