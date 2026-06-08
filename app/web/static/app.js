@@ -3040,21 +3040,47 @@
   document.getElementById('btn-refresh-ozon-alerts')?.addEventListener('click', () => { void loadOzonAlerts(); });
   document.getElementById('ozon-alerts-store')?.addEventListener('change', () => { void loadOzonAlerts(); });
   document.getElementById('ozon-alerts-status')?.addEventListener('change', () => { void loadOzonAlerts(); });
-  document.getElementById('btn-ozon-alerts-scan-now')?.addEventListener('click', async () => {
-    const sid = document.getElementById('ozon-alerts-scan-store')?.value;
+  async function runOzonAlertsScan(storeId, { rescan = false } = {}) {
+    const sid = String(storeId || '').trim();
     if (!sid) {
       toast('Выберите магазин Ozon', 'error');
       return;
     }
+    if (rescan && !window.confirm('Сбросить пометки «не важно» для этого магазина и проверить сообщения заново?')) {
+      return;
+    }
     try {
       await saveServerSettings();
-      toast('Сканирую чаты поддержки Ozon… это может занять несколько минут', 'info');
-      const r = await api(`/ozon/alerts/${sid}/scan`, { method: 'POST', body: '{}', timeoutMs: 600000 });
-      toast(`Готово: новых важных ${r.ozon_alert_new ?? 0}, проверено сообщений ${r.ozon_alert_messages_checked ?? 0}`);
+      toast(
+        rescan
+          ? 'Пересканирую чаты Ozon… это может занять несколько минут'
+          : 'Сканирую чаты поддержки Ozon… это может занять несколько минут',
+        'info',
+      );
+      const r = await api(`/ozon/alerts/${sid}/scan`, {
+        method: 'POST',
+        body: JSON.stringify({ rescan }),
+        timeoutMs: 600000,
+      });
+      const cleared = Number(r.ozon_alert_ignored_cleared || 0);
+      const clearedPart = rescan && cleared ? `, сброшено «не важно»: ${cleared}` : '';
+      toast(
+        `Готово: новых важных ${r.ozon_alert_new ?? 0}, проверено сообщений ${r.ozon_alert_messages_checked ?? 0}${clearedPart}`,
+      );
       await loadOzonAlerts();
     } catch (err) {
       toast(err.message, 'error');
     }
+  }
+
+  document.getElementById('btn-ozon-alerts-scan-now')?.addEventListener('click', () => {
+    void runOzonAlertsScan(document.getElementById('ozon-alerts-scan-store')?.value, { rescan: false });
+  });
+  document.getElementById('btn-ozon-alerts-rescan-now')?.addEventListener('click', () => {
+    void runOzonAlertsScan(document.getElementById('ozon-alerts-scan-store')?.value, { rescan: true });
+  });
+  document.getElementById('btn-ozon-alerts-rescan-panel')?.addEventListener('click', () => {
+    void runOzonAlertsScan(document.getElementById('ozon-alerts-store')?.value, { rescan: true });
   });
   document.getElementById('card-errors-store')?.addEventListener('change', () => { void loadCardErrors(); });
   document.getElementById('card-errors-status')?.addEventListener('change', () => { void loadCardErrors(); });

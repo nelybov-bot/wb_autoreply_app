@@ -1619,6 +1619,7 @@ async def scan_ozon_important_alerts_for_store(
     max_chats: int = 40,
     max_messages_per_chat: int = 25,
     model: str = "gpt-5.2",
+    rescan: bool = False,
 ) -> Dict[str, Any]:
     """Сканирует чаты поддержки Ozon и шлёт в Telegram важные уведомления."""
     from .ozon_buyer_chat import is_ozon_per_chat_send_error
@@ -1630,7 +1631,10 @@ async def scan_ozon_important_alerts_for_store(
         "ozon_alert_ai_failed": 0,
         "ozon_alert_skipped_no_access": 0,
         "ozon_alert_skip_reason": "",
+        "ozon_alert_ignored_cleared": 0,
     }
+    if rescan:
+        stats["ozon_alert_ignored_cleared"] = db.clear_ozon_ignored_alerts(store.id)
     if not ozon_alerts_enabled(db):
         stats["ozon_alert_skip_reason"] = "disabled"
         return stats
@@ -1702,7 +1706,7 @@ async def scan_ozon_important_alerts_for_store(
                 break
             excerpt = build_conversation_excerpt(lines, up_to_message_id=mid)
             try:
-                parsed = await classify_ozon_support_message(
+                parsed, mark_ignored = await classify_ozon_support_message(
                     db,
                     oai,
                     store_name=store_name,
@@ -1716,14 +1720,17 @@ async def scan_ozon_important_alerts_for_store(
                 stats["ozon_alert_ai_failed"] += 1
                 continue
             if not parsed:
-                db.mark_ozon_message_alert_processed(
-                    store_id=store.id,
-                    chat_id=chat_id,
-                    message_id=mid,
-                    chat_type=chat_type,
-                    message_at=created,
-                    message_text=text,
-                )
+                if mark_ignored:
+                    db.mark_ozon_message_alert_processed(
+                        store_id=store.id,
+                        chat_id=chat_id,
+                        message_id=mid,
+                        chat_type=chat_type,
+                        message_at=created,
+                        message_text=text,
+                    )
+                else:
+                    stats["ozon_alert_ai_failed"] += 1
                 continue
             alert_id = await maybe_record_ozon_alert(
                 db,

@@ -151,7 +151,8 @@ async def classify_ozon_support_message(
     message_text: str,
     message_at: str,
     conversation_excerpt: str,
-) -> Optional[dict]:
+) -> tuple[Optional[dict], bool]:
+    """Возвращает (результат, пометить_как_проверенное). При сбое ИИ — не помечать."""
     task = db.get_prompt("ozon_important_alert", "general")
     if not task.strip():
         task = DEFAULT_PROMPT
@@ -171,8 +172,11 @@ async def classify_ozon_support_message(
         )
     except Exception as e:
         log.warning("ozon_alert classify failed: %s", e)
-        return None
-    return parse_ozon_alert_json(txt)
+        return None, False
+    parsed = parse_ozon_alert_json(txt)
+    if parsed:
+        return parsed, False
+    return None, True
 
 
 async def maybe_record_ozon_alert(

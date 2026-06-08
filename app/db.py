@@ -544,6 +544,16 @@ class Database:
             self._conn.commit()
             return int(cur.lastrowid)
 
+    def clear_ozon_ignored_alerts(self, store_id: int) -> int:
+        """Удалить записи «не важно» — чтобы пересканировать сообщения заново."""
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                "DELETE FROM ozon_important_alerts WHERE store_id=? AND status='ignored'",
+                (int(store_id),),
+            )
+            self._conn.commit()
+            return int(cur.rowcount or 0)
+
     def mark_ozon_message_alert_processed(
         self,
         *,

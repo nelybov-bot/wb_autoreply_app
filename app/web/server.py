@@ -428,6 +428,10 @@ class OzonActionsSettingsBody(BaseModel):
     watched_action_ids: list[int] = []
 
 
+class OzonAlertsScanBody(BaseModel):
+    rescan: bool = False
+
+
 class OzonActionsRemoveBody(BaseModel):
     action_ids: list[int] = []
     only_auto_add: bool = False
@@ -1755,6 +1759,7 @@ def api_update_ozon_alert_status(
 @app.post("/api/ozon/alerts/{store_id}/scan")
 async def api_scan_ozon_alerts(
     store_id: int,
+    body: OzonAlertsScanBody = OzonAlertsScanBody(),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_permission("view_settings")),
 ):
@@ -1771,7 +1776,9 @@ async def api_scan_ozon_alerts(
         raise HTTPException(400, "Включите «Важные уведомления Ozon» в настройках")
     try:
         stats = await asyncio.wait_for(
-            scan_ozon_important_alerts_for_store(db, store, openai_key=key),
+            scan_ozon_important_alerts_for_store(
+                db, store, openai_key=key, rescan=bool(body.rescan)
+            ),
             timeout=600.0,
         )
     except asyncio.TimeoutError:
