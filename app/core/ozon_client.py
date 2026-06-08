@@ -133,14 +133,31 @@ class OzonClient:
         sort_dir: str = "DESC",
         status: str = "UNPROCESSED",
     ) -> dict:
-        """POST /v1/review/list. status: ALL | UNPROCESSED | PROCESSED. limit: 20..100 по API."""
-        body: Dict[str, Any] = {
-            "last_id": last_id or "",
-            "limit": min(max(limit, 20), 100),
+        """Список отзывов: сначала /v2/review/list (filters.status), затем /v1/review/list."""
+        lim = min(max(limit, 20), 100)
+        st = (status or "UNPROCESSED").strip().upper() or "UNPROCESSED"
+        lid = last_id or ""
+        v2_body: Dict[str, Any] = {
+            "last_id": lid,
+            "limit": lim,
             "sort_dir": sort_dir,
-            "status": status,
+            "filters": {"status": st},
         }
-        return await self._request("POST", "/v1/review/list", json_body=body)
+        try:
+            data = await self._request("POST", "/v2/review/list", json_body=v2_body)
+            if isinstance(data, dict):
+                return data
+        except HttpStatusError as e:
+            if e.status not in (400, 404, 405):
+                raise
+            log.info("Ozon review/list v2 unavailable HTTP %s, fallback to v1", e.status)
+        v1_body: Dict[str, Any] = {
+            "last_id": lid,
+            "limit": lim,
+            "sort_dir": sort_dir,
+            "status": st,
+        }
+        return await self._request("POST", "/v1/review/list", json_body=v1_body)
 
     async def list_questions(
         self,

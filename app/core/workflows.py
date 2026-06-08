@@ -471,6 +471,13 @@ async def _ozon_collect_reviews(
         page += 1
         f = await ozon.list_feedbacks(limit=100, last_id=last_id, status="UNPROCESSED")
         reviews = ozon._feedback_list(f or {})
+        if page == 1 and not reviews:
+            log.info(
+                "Ozon reviews page 1 empty store client_id=%s…%s keys=%s",
+                (ozon.client_id or "")[:4],
+                (ozon.client_id or "")[-4:] if len(ozon.client_id or "") > 4 else "",
+                list((f or {}).keys())[:8],
+            )
         if not reviews:
             break
         for it in reviews:
