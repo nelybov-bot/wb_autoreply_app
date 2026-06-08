@@ -5,7 +5,13 @@ import logging
 from typing import Any, Optional
 
 from ..db import Database
-from .telegram_notify import resolve_telegram_chat_id, send_telegram_message
+from .telegram_notify import (
+    TELEGRAM_PARSE_MODE,
+    escape_tg_html,
+    is_plain_telegram_template,
+    resolve_telegram_chat_id,
+    send_telegram_message,
+)
 
 log = logging.getLogger("card_check")
 
@@ -30,13 +36,13 @@ DEFAULT_BUYER_CHAT_PROMPT = (
 )
 
 DEFAULT_TELEGRAM_TEMPLATE = (
-    "Ошибка в карточке (вероятно)\n"
-    "Магазин: {store_name}\n"
-    "Товар: {product_title}\n"
-    "Источник: {source_label}\n"
-    "Текст покупателя:\n{customer_text}\n\n"
-    "Возможная ошибка: {error_kind}\n"
-    "{explanation}"
+    "⚠️ <b>Ошибка в карточке</b> <i>(вероятно)</i>\n\n"
+    "🏪 <b>Магазин:</b> {store_name}\n"
+    "📦 <b>Товар:</b> {product_title}\n"
+    "📋 <b>Источник:</b> {source_label}\n\n"
+    "<b>Текст покупателя:</b>\n<blockquote>{customer_text}</blockquote>\n\n"
+    "⚡ <b>Возможная ошибка:</b> {error_kind}\n"
+    "<i>{explanation}</i>"
 )
 
 SOURCE_LABELS = {
@@ -64,9 +70,15 @@ def card_check_telegram_enabled(db: Database) -> bool:
     return (db.get_setting(SETTING_CARD_CHECK_TELEGRAM) or "1").strip() != "0"
 
 
+def is_legacy_card_telegram_template(template: str) -> bool:
+    return is_plain_telegram_template(template)
+
+
 def get_telegram_template(db: Database) -> str:
     t = (db.get_setting(SETTING_CARD_CHECK_TEMPLATE) or "").strip()
-    return t or DEFAULT_TELEGRAM_TEMPLATE
+    if not t or is_legacy_card_telegram_template(t):
+        return DEFAULT_TELEGRAM_TEMPLATE
+    return t
 
 
 def render_telegram_message(
@@ -80,14 +92,19 @@ def render_telegram_message(
     explanation: str,
 ) -> str:
     template = get_telegram_template(db)
-    return template.format(
-        store_name=(store_name or "—").strip(),
-        product_title=(product_title or "—").strip(),
-        source_label=SOURCE_LABELS.get(source_type, source_type or "—"),
-        customer_text=(customer_text or "—").strip()[:2000],
-        error_kind=(error_kind or "—").strip(),
-        explanation=(explanation or "—").strip(),
-    )
+    esc = escape_tg_html
+    ctx = {
+        "store_name": esc(store_name),
+        "product_title": esc(product_title),
+        "source_label": esc(SOURCE_LABELS.get(source_type, source_type or "—")),
+        "customer_text": esc((customer_text or "—").strip()[:2000]),
+        "error_kind": esc(error_kind),
+        "explanation": esc(explanation),
+    }
+    try:
+        return template.format(**ctx)
+    except KeyError:
+        return DEFAULT_TELEGRAM_TEMPLATE.format(**ctx)
 
 
 def parse_card_error(obj: dict) -> Optional[dict]:
@@ -170,7 +187,9 @@ async def maybe_record_card_error(
                 error_kind=parsed["error_kind"],
                 explanation=parsed["explanation"],
             )
-            ok, _ = await send_telegram_message(token, chat_id, body)
+            ok, _ = await send_telegram_message(
+                token, chat_id, body, parse_mode=TELEGRAM_PARSE_MODE
+            )
             if ok:
                 db.mark_card_error_telegram_sent(alert_id)
             else:

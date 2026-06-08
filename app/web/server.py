@@ -84,6 +84,7 @@ from app.core.card_check import (
     SETTING_CARD_CHECK_IN_REPORT,
     SETTING_CARD_CHECK_TELEGRAM,
     SETTING_CARD_CHECK_TEMPLATE,
+    is_legacy_card_telegram_template,
 )
 from app.core.telegram_notify import (
     normalize_telegram_bot_token,
@@ -1665,6 +1666,8 @@ def api_set_settings(body: dict[str, str], db: Database = Depends(get_db), _: Us
             _tg_report_fail_until = 0.0
             _tg_report_fail_token = ""
         if k == OZON_ALERTS_TEMPLATE and is_legacy_telegram_template(v or ""):
+            v = ""
+        if k == SETTING_CARD_CHECK_TEMPLATE and is_legacy_card_telegram_template(v or ""):
             v = ""
         db.set_setting(k, v or "")
     return {"ok": True}

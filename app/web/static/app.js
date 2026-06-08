@@ -2320,19 +2320,19 @@
     + '📅 <b>Срок:</b> {deadline}\n'
     + '⚡ <b>Последствия:</b> {consequence}\n'
     + '{optional_amount}{optional_product}'
-    + '\n{summary}\n\n'
+    + '\n<blockquote>{summary}</blockquote>\n\n'
     + '✅ <b>Действия:</b> {action_needed}\n'
     + '🕐 {message_at} · {chat_type}'
   );
 
   const DEFAULT_CARD_CHECK_TELEGRAM_TEMPLATE = (
-    'Ошибка в карточке (вероятно)\n'
-    + 'Магазин: {store_name}\n'
-    + 'Товар: {product_title}\n'
-    + 'Источник: {source_label}\n'
-    + 'Текст покупателя:\n{customer_text}\n\n'
-    + 'Возможная ошибка: {error_kind}\n'
-    + '{explanation}'
+    '⚠️ <b>Ошибка в карточке</b> <i>(вероятно)</i>\n\n'
+    + '🏪 <b>Магазин:</b> {store_name}\n'
+    + '📦 <b>Товар:</b> {product_title}\n'
+    + '📋 <b>Источник:</b> {source_label}\n\n'
+    + '<b>Текст покупателя:</b>\n<blockquote>{customer_text}</blockquote>\n\n'
+    + '⚡ <b>Возможная ошибка:</b> {error_kind}\n'
+    + '<i>{explanation}</i>'
   );
 
   const PROMPT_GROUP_ORDER = ['review', 'question', 'buyer_chat', 'card_check', 'ozon_important_alert'];

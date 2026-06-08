@@ -1,7 +1,6 @@
 """Ozon: важные уведомления из чатов поддержки (штрафы, ИС, блокировки)."""
 from __future__ import annotations
 
-import html
 import json
 import logging
 import re
@@ -10,7 +9,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..db import Database
 from .chat_common import MSK, parse_reply_from_date
 from .openai_client import OpenAIClient
-from .telegram_notify import resolve_telegram_chat_id, send_telegram_message
+from .telegram_notify import (
+    TELEGRAM_PARSE_MODE,
+    escape_tg_html,
+    resolve_telegram_chat_id,
+    send_telegram_message,
+    template_uses_html,
+)
 
 log = logging.getLogger("ozon_alerts")
 
@@ -36,7 +41,7 @@ DEFAULT_TELEGRAM_TEMPLATE = (
     "📅 <b>Срок:</b> {deadline}\n"
     "⚡ <b>Последствия:</b> {consequence}\n"
     "{optional_amount}{optional_product}"
-    "\n{summary}\n\n"
+    "\n<blockquote>{summary}</blockquote>\n\n"
     "✅ <b>Действия:</b> {action_needed}\n"
     "🕐 {message_at} · {chat_type}"
 )
@@ -87,18 +92,10 @@ def _truncate_text(val: str, max_len: int) -> str:
     return s[: max_len - 1].rstrip() + "…"
 
 
-def _escape_tg(val: str) -> str:
-    return html.escape((val or "—").strip() or "—")
-
-
 def _optional_html_line(label: str, value: str, emoji: str = "") -> str:
     if _dash(value):
         return ""
-    return f"{emoji}<b>{label}:</b> {_escape_tg(value)}\n"
-
-
-def _template_uses_html(template: str) -> bool:
-    return bool(re.search(r"</?[bi]>|<code>|<pre>", template or "", re.I))
+    return f"{emoji}<b>{label}:</b> {escape_tg_html(value)}\n"
 
 
 def is_legacy_telegram_template(template: str) -> bool:
@@ -110,8 +107,10 @@ def is_legacy_telegram_template(template: str) -> bool:
         return True
     if "Ozon: важное уведомление" in t:
         return True
-    if "Текст:" in t and not _template_uses_html(t):
+    if "Текст:" in t and not template_uses_html(t):
         return True
+    if template_uses_html(t) and "<blockquote>" not in t and "{summary}" in t:
+        return False
     return False
 
 
@@ -234,11 +233,10 @@ def render_telegram_message(
     telegram_title: str = "",
     deadline: str = "",
     consequence: str = "",
-) -> Tuple[str, Optional[str]]:
-    """Текст для Telegram и parse_mode (HTML) или None."""
+) -> Tuple[str, str]:
+    """Текст для Telegram (HTML, parse_mode=HTML)."""
     template = get_telegram_template(db)
-    use_html = _template_uses_html(template)
-    esc = _escape_tg if use_html else (lambda s: (s or "—").strip() or "—")
+    esc = escape_tg_html
 
     title = _truncate_text(telegram_title or "Важное уведомление Ozon", 60)
     threat_short = _truncate_text(threat_type, 45) if not _dash(threat_type) else ""
@@ -263,25 +261,16 @@ def render_telegram_message(
         "telegram_title": esc(title),
         "deadline": esc(deadline if not _dash(deadline) else "—"),
         "consequence": esc(consequence if not _dash(consequence) else "—"),
-        "optional_threat_type": (
-            _optional_html_line("Тип", threat_short, "📋 ") if use_html and show_type else (
-                f"Тип: {esc(threat_short)}\n" if not use_html and show_type else ""
-            )
-        ),
-        "optional_amount": _optional_html_line("Сумма", amount, "💰 ") if use_html else (
-            f"Сумма: {esc(amount)}\n" if not _dash(amount) else ""
-        ),
-        "optional_product": _optional_html_line("Товар", product_ref, "📦 ") if use_html else (
-            f"Товар: {esc(product_ref)}\n" if not _dash(product_ref) else ""
-        ),
+        "optional_threat_type": _optional_html_line("Тип", threat_short, "📋 ") if show_type else "",
+        "optional_amount": _optional_html_line("Сумма", amount, "💰 "),
+        "optional_product": _optional_html_line("Товар", product_ref, "📦 "),
     }
     try:
         body = template.format(**ctx).strip()
     except KeyError:
         body = DEFAULT_TELEGRAM_TEMPLATE.format(**ctx).strip()
-        use_html = True
     body = re.sub(r"\n{3,}", "\n\n", body)
-    return body, ("HTML" if use_html else None)
+    return body, TELEGRAM_PARSE_MODE
 
 
 def parse_ozon_alert_json(txt: str) -> Optional[dict]:

@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import html as html_lib
 import json
 import logging
 import re
@@ -12,6 +13,8 @@ from typing import Any, Optional, Tuple, Union
 import aiohttp
 
 log = logging.getLogger("telegram")
+
+TELEGRAM_PARSE_MODE = "HTML"
 
 TELEGRAM_API_BASE = "https://api.telegram.org/bot{token}"
 TELEGRAM_API = TELEGRAM_API_BASE + "/sendMessage"
@@ -23,6 +26,27 @@ SETTING_OZON_ALERTS_CHAT_ID = "ozon_alerts_telegram_chat_id"
 
 
 TELEGRAM_MAX_MESSAGE_LEN = 4096
+
+
+def escape_tg_html(text: str) -> str:
+    """Экранирование для parse_mode=HTML."""
+    return html_lib.escape((text or "").strip() or "—")
+
+
+def tg_blockquote(text: str) -> str:
+    return f"<blockquote>{escape_tg_html(text)}</blockquote>"
+
+
+def template_uses_html(template: str) -> bool:
+    return bool(
+        re.search(r"</?(?:b|i|blockquote|code|pre|u|s)>", template or "", re.I)
+    )
+
+
+def is_plain_telegram_template(template: str) -> bool:
+    """Шаблон без HTML-тегов — подменяем на форматированный по умолчанию."""
+    t = (template or "").strip()
+    return bool(t) and not template_uses_html(t)
 
 
 def normalize_telegram_bot_token(raw: str) -> str:
@@ -130,7 +154,10 @@ async def test_telegram_delivery(
     bot_token: str,
     chat_id: str,
     *,
-    text: str = "Тест MarketAI: Telegram настроен.",
+    text: str = (
+        "<b>✅ Тест MarketAI</b>\n\n"
+        "Telegram настроен. <i>Форматирование HTML работает.</i>"
+    ),
 ) -> Tuple[bool, str, Optional[dict[str, Any]]]:
     """getMe + пробное сообщение в чат."""
     ok, err, bot = await verify_telegram_bot_token(bot_token)
@@ -139,7 +166,9 @@ async def test_telegram_delivery(
     cid = normalize_telegram_chat_id(chat_id)
     if not cid:
         return False, "chat_id не задан", bot
-    sent_ok, sent_err = await send_telegram_message(bot_token, str(chat_id), text)
+    sent_ok, sent_err = await send_telegram_message(
+        bot_token, str(chat_id), text, parse_mode=TELEGRAM_PARSE_MODE
+    )
     if not sent_ok:
         return False, sent_err, bot
     return True, "", bot
@@ -244,7 +273,7 @@ def format_activity_report(
     interval: str,
     include_card_errors: bool = True,
 ) -> str:
-    """Текст периодического отчёта для Telegram."""
+    """Текст периодического отчёта для Telegram (HTML)."""
     reviews = int(stats.get("reviews_sent") or 0)
     questions = int(stats.get("questions_sent") or 0)
     wb_chats = int(stats.get("wb_chat_replies") or 0)
@@ -254,18 +283,21 @@ def format_activity_report(
     card_errors = int(stats.get("card_errors") or 0)
     ozon_alerts = int(stats.get("ozon_alerts") or 0)
     interval_ru = "за час" if interval == "hour" else "за сутки"
+    period = escape_tg_html(period_label)
     lines = [
-        f"Отчёт MarketAI ({interval_ru})",
-        f"Период: {period_label}",
+        f"<b>📊 Отчёт MarketAI</b> <i>({escape_tg_html(interval_ru)})</i>",
         "",
-        f"Отзывы: отвечено {reviews}",
-        f"Вопросы: отвечено {questions}",
-        f"Чаты с покупателями: {chat_total} (WB: {wb_chats}, Ozon: {ozon_chats})",
-        f"Важные уведомления Ozon: {ozon_alerts}",
-        f"Автоакции Ozon: удалено товаров {removed}",
+        f"<b>Период:</b> {period}",
+        "",
+        f"<b>Отзывы:</b> отвечено {reviews}",
+        f"<b>Вопросы:</b> отвечено {questions}",
+        f"<b>Чаты с покупателями:</b> {chat_total} "
+        f"<i>(WB: {wb_chats}, Ozon: {ozon_chats})</i>",
+        f"<b>Важные уведомления Ozon:</b> {ozon_alerts}",
+        f"<b>Автоакции Ozon:</b> удалено товаров {removed}",
     ]
     if include_card_errors:
-        lines.append(f"Ошибки в карточках: {card_errors}")
+        lines.append(f"<b>Ошибки в карточках:</b> {card_errors}")
     return "\n".join(lines)
 
 
@@ -284,7 +316,9 @@ async def send_activity_report(
         interval=interval,
         include_card_errors=include_card_errors,
     )
-    return await send_telegram_message(bot_token, chat_id, body)
+    return await send_telegram_message(
+        bot_token, chat_id, body, parse_mode=TELEGRAM_PARSE_MODE
+    )
 
 
 async def send_review_to_chat(
@@ -294,11 +328,9 @@ async def send_review_to_chat(
     review_text: str,
     *,
     store_name: Optional[str] = None,
+    alert_title: str = "Упаковка / пересорт",
 ) -> Tuple[bool, str]:
-    """
-    Отправляет в чат Telegram сообщение: название товара + текст отзыва.
-    Если store_name задан, добавляет в начало «Магазин: …».
-    """
+    """Мгновенное уведомление по отзыву (упаковка, пересорт)."""
     token = normalize_telegram_bot_token(bot_token)
     cid = (chat_id or "").strip()
     if not token or not cid:
@@ -306,8 +338,12 @@ async def send_review_to_chat(
 
     title = (product_title or "").strip() or "—"
     text = (review_text or "").strip() or "—"
+    parts = [f"<b>⚠️ {escape_tg_html(alert_title)}</b>", ""]
     if store_name:
-        body = f"Магазин: {store_name}\n\nТовар: {title}\n\nОтзыв:\n{text}"
-    else:
-        body = f"Товар: {title}\n\nОтзыв:\n{text}"
-    return await send_telegram_message(token, cid, body)
+        parts.append(f"<b>Магазин:</b> {escape_tg_html(store_name)}")
+    parts.append(f"<b>Товар:</b> {escape_tg_html(title)}")
+    parts.append("")
+    parts.append("<b>Отзыв:</b>")
+    parts.append(tg_blockquote(text))
+    body = "\n".join(parts)
+    return await send_telegram_message(token, cid, body, parse_mode=TELEGRAM_PARSE_MODE)

@@ -629,7 +629,8 @@
             </select>
           </div>
 
-          <h3 class="settings-subhead">Шаблоны мгновенных сообщений</h3>
+          <h3 class="settings-subhead">Шаблоны мгновенных сообщений (HTML)</h3>
+          <p class="form-hint" style="margin-bottom: 12px;">Все сообщения в Telegram с <code>parse_mode=HTML</code>. Теги: <code>&lt;b&gt;</code> жирный, <code>&lt;i&gt;</code> курсив, <code>&lt;blockquote&gt;</code> цитата. Переменные подставляются с экранированием.</p>
           <div class="form-group">
             <label>Ошибки в карточках</label>
             <textarea id="setting-card_check_telegram_template" rows="8" style="width:100%; font-family:monospace; font-size:0.85rem;" placeholder="Шаблон уведомления"></textarea>
@@ -638,7 +639,7 @@
           <div class="form-group">
             <label>Важные уведомления Ozon</label>
             <textarea id="setting-ozon_alerts_telegram_template" rows="10" style="width:100%; font-family:monospace; font-size:0.85rem;"></textarea>
-            <div class="form-hint">{telegram_title}, {store_name}, {deadline}, {consequence}, {summary}, {action_needed}… HTML-теги &lt;b&gt; для выделения. Полный текст Ozon не включается.</div>
+            <div class="form-hint">{telegram_title}, {store_name}, {deadline}, {consequence}, {summary} в &lt;blockquote&gt;, {action_needed}…</div>
           </div>
 
           <div class="actions" style="display:flex; gap:10px; flex-wrap:wrap;">
