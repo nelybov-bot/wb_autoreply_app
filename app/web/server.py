@@ -1045,7 +1045,8 @@ async def _send_telegram_report(
             "Укажите ID чата для отчётов или основной ID чата в настройках Telegram",
         )
     since_iso = since_dt.isoformat(timespec="seconds")
-    stats = db.get_activity_stats_since(since_iso)
+    until_iso = until_dt.isoformat(timespec="seconds")
+    stats = db.get_activity_stats_since(since_iso, until_iso)
     period_label = _format_report_period_label(since_dt, until_dt)
     include_card_errors = (db.get_setting(SETTING_CARD_CHECK_IN_REPORT) or "1").strip() != "0"
     ok, tg_err = await send_activity_report(

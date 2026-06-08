@@ -579,7 +579,9 @@
 
         <div id="settings-section-telegram" class="settings-section form-card" hidden>
           <h2>Telegram</h2>
-          <p class="form-hint" style="margin-bottom: 14px;">Один токен бота — разные чаты для разных типов сообщений. Пустой «отдельный» чат = используется основной.</p>
+          <p class="form-hint" style="margin-bottom: 14px;">Один бот — все уведомления и отчёты. Пустой «отдельный» чат = используется основной ID чата.</p>
+
+          <h3 class="settings-subhead">Бот и чаты</h3>
           <div class="form-group">
             <label>Токен бота</label>
             <input type="password" id="setting-telegram_bot_token" placeholder="123456789:AAH...">
@@ -588,21 +590,36 @@
           <div class="form-group">
             <label>ID чата по умолчанию</label>
             <input type="text" id="setting-telegram_chat_id" placeholder="chat_id">
-            <div class="form-hint">Мгновенные уведомления по отзывам 1–3★ (упаковка, пересорт).</div>
+            <div class="form-hint">Используется, если не задан отдельный чат ниже.</div>
           </div>
           <div class="form-group">
-            <label>ID чата для периодических отчётов</label>
-            <input type="text" id="setting-telegram_report_chat_id" placeholder="необязательно — иначе как выше">
+            <label>Чат для периодических отчётов</label>
+            <input type="text" id="setting-telegram_report_chat_id" placeholder="необязательно">
           </div>
           <div class="form-group">
-            <label>ID чата для важных уведомлений Ozon</label>
-            <input type="text" id="setting-ozon_alerts_telegram_chat_id" placeholder="необязательно — иначе чат по умолчанию">
+            <label>Чат для ошибок в карточках</label>
+            <input type="text" id="setting-telegram_card_error_chat_id" placeholder="необязательно">
           </div>
           <div class="form-group">
-            <label class="checkbox-row"><input type="checkbox" id="setting-telegram_enabled"> Мгновенные уведомления (отзывы 1–3★, упаковка)</label>
+            <label>Чат для важных уведомлений Ozon</label>
+            <input type="text" id="setting-ozon_alerts_telegram_chat_id" placeholder="необязательно">
+          </div>
+
+          <h3 class="settings-subhead">Что отправлять</h3>
+          <div class="form-group">
+            <label class="checkbox-row"><input type="checkbox" id="setting-telegram_enabled"> Отзывы 1–3★ и упаковка (мгновенно)</label>
           </div>
           <div class="form-group">
-            <label class="checkbox-row"><input type="checkbox" id="setting-telegram_report_enabled"> Периодический отчёт в чат отчётов</label>
+            <label class="checkbox-row"><input type="checkbox" id="setting-card_check_telegram_enabled" checked> Ошибки в карточках (мгновенно)</label>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-row"><input type="checkbox" id="setting-ozon_alerts_telegram_enabled" checked> Важные уведомления Ozon (мгновенно)</label>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-row"><input type="checkbox" id="setting-telegram_report_enabled"> Периодический сводный отчёт</label>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-row"><input type="checkbox" id="setting-card_check_include_in_periodic_report" checked> В отчёте показывать ошибки карточек</label>
           </div>
           <div class="form-group">
             <label>Период отчёта</label>
@@ -611,6 +628,19 @@
               <option value="day">Раз в сутки (за прошедшие сутки)</option>
             </select>
           </div>
+
+          <h3 class="settings-subhead">Шаблоны мгновенных сообщений</h3>
+          <div class="form-group">
+            <label>Ошибки в карточках</label>
+            <textarea id="setting-card_check_telegram_template" rows="8" style="width:100%; font-family:monospace; font-size:0.85rem;" placeholder="Шаблон уведомления"></textarea>
+            <div class="form-hint">{store_name}, {product_title}, {source_label}, {customer_text}, {error_kind}, {explanation}</div>
+          </div>
+          <div class="form-group">
+            <label>Важные уведомления Ozon</label>
+            <textarea id="setting-ozon_alerts_telegram_template" rows="10" style="width:100%; font-family:monospace; font-size:0.85rem;"></textarea>
+            <div class="form-hint">{telegram_title}, {store_name}, {deadline}, {consequence}, {summary}, {action_needed}… HTML-теги &lt;b&gt; для выделения. Полный текст Ozon не включается.</div>
+          </div>
+
           <div class="actions" style="display:flex; gap:10px; flex-wrap:wrap;">
             <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
             <button type="button" class="btn btn-secondary" id="btn-telegram-test">Проверить бота</button>
@@ -667,46 +697,23 @@
 
         <div id="settings-section-card-check" class="settings-section form-card" hidden>
           <h2>Проверка ошибок в карточке</h2>
-          <p class="form-hint" style="margin-bottom: 14px;">При генерации ответа (вручную и в автозапуске) ИИ одним запросом формирует ответ и проверяет, нет ли в тексте покупателя признаков ошибки в карточке товара.</p>
+          <p class="form-hint" style="margin-bottom: 14px;">При генерации ответа (вручную и в автозапуске) ИИ одним запросом формирует ответ и проверяет, нет ли в тексте покупателя признаков ошибки в карточке товара. Уведомления в Telegram — в разделе <button type="button" class="link-btn" data-settings-section="telegram">Telegram</button>.</p>
           <div class="form-group">
             <label class="checkbox-row"><input type="checkbox" id="setting-card_check_enabled" checked> Включить проверку карточки</label>
-          </div>
-          <div class="form-group">
-            <label>ID чата Telegram для ошибок карточки</label>
-            <input type="text" id="setting-telegram_card_error_chat_id" placeholder="необязательно — иначе чат по умолчанию">
-          </div>
-          <div class="form-group">
-            <label class="checkbox-row"><input type="checkbox" id="setting-card_check_telegram_enabled" checked> Мгновенно в Telegram при обнаружении</label>
-          </div>
-          <div class="form-group">
-            <label class="checkbox-row"><input type="checkbox" id="setting-card_check_include_in_periodic_report" checked> Включать в периодический отчёт Telegram</label>
-          </div>
-          <div class="form-group">
-            <label>Шаблон сообщения в Telegram</label>
-            <textarea id="setting-card_check_telegram_template" rows="10" style="width:100%; font-family:monospace; font-size:0.85rem;" placeholder="Шаблон уведомления"></textarea>
-            <div class="form-hint">Переменные: {store_name}, {product_title}, {source_label}, {customer_text}, {error_kind}, {explanation}</div>
           </div>
           <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
         </div>
 
         <div id="settings-section-ozon-alerts" class="settings-section form-card" hidden>
           <h2>Важные уведомления Ozon</h2>
-          <p class="form-hint" style="margin-bottom: 14px;">Сканирует чаты «Поддержка и новости» Ozon (штрафы, ИС, блокировки). ИИ анализирует сообщения с выбранной даты и шлёт краткую сводку в Telegram.</p>
+          <p class="form-hint" style="margin-bottom: 14px;">Сканирует чаты «Поддержка и новости» Ozon (штрафы, ИС, блокировки). ИИ анализирует сообщения с выбранной даты. Отправка в Telegram — в разделе <button type="button" class="link-btn" data-settings-section="telegram">Telegram</button>.</p>
           <div class="form-group">
             <label class="checkbox-row"><input type="checkbox" id="setting-ozon_alerts_enabled"> Включить проверку</label>
-          </div>
-          <div class="form-group">
-            <label class="checkbox-row"><input type="checkbox" id="setting-ozon_alerts_telegram_enabled" checked> Отправлять в Telegram при обнаружении</label>
           </div>
           <div class="form-group">
             <label>Проверять сообщения с даты</label>
             <input type="date" id="setting-ozon_alerts_check_from_date">
             <div class="form-hint">Пусто — все сообщения в выборке истории чата.</div>
-          </div>
-          <div class="form-group">
-            <label>Шаблон сообщения в Telegram</label>
-            <textarea id="setting-ozon_alerts_telegram_template" rows="12" style="width:100%; font-family:monospace; font-size:0.85rem;"></textarea>
-            <div class="form-hint">Переменные: {telegram_title}, {store_name}, {threat_type}, {deadline}, {consequence}, {amount}, {product_ref}, {summary}, {action_needed}, {message_at}, {chat_type}. HTML-теги &lt;b&gt; для выделения. Полный текст Ozon в Telegram не включается — только краткая сводка от ИИ.</div>
           </div>
           <div class="form-group">
             <label>Промпт ИИ</label>

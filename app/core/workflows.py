@@ -84,7 +84,9 @@ def _rating_group(rating: Optional[int]) -> str:
     return "4-5"
 
 def _iso_now() -> str:
-    return dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
+    from ..db import utc_now_iso
+
+    return utc_now_iso()
 
 def _store_name(db: Database, store_id: int) -> str:
     for s in db.list_stores():

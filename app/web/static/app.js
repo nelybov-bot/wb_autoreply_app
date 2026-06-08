@@ -2586,6 +2586,14 @@
         setNavActive('settings', { settingsSection: sec });
       });
     });
+    document.querySelectorAll('.link-btn[data-settings-section]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const sec = btn.getAttribute('data-settings-section') || 'connection';
+        settingsSection = sec;
+        syncSettingsSectionUI();
+        setNavActive('settings', { settingsSection: sec });
+      });
+    });
   }
 
   async function saveServerSettings() {

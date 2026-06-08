@@ -17,6 +17,27 @@ import json
 
 _DB_LOCK = threading.RLock()
 
+
+def utc_now_iso() -> str:
+    """Единый формат меток времени в БД (UTC, ISO)."""
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
+
+def iso_to_unix(iso: str) -> float:
+    """Парсинг ISO-даты для сравнения в отчётах (учитывает смещение TZ)."""
+    if iso is None:
+        return 0.0
+    s = (iso or "").strip()
+    if not s:
+        return 0.0
+    try:
+        d = dt.datetime.fromisoformat(s)
+    except ValueError:
+        return 0.0
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=dt.timezone.utc)
+    return d.timestamp()
+
 @dataclass(frozen=True)
 class Store:
     id: int
@@ -108,6 +129,7 @@ class Database:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._conn.create_function("iso_to_unix", 1, iso_to_unix)
         self._migrate()
 
     def close(self) -> None:
@@ -375,7 +397,7 @@ class Database:
         result: str = "",
         meta: Optional[dict] = None,
     ) -> int:
-        ts = dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
+        ts = utc_now_iso()
         meta_json = ""
         if meta is not None:
             try:
@@ -518,7 +540,7 @@ class Database:
         st = (status or "new").strip().lower()
         if st not in ("new", "resolved", "ignored"):
             st = "new"
-        ts = dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
+        ts = utc_now_iso()
         with _DB_LOCK:
             cur = self._conn.execute(
                 """INSERT INTO ozon_important_alerts(
@@ -671,7 +693,7 @@ class Database:
         error_kind: str,
         explanation: str,
     ) -> int:
-        ts = dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
+        ts = utc_now_iso()
         with _DB_LOCK:
             cur = self._conn.execute(
                 """INSERT INTO card_error_alerts(
@@ -756,15 +778,27 @@ class Database:
                 for r in rows
             ]
 
-    def count_card_error_alerts_since(self, since_iso: str) -> int:
-        since = (since_iso or "").strip()
-        if not since:
+    def count_card_error_alerts_since(
+        self,
+        since_iso: str,
+        until_iso: Optional[str] = None,
+    ) -> int:
+        since_u = iso_to_unix(since_iso)
+        if since_u <= 0:
             return 0
+        until_u = iso_to_unix(until_iso) if until_iso else None
         with _DB_LOCK:
-            row = self._conn.execute(
-                "SELECT COUNT(*) AS n FROM card_error_alerts WHERE ts >= ?",
-                (since,),
-            ).fetchone()
+            if until_u is not None and until_u > since_u:
+                row = self._conn.execute(
+                    """SELECT COUNT(*) AS n FROM card_error_alerts
+                       WHERE iso_to_unix(ts) >= ? AND iso_to_unix(ts) < ?""",
+                    (since_u, until_u),
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) AS n FROM card_error_alerts WHERE iso_to_unix(ts) >= ?",
+                    (since_u,),
+                ).fetchone()
             return int(row["n"]) if row else 0
 
     # ---------- Stores ----------
@@ -1263,10 +1297,14 @@ class Database:
             )
             self._conn.commit()
 
-    def get_activity_stats_since(self, since_iso: str) -> dict:
-        """Счётчики действий с момента since_iso (ISO, локальная TZ в ts/sent_at)."""
-        since = (since_iso or "").strip()
-        if not since:
+    def get_activity_stats_since(
+        self,
+        since_iso: str,
+        until_iso: Optional[str] = None,
+    ) -> dict:
+        """Счётчики действий за интервал [since, until) по unix-времени (корректно с TZ)."""
+        since_u = iso_to_unix(since_iso)
+        if since_u <= 0:
             return {
                 "reviews_sent": 0,
                 "questions_sent": 0,
@@ -1277,38 +1315,48 @@ class Database:
                 "card_errors": 0,
                 "ozon_alerts": 0,
             }
+        until_u = iso_to_unix(until_iso) if until_iso else None
+        ts_rng = "iso_to_unix(ts) >= ?"
+        sent_rng = "iso_to_unix(sent_at) >= ?"
+        ae_params: list[float] = [since_u]
+        item_params: list[float] = [since_u]
+        if until_u is not None and until_u > since_u:
+            ts_rng += " AND iso_to_unix(ts) < ?"
+            sent_rng += " AND iso_to_unix(sent_at) < ?"
+            ae_params.append(until_u)
+            item_params.append(until_u)
         with _DB_LOCK:
             rev = self._conn.execute(
-                """SELECT COUNT(*) AS n FROM items
-                   WHERE status='sent' AND item_type='review' AND sent_at >= ?""",
-                (since,),
+                f"""SELECT COUNT(*) AS n FROM items
+                   WHERE status='sent' AND item_type='review' AND {sent_rng}""",
+                tuple(item_params),
             ).fetchone()
             qu = self._conn.execute(
-                """SELECT COUNT(*) AS n FROM items
-                   WHERE status='sent' AND item_type='question' AND sent_at >= ?""",
-                (since,),
+                f"""SELECT COUNT(*) AS n FROM items
+                   WHERE status='sent' AND item_type='question' AND {sent_rng}""",
+                tuple(item_params),
             ).fetchone()
             wb = self._conn.execute(
-                """SELECT COUNT(*) AS n FROM audit_events
-                   WHERE action='wb_buyer_chat_send' AND result='ok' AND ts >= ?""",
-                (since,),
+                f"""SELECT COUNT(*) AS n FROM audit_events
+                   WHERE action='wb_buyer_chat_send' AND result='ok' AND {ts_rng}""",
+                tuple(ae_params),
             ).fetchone()
             oz = self._conn.execute(
-                """SELECT COUNT(*) AS n FROM audit_events
-                   WHERE action='ozon_buyer_chat_send' AND result='ok' AND ts >= ?""",
-                (since,),
+                f"""SELECT COUNT(*) AS n FROM audit_events
+                   WHERE action='ozon_buyer_chat_send' AND result='ok' AND {ts_rng}""",
+                tuple(ae_params),
             ).fetchone()
             oz_alerts = self._conn.execute(
-                """SELECT COUNT(*) AS n FROM audit_events
-                   WHERE action='ozon_alert_detected' AND result='ok' AND ts >= ?""",
-                (since,),
+                f"""SELECT COUNT(*) AS n FROM audit_events
+                   WHERE action='ozon_alert_detected' AND result='ok' AND {ts_rng}""",
+                tuple(ae_params),
             ).fetchone()
             audit_rows = self._conn.execute(
-                """SELECT meta_json FROM audit_events
+                f"""SELECT meta_json FROM audit_events
                    WHERE action IN ('ozon_actions_auto_remove', 'ozon_actions_remove')
                      AND result IN ('ok', 'skipped')
-                     AND ts >= ?""",
-                (since,),
+                     AND {ts_rng}""",
+                tuple(ae_params),
             ).fetchall()
         products_removed = 0
         for row in audit_rows:
@@ -1322,7 +1370,7 @@ class Database:
                 continue
         wb_chats = int(wb["n"]) if wb else 0
         oz_chats = int(oz["n"]) if oz else 0
-        card_errors = self.count_card_error_alerts_since(since)
+        card_errors = self.count_card_error_alerts_since(since_iso, until_iso)
         return {
             "reviews_sent": int(rev["n"]) if rev else 0,
             "questions_sent": int(qu["n"]) if qu else 0,
