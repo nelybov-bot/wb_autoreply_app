@@ -120,6 +120,9 @@
           window.location.href = '/login';
         }
       }
+      if (res.status === 409) {
+        throw new Error(msg || 'Магазин занят другой задачей. Дождитесь завершения или остановите её.');
+      }
       throw new Error(msg);
     }
     if (res.status === 204 || res.headers.get('content-length') === '0') return null;
@@ -127,16 +130,67 @@
   }
 
   function toast(message, type = 'success') {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'toast-container';
+      container.className = 'toast-container';
+      container.setAttribute('aria-live', 'polite');
+      document.body.appendChild(container);
+    }
     const el = document.createElement('div');
     el.className = `toast ${type}`;
     const icon = document.createElement('span');
     icon.className = 'toast-icon';
-    icon.innerHTML = type === 'success' ? '✓' : '✕';
+    icon.innerHTML = type === 'success' ? '✓' : (type === 'info' ? 'i' : '✕');
+    const text = document.createElement('span');
+    text.className = 'toast-text';
+    text.textContent = String(message || '');
     el.appendChild(icon);
-    el.appendChild(document.createTextNode(message));
-    document.body.appendChild(el);
+    el.appendChild(text);
+    container.appendChild(el);
+    const max = 5;
+    while (container.children.length > max) {
+      container.removeChild(container.firstChild);
+    }
     setTimeout(() => el.remove(), getUiToastMs());
   }
+
+  function setButtonBusy(btn, busy, busyLabel) {
+    if (!btn) return;
+    if (busy) {
+      if (!btn.dataset.origText) btn.dataset.origText = btn.textContent;
+      btn.disabled = true;
+      btn.classList.add('is-busy');
+      if (busyLabel) btn.textContent = busyLabel;
+    } else {
+      btn.disabled = false;
+      btn.classList.remove('is-busy');
+      if (btn.dataset.origText) {
+        btn.textContent = btn.dataset.origText;
+        delete btn.dataset.origText;
+      }
+    }
+  }
+
+  function setPanelOpsBusy(panelPrefix, busy) {
+    const suffix = panelPrefix === 'reviews' ? 'reviews' : 'questions';
+    ['load', 'generate', 'send'].forEach((action) => {
+      document.querySelectorAll(`#btn-${action}-${suffix}, #btn-${action}-${suffix}-2`).forEach((btn) => {
+        setButtonBusy(btn, busy, busy ? 'Выполняется…' : '');
+      });
+    });
+  }
+
+  function closeAllModals() {
+    document.querySelectorAll('.modal-backdrop.visible').forEach((m) => m.classList.remove('visible'));
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeAllModals();
+  });
+
+  let _modalItemCtx = null;
 
   function applyTabVisibility() {
     const canSettings = currentUser && (currentUser.role === 'admin' || (currentUser.permissions && currentUser.permissions.includes('view_settings')));
@@ -341,17 +395,20 @@
         return;
       }
       if (state.status === 'running') {
+        setPanelOpsBusy(panelPrefix, true);
         pollTask(taskId, 'progress-' + panelPrefix, 'progress-' + panelPrefix + '-fill', 'progress-' + panelPrefix + '-text', () => {
-          // onDone already clears via pollTask completion path, but keep safe
           setActiveTask(panelPrefix, '');
+          setPanelOpsBusy(panelPrefix, false);
           if (panelPrefix === 'reviews') loadReviews();
           else if (panelPrefix === 'questions') loadQuestions();
         }, panelPrefix);
       } else {
         setActiveTask(panelPrefix, '');
       }
-    } catch (_) {
-      // если сеть/сервер недоступны — не трогаем ключ, попробуем при следующем заходе
+    } catch (err) {
+      if (err && String(err.message || '').includes('не найдена')) {
+        setActiveTask(panelPrefix, '');
+      }
     }
   }
 
@@ -536,6 +593,23 @@
       const q = refresh ? '?refresh=1' : '';
       const data = await api('/quality-metrics' + q, { timeoutMs: 120000 });
       renderQualityTable('quality-wb-stores', data.wb || [], QUALITY_WB_COLUMNS, 'Нет активных магазинов WB');
+      const wbKeyWarn = document.getElementById('quality-wb-key-warning');
+      if (wbKeyWarn) {
+        const isAdmin = currentUser && currentUser.role === 'admin';
+        const groups = Array.isArray(data.wb_key_groups) ? data.wb_key_groups : [];
+        if (isAdmin && groups.length) {
+          const lines = groups.map((g) => {
+            const n = Number(g.count) || 0;
+            const ids = (g.store_ids || []).join(', ');
+            return `Обнаружено ${n} магазинов с одним WB API ключом (ID: ${ids}). Рейтинг продавца будет общий.`;
+          });
+          wbKeyWarn.textContent = lines.join(' ');
+          wbKeyWarn.hidden = false;
+        } else {
+          wbKeyWarn.textContent = '';
+          wbKeyWarn.hidden = true;
+        }
+      }
       renderQualityTable(
         'quality-ozon-stores',
         data.ozon || [],
@@ -836,6 +910,65 @@
   if (modalItemDetail) {
     document.getElementById('btn-modal-item-close').addEventListener('click', () => modalItemDetail.classList.remove('visible'));
     modalItemDetail.addEventListener('click', (e) => { if (e.target === modalItemDetail) modalItemDetail.classList.remove('visible'); });
+    const btnSaveAnswer = document.getElementById('btn-modal-item-save');
+    if (btnSaveAnswer) {
+      btnSaveAnswer.addEventListener('click', async () => {
+        if (!_modalItemCtx) return;
+        const text = (document.getElementById('modal-item-answer-input')?.value || '').trim();
+        if (!text) {
+          toast('Введите текст ответа', 'error');
+          return;
+        }
+        setButtonBusy(btnSaveAnswer, true, 'Сохранение…');
+        try {
+          const updated = await api(`/items/${_modalItemCtx.id}/answer`, {
+            method: 'PATCH',
+            body: JSON.stringify({ generated_text: text }),
+          });
+          toast('Ответ сохранён');
+          const list = _modalItemCtx.prefix === 'reviews' ? reviews : questions;
+          const idx = list.findIndex((i) => i.id === _modalItemCtx.id);
+          if (idx >= 0) {
+            list[idx] = { ...list[idx], generated_text: updated.generated_text, status: updated.status };
+          }
+          renderItems(_modalItemCtx.prefix, list, _modalItemCtx.prefix === 'reviews');
+          const errEl = document.getElementById('modal-item-send-error');
+          if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+        } catch (err) {
+          toast(err.message, 'error');
+        } finally {
+          setButtonBusy(btnSaveAnswer, false);
+        }
+      });
+    }
+  }
+
+  const modalSendConfirm = document.getElementById('modal-send-confirm');
+  let _sendConfirmCallback = null;
+  if (modalSendConfirm) {
+    document.getElementById('btn-send-confirm-cancel')?.addEventListener('click', () => {
+      modalSendConfirm.classList.remove('visible');
+      _sendConfirmCallback = null;
+    });
+    modalSendConfirm.addEventListener('click', (e) => {
+      if (e.target === modalSendConfirm) {
+        modalSendConfirm.classList.remove('visible');
+        _sendConfirmCallback = null;
+      }
+    });
+    document.getElementById('btn-send-confirm-ok')?.addEventListener('click', async () => {
+      const cb = _sendConfirmCallback;
+      modalSendConfirm.classList.remove('visible');
+      _sendConfirmCallback = null;
+      if (cb) await cb();
+    });
+  }
+
+  function openSendConfirmModal(summaryHtml, onConfirm) {
+    const body = document.getElementById('modal-send-confirm-body');
+    if (body) body.innerHTML = summaryHtml;
+    _sendConfirmCallback = onConfirm;
+    modalSendConfirm?.classList.add('visible');
   }
 
   async function deleteStore(storeId) {
@@ -2230,7 +2363,10 @@
           wrap._interval = null;
           wrap.classList.remove('visible');
           if (stopBtn) stopBtn.disabled = true;
-          if (panelPrefix) setActiveTask(panelPrefix, '');
+          if (panelPrefix) {
+            setActiveTask(panelPrefix, '');
+            setPanelOpsBusy(panelPrefix, false);
+          }
           toast(state.error || (state.status === 'cancelled' ? 'Остановлено' : 'Ошибка'), state.status === 'cancelled' ? 'success' : 'error');
         }
       } catch (_) {}
@@ -2281,11 +2417,17 @@
 
   function renderItems(prefix, items, showRating) {
     const tbody = document.getElementById(prefix + '-tbody');
-    const statusRu = { new: 'Новый', generated: 'Сгенерирован', sent: 'Отправлен', ignored: 'Игнор' };
+    const statusRu = {
+      new: 'Новый',
+      generated: 'Сгенерирован',
+      sending: 'Отправляется',
+      sent: 'Отправлен',
+      ignored: 'Игнор',
+    };
     tbody.innerHTML = items.map(item => {
       const title = (item.product_title || '').slice(0, 50);
       const text = (item.text || '').slice(0, 80);
-      const statusClass = item.status === 'new' ? 'new' : item.status === 'generated' ? 'generated' : 'sent';
+      const statusClass = ['new', 'generated', 'sending', 'sent'].includes(item.status) ? item.status : 'sent';
       const ratingCell = showRating ? `<td>${item.rating != null ? item.rating + ' ★' : '—'}</td>` : '';
       return `
         <tr data-id="${item.id}" data-prefix="${prefix}">
@@ -2304,26 +2446,39 @@
         const item = (prefix === 'reviews' ? reviews : questions).find(i => i.id === id);
         if (!item) return;
         const store = stores.find(s => s.id === item.store_id);
-        showItemModal(item, store ? store.name : '—', prefix === 'reviews');
+        showItemModal(item, store ? store.name : '—', prefix === 'reviews', prefix);
       });
     });
   }
 
-  function showItemModal(item, storeName, isReview) {
+  function showItemModal(item, storeName, isReview, prefix) {
     const modal = document.getElementById('modal-item-detail');
     const titleEl = document.getElementById('modal-item-detail-title');
     const storeEl = document.getElementById('modal-item-store');
     const productEl = document.getElementById('modal-item-product');
     const textLabel = document.getElementById('modal-item-text-label');
     const textEl = document.getElementById('modal-item-text');
-    const answerEl = document.getElementById('modal-item-answer');
+    const answerInput = document.getElementById('modal-item-answer-input');
+    const statusEl = document.getElementById('modal-item-status');
+    const errEl = document.getElementById('modal-item-send-error');
+    const btnSave = document.getElementById('btn-modal-item-save');
     if (!modal) return;
+    _modalItemCtx = { id: item.id, prefix: prefix || (isReview ? 'reviews' : 'questions') };
     titleEl.textContent = isReview ? 'Отзыв' : 'Вопрос';
     textLabel.textContent = isReview ? 'Текст отзыва' : 'Текст вопроса';
     storeEl.textContent = storeName;
     productEl.textContent = (item.product_title || '').trim() || '—';
     textEl.textContent = (item.text || '').trim() || '—';
-    answerEl.textContent = (item.generated_text || '').trim() || '—';
+    if (answerInput) {
+      answerInput.value = (item.generated_text || '').trim();
+      const locked = item.status === 'sent' || item.status === 'sending';
+      answerInput.readOnly = locked;
+      answerInput.disabled = locked;
+    }
+    if (btnSave) btnSave.style.display = (item.status === 'sent' || item.status === 'sending') ? 'none' : '';
+    const statusRu = { new: 'Новый', generated: 'Сгенерирован', sending: 'Отправляется', sent: 'Отправлен', ignored: 'Игнор' };
+    if (statusEl) statusEl.textContent = 'Статус: ' + (statusRu[item.status] || item.status);
+    if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
     modal.classList.add('visible');
   }
 
@@ -2373,10 +2528,12 @@
       toast('Некорректный магазин в фильтре', 'error');
       return;
     }
+    setPanelOpsBusy(panelPrefix, true);
     try {
       const res = await api('/load-new', { method: 'POST', body: JSON.stringify({ store_ids: [sid] }) });
       const storeMeta = stores.find(s => Number(s.id) === sid);
       pollTask(res.task_id, 'progress-' + panelPrefix, 'progress-' + panelPrefix + '-fill', 'progress-' + panelPrefix + '-text', (result) => {
+        setPanelOpsBusy(panelPrefix, false);
         const n = Number(result ?? 0);
         if (n > 0) {
           toast(`Загружено записей: ${n}`);
@@ -2393,6 +2550,7 @@
         loadQuestions();
       }, panelPrefix);
     } catch (err) {
+      setPanelOpsBusy(panelPrefix, false);
       toast(err.message, 'error');
     }
   }
@@ -2418,15 +2576,18 @@
     if (mode === 'all' && filtered.willOverwrite) {
       if (!confirm(`Перегенерировать и перезаписать ответы для ${filtered.willOverwrite} шт.?`)) return;
     }
+    setPanelOpsBusy(panelPrefix, true);
     try {
       const res = await api('/generate', { method: 'POST', body: JSON.stringify({ item_ids: filtered.ids }) });
       pollTask(res.task_id, 'progress-' + panelPrefix, 'progress-' + panelPrefix + '-fill', 'progress-' + panelPrefix + '-text', (result) => {
+        setPanelOpsBusy(panelPrefix, false);
         const r = result || {};
         toast('Сгенерировано: ' + (r.ok ?? 0) + ', ошибок: ' + (r.failed ?? 0));
         if (panelPrefix === 'reviews') loadReviews();
         else loadQuestions();
       }, panelPrefix);
     } catch (err) {
+      setPanelOpsBusy(panelPrefix, false);
       toast(err.message, 'error');
     }
   }
@@ -2485,18 +2646,44 @@
       toast('Выберите строки или загрузите список', 'error');
       return;
     }
-    try {
-      const res = await api('/send', { method: 'POST', body: JSON.stringify({ item_ids: ids }) });
-      pollTask(res.task_id, 'progress-' + panelPrefix, 'progress-' + panelPrefix + '-fill', 'progress-' + panelPrefix + '-text', (result) => {
-        const r = result || {};
-        toast('Отправлено: ' + (r.sent_ok ?? 0) + ', пропущено: ' + (r.skipped ?? 0) + ', ошибок: ' + (r.failed ?? 0));
-        if (panelPrefix === 'reviews') loadReviews();
-        else loadQuestions();
-        loadStats();
-      }, panelPrefix);
-    } catch (err) {
-      toast(err.message, 'error');
+    const list = getItemsList(panelPrefix);
+    const idSet = new Set(ids);
+    const selected = list.filter((it) => idSet.has(it.id));
+    const withAnswer = selected.filter((it) => (it.generated_text || '').trim() && it.status !== 'sent' && it.status !== 'sending');
+    if (!withAnswer.length) {
+      toast('Нет ответов для отправки (нужен сгенерированный ответ, статус не «Отправлен»)', 'error');
+      return;
     }
+    const byStore = {};
+    withAnswer.forEach((it) => {
+      const st = stores.find((s) => s.id === it.store_id);
+      const key = st ? `${st.name} (${(st.marketplace || '').toUpperCase()})` : `Магазин #${it.store_id}`;
+      byStore[key] = (byStore[key] || 0) + 1;
+    });
+    const summary = Object.entries(byStore)
+      .map(([name, n]) => `<div><strong>${escapeHtml(name)}</strong>: ${n} отв.</div>`)
+      .join('');
+    const sendIds = withAnswer.map((it) => it.id);
+    openSendConfirmModal(
+      `<p>Всего к отправке: <strong>${sendIds.length}</strong></p>${summary}`,
+      async () => {
+        setPanelOpsBusy(panelPrefix, true);
+        try {
+          const res = await api('/send', { method: 'POST', body: JSON.stringify({ item_ids: sendIds }) });
+          pollTask(res.task_id, 'progress-' + panelPrefix, 'progress-' + panelPrefix + '-fill', 'progress-' + panelPrefix + '-text', (result) => {
+            setPanelOpsBusy(panelPrefix, false);
+            const r = result || {};
+            toast('Отправлено: ' + (r.sent_ok ?? 0) + ', пропущено: ' + (r.skipped ?? 0) + ', ошибок: ' + (r.failed ?? 0));
+            if (panelPrefix === 'reviews') loadReviews();
+            else loadQuestions();
+            loadStats();
+          }, panelPrefix);
+        } catch (err) {
+          setPanelOpsBusy(panelPrefix, false);
+          toast(err.message, 'error');
+        }
+      },
+    );
   }
 
   document.getElementById('btn-send-reviews').addEventListener('click', () => runSend('reviews'));
@@ -2765,6 +2952,7 @@
         toast('Выбери хотя бы одну задачу в блоках WB / ЯМ / Ozon', 'error');
         return;
       }
+      setButtonBusy(btnSaveAuto, true, 'Сохранение…');
       try {
         await api('/auto-schedule', {
           method: 'POST',
@@ -2779,6 +2967,8 @@
         await loadAutoSchedulePanel();
       } catch (err) {
         toast(err.message, 'error');
+      } finally {
+        setButtonBusy(btnSaveAuto, false);
       }
     });
   }
@@ -2953,10 +3143,13 @@
 
   document.querySelectorAll('.btn-save-server-settings').forEach(btn => {
     btn.addEventListener('click', async () => {
+      setButtonBusy(btn, true, 'Сохранение…');
       try {
         await saveServerSettings();
       } catch (err) {
         toast(err.message, 'error');
+      } finally {
+        setButtonBusy(btn, false);
       }
     });
   });

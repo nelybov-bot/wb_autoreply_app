@@ -10,9 +10,12 @@ import datetime as dt
 import json
 import logging
 from queue import Queue
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from ..db import Database, Store
+
+if TYPE_CHECKING:
+    from app.web.task_control import TaskControl
 from .net import HttpStatusError, OzonApiAccessError, UnauthorizedStoreError
 from .wb_client import WbClient
 from .yam_client import YamClient
@@ -133,12 +136,14 @@ async def load_new_items(
     *,
     load_reviews: bool = True,
     load_questions: bool = True,
+    cancel: Optional["TaskControl"] = None,
 ) -> int:
     """
     Тянет новые вопросы+отзывы с маркетплейса и upsert'ит в SQLite.
     progress_queue: при наличии кладутся ("progress", 0, 1) в начале и (1, 1) в конце.
     При 401 поднимает UnauthorizedStoreError с названием магазина.
     """
+    _check_cancel(cancel)
     _put_progress(progress_queue, 0, 1)
     store_id = store.id
     if not load_reviews and not load_questions:
@@ -749,11 +754,32 @@ async def _ozon_recheck_processed(db: Database, store: Store) -> int:
     return updated
 
 
+def _check_cancel(cancel: Optional["TaskControl"]) -> None:
+    if cancel is not None:
+        cancel.raise_if_cancelled()
+
+
+def _system_prompt_for_marketplace(marketplace: str) -> str:
+    mp = (marketplace or "").strip().lower()
+    base = (
+        "Отвечай строго вежливо, кратко и по делу. Без эмодзи. Без фамильярности. "
+        "Без предложений решений, компенсаций или обращений в поддержку. "
+        "Не задавай вопросов покупателю. Не выдумывай факты. 2–3 коротких предложения максимум. "
+        "Не повторяй полное название товара в ответе."
+    )
+    if mp == "ozon":
+        return f"Ты — официальный представитель магазина на Ozon. {base}"
+    if mp == "yam":
+        return f"Ты — официальный представитель магазина на Яндекс Маркете. {base}"
+    return f"Ты — официальный представитель магазина на Wildberries. {base}"
+
+
 async def load_new_all(
     db: Database,
     store_list: List[Store],
     progress_queue: Optional[Queue] = None,
     progress_cb: Optional[Callable[[int, int], None]] = None,
+    cancel: Optional["TaskControl"] = None,
 ) -> int:
     """
     Загружает новые отзывы/вопросы по всем магазинам из store_list.
@@ -773,8 +799,9 @@ async def load_new_all(
     n_stores = len(store_list)
     _progress(0, n_stores)
     for i, store in enumerate(store_list):
+        _check_cancel(cancel)
         try:
-            n = await load_new_items(db, store)
+            n = await load_new_items(db, store, cancel=cancel)
             total += n
         except (asyncio.CancelledError, GeneratorExit):
             raise
@@ -840,9 +867,11 @@ async def _generate_one(
     system: str,
     item_id: int,
     sem: asyncio.Semaphore,
+    cancel: Optional["TaskControl"] = None,
 ) -> Tuple[bool, bool]:
     """Генерирует ответ для одного item. Возвращает (успех, найдена_ошибка_карточки)."""
     async with sem:
+        _check_cancel(cancel)
         row = db.get_item_by_id(item_id)
         if not row:
             return False, False
@@ -913,6 +942,7 @@ async def generate_mass(
     model: str = "gpt-5.2",
     progress_queue: Optional[Queue] = None,
     progress_cb: Optional[Callable[[int, int], None]] = None,
+    cancel: Optional["TaskControl"] = None,
 ) -> Tuple[int, int, int]:
     """
     Генерирует ответы для items (new/generated можно перегенерить) и сохраняет в DB.
@@ -933,14 +963,22 @@ async def generate_mass(
     total = len(item_ids)
     _progress(0, total)
     client = OpenAIClient(openai_key, model=model)
-    system = "Ты — официальный представитель магазина на Wildberries. Отвечай строго вежливо, кратко и по делу. Без эмодзи. Без фамильярности. Без предложений решений, компенсаций или обращений в поддержку. Не задавай вопросов покупателю. Не выдумывай факты. 2–3 коротких предложения максимум. Не повторяй полное название товара в ответе. Не уточняй ничего"
+    stores_by_id = {s.id: s for s in db.list_stores()}
     sem = asyncio.Semaphore(GENERATE_CONCURRENCY)
     done = 0
     done_lock = asyncio.Lock()
 
     async def run_one(iid: int) -> Tuple[bool, bool]:
         nonlocal done
-        r = await _generate_one(db, client, system, iid, sem)
+        _check_cancel(cancel)
+        row = db.get_item_by_id(iid)
+        mp = "wb"
+        if row:
+            st = stores_by_id.get(row.store_id)
+            if st:
+                mp = st.marketplace
+        system = _system_prompt_for_marketplace(mp)
+        r = await _generate_one(db, client, system, iid, sem, cancel=cancel)
         async with done_lock:
             done += 1
             _progress(done, total)
@@ -979,6 +1017,7 @@ async def send_mass(
     store: Store,
     item_ids: List[int],
     progress_queue: Optional[Queue] = None,
+    cancel: Optional["TaskControl"] = None,
 ) -> Tuple[int, int, int]:
     """
     Отправляет ответы по items. Требует generated_text.
@@ -1009,18 +1048,23 @@ async def send_mass(
     _put_progress(progress_queue, 0, total)
 
     for idx, item_id in enumerate(item_ids):
-        row = db.get_item_by_id(item_id)
+        _check_cancel(cancel)
+        row = db.try_claim_for_send(item_id)
         if not row:
-            failed += 1
-            _put_progress(progress_queue, idx + 1, total)
-            continue
-        # Защита от повторной отправки (на всякий случай, особенно для Ozon).
-        if getattr(row, "status", "") == "sent":
-            skipped += 1
+            cur = db.get_item_by_id(item_id)
+            if not cur:
+                failed += 1
+            elif cur.status in ("sent", "sending"):
+                skipped += 1
+            elif not (cur.generated_text or "").strip():
+                skipped += 1
+            else:
+                skipped += 1
             _put_progress(progress_queue, idx + 1, total)
             continue
         text = (row.generated_text or "").strip()
         if not text:
+            db.release_send_claim(item_id, "пустой ответ")
             skipped += 1
             _put_progress(progress_queue, idx + 1, total)
             continue
@@ -1034,6 +1078,7 @@ async def send_mass(
                         sku = int(extra.get("sku"))
                     except (json.JSONDecodeError, TypeError, ValueError, KeyError):
                         log.warning("Ozon question item_id=%s: нет sku в extra_json, пропуск", item_id)
+                        db.release_send_claim(item_id, "нет sku для Ozon")
                         failed += 1
                         _put_progress(progress_queue, idx + 1, total)
                         continue
@@ -1044,13 +1089,17 @@ async def send_mass(
             sent_ok += 1
         except HttpStatusError as e:
             if e.status == 401:
+                db.release_send_claim(item_id, str(e)[:200])
                 raise UnauthorizedStoreError(store_id, store.name, str(e)) from e
             log.exception("Send failed item=%s: %s", item_id, e)
+            db.release_send_claim(item_id, str(e)[:200])
             failed += 1
         except (asyncio.CancelledError, GeneratorExit):
+            db.release_send_claim(item_id, "отменено")
             raise
         except Exception as e:
             log.exception("Send failed item=%s: %s", item_id, e)
+            db.release_send_claim(item_id, str(e)[:200])
             failed += 1
         _put_progress(progress_queue, idx + 1, total)
 
@@ -1062,6 +1111,7 @@ async def send_mass_all(
     item_ids: List[int],
     progress_queue: Optional[Queue] = None,
     progress_cb: Optional[Callable[[int, int], None]] = None,
+    cancel: Optional["TaskControl"] = None,
 ) -> Tuple[int, int, int]:
     """
     Отправляет ответы по items из разных магазинов.
@@ -1092,6 +1142,7 @@ async def send_mass_all(
     done_items = 0
     _progress(0, total_items if total_items else 1)
     for store_id, ids in store_list:
+        _check_cancel(cancel)
         store = stores_by_id.get(store_id)
         if not store or not store.api_key:
             failed += len(ids)
@@ -1109,7 +1160,7 @@ async def send_mass_all(
             _progress(done_items, total_items or 1)
             continue
         try:
-            so, sk, fl = await send_mass(db, store, ids)
+            so, sk, fl = await send_mass(db, store, ids, cancel=cancel)
             sent_ok += so
             skipped += sk
             failed += fl

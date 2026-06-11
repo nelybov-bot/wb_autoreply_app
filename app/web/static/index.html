@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
-  <link rel="stylesheet" href="/static/styles.css?v=19">
+  <link rel="stylesheet" href="/static/styles.css?v=20">
 </head>
 <body>
   <div class="bg-noise" aria-hidden="true"></div>
@@ -146,8 +146,9 @@
             <header class="quality-mp-col-head">
               <span class="mp-pill mp-wb">WB</span>
               <span class="quality-mp-col-title">Wildberries</span>
-              <span class="quality-mp-col-note">рейтинг по отзывам</span>
+              <span class="quality-mp-col-note">рейтинг по отзывам · не чаще 1 раза в минуту на аккаунт</span>
             </header>
+            <p class="quality-wb-key-warning" id="quality-wb-key-warning" hidden></p>
             <div class="quality-panel-body" id="quality-wb-stores"></div>
           </div>
           <div class="quality-mp-col" data-mp="ozon">
@@ -1015,10 +1016,11 @@
     </section>
   </main>
 
-  <!-- Модальное окно: отзыв/вопрос и сгенерированный ответ -->
-  <div id="modal-item-detail" class="modal-backdrop">
-    <div class="modal">
+  <!-- Модальное окно: отзыв/вопрос и ответ -->
+  <div id="modal-item-detail" class="modal-backdrop" role="dialog" aria-modal="true">
+    <div class="modal modal-scroll">
       <h2 id="modal-item-detail-title">Отзыв</h2>
+      <div id="modal-item-status" class="form-hint modal-item-status"></div>
       <div class="form-group">
         <label>Магазин</label>
         <div id="modal-item-store" class="form-hint">—</div>
@@ -1032,14 +1034,31 @@
         <div id="modal-item-text" class="text-block">—</div>
       </div>
       <div class="form-group">
-        <label>Сгенерированный ответ</label>
-        <div id="modal-item-answer" class="text-block">—</div>
+        <label for="modal-item-answer-input">Ответ</label>
+        <textarea id="modal-item-answer-input" class="textarea-answer" rows="6" placeholder="Сгенерируйте или введите ответ вручную"></textarea>
+        <div id="modal-item-send-error" class="form-error" hidden></div>
       </div>
       <div class="modal-actions">
         <button type="button" class="btn btn-secondary" id="btn-modal-item-close">Закрыть</button>
+        <button type="button" class="btn btn-primary" id="btn-modal-item-save">Сохранить ответ</button>
       </div>
     </div>
   </div>
+
+  <!-- Подтверждение отправки на маркетплейс -->
+  <div id="modal-send-confirm" class="modal-backdrop" role="dialog" aria-modal="true">
+    <div class="modal">
+      <h2>Отправить ответы?</h2>
+      <p class="form-hint">Ответы будут опубликованы на маркетплейсе. Отменить публикацию через приложение нельзя.</p>
+      <div id="modal-send-confirm-body" class="text-block"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="btn-send-confirm-cancel">Отмена</button>
+        <button type="button" class="btn btn-primary" id="btn-send-confirm-ok">Отправить</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
   <!-- Модальное окно редактирования магазина -->
   <div id="modal-store" class="modal-backdrop">

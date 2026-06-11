@@ -44,6 +44,7 @@ from app.db import (
     OzonImportantAlertRow,
 )
 from app.web import tasks as web_tasks
+from app.web.store_locks import StoreBusyError, store_locks
 from app.core.net import HttpStatusError
 from app.core.wb_buyer_chat import (
     WbBuyerChatClient,
@@ -1009,6 +1010,8 @@ async def _run_auto_slot(slot: str, *, force: bool = False) -> None:
             run_ozon_actions_remove,
         )
         stores_results: list[dict] = []
+        auto_owner = f"auto:{slot}:{started}"
+        store_names = {s.id: s.name for s in sorted_stores}
         for idx, slot_store in enumerate(sorted_stores):
             _auto_state["store_index"] = idx + 1
             _auto_state["current_store_id"] = slot_store.id
@@ -1019,19 +1022,34 @@ async def _run_auto_slot(slot: str, *, force: bool = False) -> None:
                 slot_store.id,
                 slot_store.marketplace,
             )
-            store_item_types = _item_types_for_store(slot_store, cfg)
-            store_meta = await _process_auto_store(
-                db,
-                slot_store,
-                item_types=store_item_types,
-                run_wb_chats=run_wb_chats,
-                run_ozon_chats=run_ozon_chats,
-                run_ozon_alerts=run_ozon_alerts,
-                run_ozon_actions_remove=run_ozon_actions_remove,
-                openai_key=key,
-                ozon_actions_cfg=ozon_actions_cfg,
-            )
-            stores_results.append(store_meta)
+            try:
+                await store_locks.acquire(
+                    [slot_store.id], "auto_run", auto_owner, store_names=store_names,
+                )
+            except StoreBusyError as e:
+                log.warning("auto_run skip store_id=%s: %s", slot_store.id, e)
+                stores_results.append({
+                    "store_id": slot_store.id,
+                    "skipped": True,
+                    "reason": str(e),
+                })
+                continue
+            try:
+                store_item_types = _item_types_for_store(slot_store, cfg)
+                store_meta = await _process_auto_store(
+                    db,
+                    slot_store,
+                    item_types=store_item_types,
+                    run_wb_chats=run_wb_chats,
+                    run_ozon_chats=run_ozon_chats,
+                    run_ozon_alerts=run_ozon_alerts,
+                    run_ozon_actions_remove=run_ozon_actions_remove,
+                    openai_key=key,
+                    ozon_actions_cfg=ozon_actions_cfg,
+                )
+                stores_results.append(store_meta)
+            finally:
+                await store_locks.release([slot_store.id], auto_owner)
         ozon_actions_totals = _aggregate_ozon_actions_stats(stores_results)
         meta_run = {
             "slot": slot,
@@ -1081,6 +1099,11 @@ async def _run_auto_slot(slot: str, *, force: bool = False) -> None:
         _auto_state["phase"] = "done"
         _auto_state["current_store_id"] = None
         _auto_state["store_index"] = 0
+        finished_dt = dt.datetime.now(MSK_TZ)
+        try:
+            db.set_setting(AUTO_LAST_RUN_KEY, finished_dt.isoformat(timespec="seconds"))
+        except Exception:
+            pass
     except asyncio.CancelledError:
         _auto_state["phase"] = "cancelled"
         raise
@@ -1090,12 +1113,7 @@ async def _run_auto_slot(slot: str, *, force: bool = False) -> None:
         raise
     finally:
         _auto_state["running"] = False
-        finished_dt = dt.datetime.now(MSK_TZ)
-        _auto_state["last_finished_at"] = finished_dt.isoformat(timespec="seconds")
-        try:
-            db.set_setting(AUTO_LAST_RUN_KEY, finished_dt.isoformat(timespec="seconds"))
-        except Exception:
-            pass
+        _auto_state["last_finished_at"] = dt.datetime.now(MSK_TZ).isoformat(timespec="seconds")
 
 def _telegram_report_period_seconds(interval: str) -> int:
     return 86400 if (interval or "").strip() == "day" else 3600
@@ -1295,7 +1313,6 @@ async def _auto_scheduler_loop() -> None:
                     for slot in (cfg.get("slots") or []):
                         key = f"{day}|{slot}"
                         if hm == slot and key not in _scheduler_seen:
-                            _scheduler_seen.add(key)
                             if busy:
                                 log.info(
                                     "auto_run: слот %s пропущен — предыдущий цикл ещё выполняется (магазин %s/%s)",
@@ -1321,6 +1338,7 @@ async def _auto_scheduler_loop() -> None:
                                 except Exception:
                                     pass
                             else:
+                                _scheduler_seen.add(key)
                                 run_reason = slot
                             break
                 if run_reason and not busy:
@@ -1703,6 +1721,29 @@ def api_get_item(item_id: int, db: Database = Depends(get_db), _: UserRow = Depe
     return _item_to_out(row)
 
 
+class ItemAnswerBody(BaseModel):
+    generated_text: str
+
+
+@app.patch("/api/items/{item_id}/answer")
+def api_update_item_answer(
+    item_id: int,
+    body: ItemAnswerBody,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    row = db.get_item_by_id(item_id)
+    if not row:
+        raise HTTPException(404, "Элемент не найден")
+    if row.status in ("sent", "sending"):
+        raise HTTPException(400, "Нельзя редактировать ответ после отправки или во время отправки")
+    ok = db.update_generated_text(item_id, body.generated_text)
+    if not ok:
+        raise HTTPException(400, "Текст ответа не может быть пустым")
+    updated = db.get_item_by_id(item_id)
+    return _item_to_out(updated) if updated else {"ok": True}
+
+
 @app.post("/api/items/bulk", response_model=list[ItemOut])
 def api_items_bulk(body: BulkItemsBody, db: Database = Depends(get_db), _: UserRow = Depends(require_user)):
     ids = [int(x) for x in (body.item_ids or [])][:50]
@@ -2056,7 +2097,10 @@ def api_update_card_error_status(
 # ---------- API: long-running tasks ----------
 @app.post("/api/load-new")
 async def api_load_new(body: LoadNewBody, db: Database = Depends(get_db), _: UserRow = Depends(require_user)):
-    task_id = await web_tasks.run_load_new(db, body.store_ids)
+    try:
+        task_id = await web_tasks.run_load_new(db, body.store_ids)
+    except StoreBusyError as e:
+        raise HTTPException(409, str(e)) from e
     return {"task_id": task_id}
 
 
@@ -2065,13 +2109,19 @@ async def api_generate(body: GenerateBody, db: Database = Depends(get_db), _: Us
     key = db.get_setting("openai_key") or ""
     if not key.strip():
         raise HTTPException(400, "Не задан OpenAI ключ в настройках")
-    task_id = await web_tasks.run_generate(db, body.item_ids, key)
+    try:
+        task_id = await web_tasks.run_generate(db, body.item_ids, key)
+    except StoreBusyError as e:
+        raise HTTPException(409, str(e)) from e
     return {"task_id": task_id}
 
 
 @app.post("/api/send")
 async def api_send(body: SendBody, db: Database = Depends(get_db), _: UserRow = Depends(require_user)):
-    task_id = await web_tasks.run_send(db, body.item_ids)
+    try:
+        task_id = await web_tasks.run_send(db, body.item_ids)
+    except StoreBusyError as e:
+        raise HTTPException(409, str(e)) from e
     return {"task_id": task_id}
 
 
@@ -3066,6 +3116,12 @@ def api_stats(db: Database = Depends(get_db), _: UserRow = Depends(require_user)
     return db.get_stats()
 
 
+@app.get("/api/health")
+@app.get("/health")
+def api_health():
+    return {"ok": True, "service": "wb-autoreply"}
+
+
 @app.get("/api/quality-metrics")
 async def api_quality_metrics(
     refresh: bool = Query(False),
@@ -3074,7 +3130,13 @@ async def api_quality_metrics(
 ):
     """Показатели качества по магазинам WB и Ozon (кэш ~30 мин)."""
     stores = db.list_stores()
-    return await fetch_all_quality(stores, use_cache=not refresh)
+    try:
+        return await asyncio.wait_for(
+            fetch_all_quality(stores, use_cache=not refresh),
+            timeout=120.0,
+        )
+    except asyncio.TimeoutError:
+        return await fetch_all_quality(stores, use_cache=True)
 
 
 def _collapse_traceback_lines_for_log_ui(lines: list[str]) -> list[str]:
@@ -3175,7 +3237,15 @@ async def _startup_scheduler():
 
 @app.on_event("shutdown")
 async def _shutdown_scheduler():
-    global _scheduler_task, _telegram_report_task
+    global _scheduler_task, _telegram_report_task, _auto_run_task
+    await web_tasks.cancel_all_running()
+    if _auto_run_task and not _auto_run_task.done():
+        _auto_run_task.cancel()
+        try:
+            await _auto_run_task
+        except Exception:
+            pass
+    _auto_run_task = None
     if _scheduler_task and not _scheduler_task.done():
         _scheduler_task.cancel()
         try:

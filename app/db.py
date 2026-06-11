@@ -243,6 +243,16 @@ class Database:
             info_items = c.execute("PRAGMA table_info(items)").fetchall()
             if "extra_json" not in [row[1] for row in info_items]:
                 c.execute("ALTER TABLE items ADD COLUMN extra_json TEXT")
+            if "send_error" not in [row[1] for row in info_items]:
+                c.execute("ALTER TABLE items ADD COLUMN send_error TEXT")
+            # Зависшие sending после рестарта → generated (ответ сохранён)
+            c.execute(
+                """UPDATE items SET status='generated', send_error=COALESCE(send_error,'')
+                   WHERE status='sending' AND trim(COALESCE(generated_text,'')) <> ''"""
+            )
+            c.execute(
+                "UPDATE items SET status='new', send_error='' WHERE status='sending' AND trim(COALESCE(generated_text,'')) = ''"
+            )
             # Lazy migration: client_id в stores (для Ozon)
             info_stores = c.execute("PRAGMA table_info(stores)").fetchall()
             if "client_id" not in [row[1] for row in info_stores]:
@@ -1387,15 +1397,84 @@ class Database:
     def set_generated(self, item_id: int, text: str) -> None:
         with _DB_LOCK:
             self._conn.execute(
-                "UPDATE items SET status='generated', generated_text=? WHERE id=?",
+                "UPDATE items SET status='generated', generated_text=?, send_error='' WHERE id=?",
                 (text, item_id)
+            )
+            self._conn.commit()
+
+    def update_generated_text(self, item_id: int, text: str) -> bool:
+        """Сохранить отредактированный ответ. Нельзя менять уже отправленные."""
+        t = (text or "").strip()
+        if not t:
+            return False
+        with _DB_LOCK:
+            row = self._conn.execute(
+                "SELECT status FROM items WHERE id=?", (int(item_id),)
+            ).fetchone()
+            if not row:
+                return False
+            st = str(row["status"] or "")
+            if st in ("sent", "sending"):
+                return False
+            self._conn.execute(
+                "UPDATE items SET status='generated', generated_text=?, send_error='' WHERE id=?",
+                (t, int(item_id)),
+            )
+            self._conn.commit()
+            return True
+
+    def try_claim_for_send(self, item_id: int) -> Optional[ItemRow]:
+        """Атомарно переводит item в sending, если можно отправить."""
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                """UPDATE items SET status='sending', send_error=''
+                   WHERE id=? AND status IN ('new','generated')
+                   AND trim(COALESCE(generated_text,'')) <> ''""",
+                (int(item_id),),
+            )
+            if int(cur.rowcount or 0) == 0:
+                self._conn.commit()
+                return None
+            self._conn.commit()
+            r = self._conn.execute(
+                """SELECT id, store_id, external_id, item_type, date, rating, text, author, product_title,
+                          status, COALESCE(generated_text,'') AS generated_text, was_viewed,
+                          COALESCE(extra_json,'') AS extra_json
+                   FROM items WHERE id=?""",
+                (int(item_id),),
+            ).fetchone()
+            if not r:
+                return None
+            return ItemRow(
+                id=int(r["id"]),
+                store_id=int(r["store_id"]),
+                external_id=str(r["external_id"]),
+                item_type=str(r["item_type"]),
+                date=str(r["date"]),
+                rating=(int(r["rating"]) if r["rating"] is not None else None),
+                text=str(r["text"] or ""),
+                author=str(r["author"] or ""),
+                product_title=str(r["product_title"] or ""),
+                status=str(r["status"]),
+                generated_text=str(r["generated_text"] or ""),
+                was_viewed=bool(r["was_viewed"]),
+                extra_json=str(r["extra_json"] or ""),
+            )
+
+    def release_send_claim(self, item_id: int, error: str = "") -> None:
+        with _DB_LOCK:
+            err = (error or "")[:500]
+            self._conn.execute(
+                """UPDATE items SET status='generated', send_error=?
+                   WHERE id=? AND status='sending'""",
+                (err, int(item_id)),
             )
             self._conn.commit()
 
     def set_sent(self, item_id: int, sent_at_iso: str) -> None:
         with _DB_LOCK:
             self._conn.execute(
-                "UPDATE items SET status='sent', sent_at=? WHERE id=?",
+                "UPDATE items SET status='sent', sent_at=?, send_error='' WHERE id=?",
                 (sent_at_iso, item_id)
             )
             self._conn.commit()
