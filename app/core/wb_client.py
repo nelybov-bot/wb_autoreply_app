@@ -28,22 +28,41 @@ class WbClient:
         # Док: до 3 rps; «global limiter» на стороне WB чаще срабатывает при плотных сериях — держим ~1 rps.
         self.limiter = RateLimiter(1.0)
 
-    def _headers(self) -> Dict[str, str]:
+    def _api_key_clean(self) -> str:
+        key = (self.api_key or "").strip()
+        if key.lower().startswith("bearer "):
+            return key[7:].strip()
+        return key
+
+    def _headers(self, *, authorization: Optional[str] = None) -> Dict[str, str]:
+        key = self._api_key_clean()
+        auth = authorization if authorization is not None else f"Bearer {key}"
         return {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": auth,
             "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
         }
 
-    async def _request(self, method: str, path: str, *, params: Optional[dict]=None, json_body: Optional[dict]=None) -> Any:
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[dict] = None,
+        json_body: Optional[dict] = None,
+        headers_override: Optional[dict] = None,
+    ) -> Any:
         url = BASE + path
+        headers = self._headers()
+        if headers_override:
+            headers = {**headers, **headers_override}
 
         async def _do():
             await self.limiter.wait()
             connector = aiohttp.TCPConnector(force_close=True, family=socket.AF_INET)
             async with connector:
                 async with aiohttp.ClientSession(timeout=self.timeout, connector=connector) as s:
-                    async with s.request(method, url, headers=self._headers(), params=params, json=json_body) as resp:
+                    async with s.request(method, url, headers=headers, params=params, json=json_body) as resp:
                         txt = await resp.text()
                         if resp.status >= 400:
                             raise HttpStatusError(resp.status, txt)
@@ -61,13 +80,31 @@ class WbClient:
 
     async def get_seller_rating(self) -> dict:
         """GET /api/common/v1/rating — рейтинг продавца по отзывам и их количество."""
-        data = await self._request("GET", "/api/common/v1/rating")
-        if not isinstance(data, dict):
-            return {}
-        if "valuation" in data or "feedbackCount" in data or "feedback_count" in data:
-            return data
-        inner = data.get("data")
-        return inner if isinstance(inner, dict) else data
+        key = self._api_key_clean()
+        last_err: Optional[HttpStatusError] = None
+        # Док WB: HeaderApiKey — сначала ключ без Bearer, затем Bearer (для JWT).
+        for auth in (key, f"Bearer {key}"):
+            try:
+                data = await self._request(
+                    "GET",
+                    "/api/common/v1/rating",
+                    headers_override={"Authorization": auth},
+                )
+            except HttpStatusError as e:
+                last_err = e
+                if e.status in (401, 403):
+                    continue
+                raise
+            else:
+                if not isinstance(data, dict):
+                    return {}
+                if "valuation" in data or "feedbackCount" in data or "feedback_count" in data:
+                    return data
+                inner = data.get("data")
+                return inner if isinstance(inner, dict) else data
+        if last_err:
+            raise last_err
+        return {}
 
     async def estimate_seller_rating_from_feedbacks(self, *, take: int = 100) -> dict:
         """

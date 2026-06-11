@@ -182,9 +182,28 @@ def _parse_ozon_summary(data: dict) -> list[dict]:
             continue
         by_key[key] = _ozon_metric_from_item(it, key)
 
+    if not by_key.get("cancellation") or not by_key.get("overdue"):
+        for it in all_items:
+            r = str(it.get("rating") or "").lower()
+            n = str(it.get("name") or "").lower()
+            if not by_key.get("cancellation") and (
+                "отмен" in n or "cancellation" in n or "cancel" in r
+            ) and "просроч" not in n and "delay" not in r and "shipment" not in r:
+                by_key["cancellation"] = _ozon_metric_from_item(it, "cancellation")
+            if not by_key.get("overdue") and (
+                "просроч" in n
+                or "shipment_delay" in r
+                or "late_shipment" in r
+                or ("отгруз" in n and ("просроч" in n or "своеврем" not in n))
+            ):
+                by_key["overdue"] = _ozon_metric_from_item(it, "overdue")
+
     if not by_key.get("cancellation") and all_items:
-        slugs = [str(x.get("rating") or "") for x in all_items]
-        log.debug("quality ozon: cancellation not found, ratings=%s", slugs)
+        slugs = [
+            f"{x.get('rating') or '?'}:{x.get('name') or '?'}"
+            for x in all_items
+        ]
+        log.info("quality ozon: cancellation not found, items=%s", slugs)
 
     # Фиксированный порядок: сначала отмены, потом просрочки
     return [by_key[k] for k in ("cancellation", "overdue") if k in by_key]
@@ -203,13 +222,26 @@ def _quality_debug_log(store_id: int, label: str, payload: Any) -> None:
 
 
 def _normalize_ozon_percent(value: Optional[float]) -> Optional[float]:
-    """Привести к процентам 0–100: Ozon иногда отдаёт долю (0.03 = 3%)."""
+    """Привести к шкале 0–100: Ozon API часто отдаёт долю (0.25 = 25%)."""
     if value is None:
         return None
     av = abs(value)
-    if 0 < av < 0.01:
-        return value * 100
+    if 0 < av < 1:
+        return round(value * 100, 4)
     return value
+
+
+def _wb_rating_http_error(e: HttpStatusError) -> str:
+    body = (e.body or "").lower()
+    if "personal token" in body:
+        return "Сервисный токен WB «Вопросы и отзывы»"
+    if e.status == 403:
+        return "Нет доступа к рейтингу (403)"
+    if e.status == 401:
+        return "Токен WB не принят (401)"
+    if e.status == 429:
+        return "Лимит запросов WB (429)"
+    return f"WB API {e.status}"
 
 
 def _pick_float(d: dict, *keys: str) -> Optional[float]:
@@ -261,9 +293,27 @@ def _parse_ozon_error_index(data: Any) -> Optional[dict]:
             nested = sub
             break
 
-    total = _pick_float(block, "index", "error_index", "total_index", "index_value", "rating_index", "current_value", "value")
+    total = _pick_float(
+        block,
+        "total_index",
+        "error_index_value",
+        "fbs_error_index",
+        "total",
+        "index_value",
+        "rating_index",
+        "current_value",
+        "value",
+    )
     if total is None:
-        total = _pick_float(nested, "index", "error_index", "total_index", "index_value", "value", "current_value")
+        total = _pick_float(
+            nested,
+            "total_index",
+            "error_index_value",
+            "index_value",
+            "value",
+            "current_value",
+            "index",
+        )
 
     cancel = _pick_nested_float(
         block,
@@ -383,13 +433,7 @@ async def _fetch_wb_quality(store: Store) -> dict:
                     feedback_count = None
         except HttpStatusError as e:
             _quality_debug_log(store.id, "wb_rating_error", {"status": e.status, "body": (e.body or "")[:800]})
-            if e.status in (401, 403):
-                out["error"] = (
-                    "Нет доступа к рейтингу — нужен сервисный токен WB «Вопросы и отзывы» "
-                    "(очередь отзывов ≠ рейтинг магазина)"
-                )
-            else:
-                out["error"] = f"WB API {e.status}"
+            out["error"] = _wb_rating_http_error(e)
             log.warning("quality wb store_id=%s: rating HTTP %s", store.id, e.status)
             return out
 

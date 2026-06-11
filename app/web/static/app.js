@@ -432,6 +432,21 @@
 
   let _qualityLoading = false;
 
+  function formatPercentValue(v) {
+    const n = Number(v);
+    if (Number.isNaN(n)) return '—';
+    const abs = Math.abs(n);
+    let shown;
+    if (abs >= 10) {
+      shown = n.toFixed(1).replace(/\.0$/, '');
+    } else if (abs >= 1) {
+      shown = n.toFixed(2).replace(/\.?0+$/, '');
+    } else {
+      shown = n.toFixed(2).replace(/\.?0+$/, '');
+    }
+    return shown + '%';
+  }
+
   function formatQualityMetricValue(m) {
     if (!m || m.value == null || m.value === '') return '—';
     const v = Number(m.value);
@@ -441,8 +456,7 @@
       return m.extra === '≈' ? '≈ ' + stars : stars;
     }
     if (m.unit === 'percent') {
-      const pct = v < 1 && v > 0 ? v.toFixed(2).replace(/\.?0+$/, '') : v.toFixed(1).replace(/\.0$/, '');
-      let s = pct + '%';
+      let s = formatPercentValue(v);
       if (m.key === 'error_index' && m.extra) s += ' ' + m.extra;
       return s;
     }
@@ -485,9 +499,10 @@
     const head = columns.map(c => `<th title="${escapeHtml(c.title || '')}">${escapeHtml(c.label)}</th>`).join('');
     const body = rows.map(row => {
       if (row.error && !row.metrics?.length) {
+        const errTip = escapeHtml(row.error);
         return `<tr class="quality-tr quality-tr--error">
           <td class="quality-td quality-td--store">${escapeHtml(row.store_name || '')}</td>
-          <td class="quality-td quality-td--error-msg" colspan="${columns.length}">${escapeHtml(row.error)}</td>
+          <td class="quality-td quality-td--error-msg" colspan="${columns.length}" title="${errTip}">${errTip}</td>
         </tr>`;
       }
       const cells = columns.map(c => renderQualityCell(qualityMetricByKey(row, c.key), c)).join('');
