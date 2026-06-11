@@ -62,7 +62,36 @@ class WbClient:
     async def get_seller_rating(self) -> dict:
         """GET /api/common/v1/rating — рейтинг продавца по отзывам и их количество."""
         data = await self._request("GET", "/api/common/v1/rating")
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        if "valuation" in data or "feedbackCount" in data or "feedback_count" in data:
+            return data
+        inner = data.get("data")
+        return inner if isinstance(inner, dict) else data
+
+    async def estimate_seller_rating_from_feedbacks(self, *, take: int = 100) -> dict:
+        """
+        Запасной вариант, если /api/common/v1/rating недоступен (часто 403 на базовом токене).
+        Средняя productValuation по последним отзывам — приближение к рейтингу в ЛК.
+        """
+        f = await self.list_feedbacks(take=take, skip=0)
+        fdata = (f or {}).get("data") if isinstance(f, dict) else None
+        if not isinstance(fdata, dict):
+            fdata = f if isinstance(f, dict) else {}
+        items = fdata.get("feedbacks") or []
+        vals: list[float] = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            raw = it.get("productValuation")
+            if raw is None:
+                continue
+            try:
+                vals.append(float(raw))
+            except (TypeError, ValueError):
+                continue
+        rating = (sum(vals) / len(vals)) if vals else None
+        return {"rating": rating, "sample_size": len(vals), "feedbacks_total": len(items)}
 
     async def has_new(self) -> dict:
         return await self._request("GET", "/api/v1/new-feedbacks-questions")

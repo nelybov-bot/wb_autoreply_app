@@ -3,6 +3,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import time
 from typing import Any, Optional
@@ -16,6 +18,7 @@ log = logging.getLogger("quality")
 
 _CACHE: dict[int, tuple[float, dict]] = {}
 _CACHE_TTL_SEC = 30 * 60
+_WB_STORE_GAP_SEC = 1.25  # не бить 6 ключей параллельно — у WB общий лимитер
 
 # Пороги для подсветки (Ozon FBS, ориентиры из ЛК)
 _OZON_CANCEL_WARN = 1.5
@@ -56,25 +59,104 @@ def _ozon_status_level(status: str) -> str:
     return "na"
 
 
-def _find_ozon_item(items: list[dict], *needles: str) -> Optional[dict]:
-    needles_l = [n.lower() for n in needles if n]
-    for it in items or []:
-        if not isinstance(it, dict):
-            continue
-        blob = " ".join(
-            str(it.get(k) or "")
-            for k in ("rating", "name", "rating_name")
-        ).lower()
-        if any(n in blob for n in needles_l):
-            return it
+_OZON_METRIC_LABELS = {
+    "cancellation": "Отмены",
+    "overdue": "Просрочки",
+    "error_index": "Индекс",
+}
+
+# Временный лог сырого JSON Ozon (смотреть в «Журнал» по QUALITY_DEBUG)
+_QUALITY_DEBUG_LOG = True
+_QUALITY_DEBUG_MAX_LEN = 2500
+
+
+def _classify_ozon_rating_item(it: dict) -> Optional[str]:
+    """Отмены и просрочки — разные rating-slug в /v1/rating/summary."""
+    rating = str(it.get("rating") or "").lower()
+    name = str(it.get("name") or "").lower()
+
+    if rating in (
+        "rating_global_cancellation",
+        "rating_global_cancellation_percent",
+        "rating_cancellation_global",
+        "rating_fbs_cancellation",
+        "rating_fbs_cancellation_percent",
+    ):
+        return "cancellation"
+    if rating in (
+        "rating_global_late_shipment",
+        "rating_late_shipment_global",
+        "rating_global_shipment_delay",
+        "rating_fbs_late_shipment",
+        "rating_fbs_late_shipment_percent",
+    ):
+        return "overdue"
+
+    if any(tok in rating for tok in (
+        "late_shipment",
+        "shipment_late",
+        "shipment_delay",
+        "overdue_shipment",
+        "late_delivery",
+        "delay_shipment",
+    )):
+        return "overdue"
+    if "просроч" in name and "отмен" not in name:
+        return "overdue"
+    if ("late" in rating or "delay" in rating or "overdue" in rating) and "cancel" not in rating:
+        return "overdue"
+
+    if any(tok in rating for tok in (
+        "cancellation",
+        "canceled",
+        "cancelled",
+        "order_cancel",
+        "cancel_global",
+        "cancel_percent",
+    )):
+        return "cancellation"
+    if "отмен" in name and "просроч" not in name:
+        return "cancellation"
+    if "cancel" in rating and "late" not in rating and "delay" not in rating:
+        return "cancellation"
+
     return None
 
 
+def _ozon_metric_from_item(it: dict, key: str) -> dict:
+    try:
+        v = float(it.get("current_value")) if it.get("current_value") is not None else None
+    except (TypeError, ValueError):
+        v = None
+
+    lvl = _ozon_status_level(str(it.get("status") or ""))
+    if lvl == "na":
+        if key == "cancellation":
+            lvl = _metric_level(v, warn=_OZON_CANCEL_WARN, danger=_OZON_CANCEL_DANGER)
+        elif key == "overdue":
+            lvl = _metric_level(v, warn=_OZON_OVERDUE_WARN, danger=_OZON_OVERDUE_DANGER)
+
+    api_name = str(it.get("name") or "").strip()
+    rating_hint = {
+        "cancellation": "Рейтинг продавца · риск блокировки (~2%)",
+        "overdue": "Рейтинг продавца · просрочки отгрузки (~5%)",
+    }.get(key, api_name)
+    return {
+        "key": key,
+        "label": _OZON_METRIC_LABELS.get(key, api_name or key),
+        "hint": f"{rating_hint}. {api_name}".strip() if api_name else rating_hint,
+        "value": v,
+        "unit": "percent",
+        "level": lvl,
+        "status": it.get("status"),
+        "rating": it.get("rating"),
+    }
+
+
 def _parse_ozon_summary(data: dict) -> list[dict]:
-    metrics: list[dict] = []
     groups = data.get("groups") if isinstance(data, dict) else None
     if not isinstance(groups, list):
-        return metrics
+        return []
 
     all_items: list[dict] = []
     for g in groups:
@@ -84,93 +166,177 @@ def _parse_ozon_summary(data: dict) -> list[dict]:
         if isinstance(items, list):
             all_items.extend(x for x in items if isinstance(x, dict))
 
-    cancel_it = _find_ozon_item(all_items, "cancel", "отмен")
-    if cancel_it:
-        val = cancel_it.get("current_value")
-        try:
-            v = float(val) if val is not None else None
-        except (TypeError, ValueError):
-            v = None
-        lvl = _ozon_status_level(str(cancel_it.get("status") or ""))
-        if lvl == "na":
-            lvl = _metric_level(v, warn=_OZON_CANCEL_WARN, danger=_OZON_CANCEL_DANGER)
-        metrics.append({
-            "key": "cancellation",
-            "label": str(cancel_it.get("name") or "Процент отмен"),
-            "value": v,
-            "unit": "percent",
-            "level": lvl,
-            "status": cancel_it.get("status"),
-        })
+    by_key: dict[str, dict] = {}
+    for it in all_items:
+        key = _classify_ozon_rating_item(it)
+        if not key or key in by_key:
+            continue
+        by_key[key] = _ozon_metric_from_item(it, key)
 
-    overdue_it = _find_ozon_item(
-        all_items,
-        "delay",
-        "shipment",
-        "late",
-        "overdue",
-        "просроч",
-        "отгруз",
-    )
-    if overdue_it:
-        try:
-            v = float(overdue_it.get("current_value")) if overdue_it.get("current_value") is not None else None
-        except (TypeError, ValueError):
-            v = None
-        lvl = _ozon_status_level(str(overdue_it.get("status") or ""))
-        if lvl == "na":
-            lvl = _metric_level(v, warn=_OZON_OVERDUE_WARN, danger=_OZON_OVERDUE_DANGER)
-        metrics.append({
-            "key": "overdue",
-            "label": str(overdue_it.get("name") or "Просроченные отгрузки"),
-            "value": v,
-            "unit": "percent",
-            "level": lvl,
-            "status": overdue_it.get("status"),
-        })
+    if not by_key.get("cancellation") and all_items:
+        slugs = [str(x.get("rating") or "") for x in all_items]
+        log.debug("quality ozon: cancellation not found, ratings=%s", slugs)
 
-    on_time_it = _find_ozon_item(all_items, "on_time", "вовремя", "rating_on_time")
-    if on_time_it:
-        try:
-            v = float(on_time_it.get("current_value")) if on_time_it.get("current_value") is not None else None
-        except (TypeError, ValueError):
-            v = None
-        lvl = _ozon_status_level(str(on_time_it.get("status") or ""))
-        if lvl == "na" and v is not None:
-            lvl = _metric_level(100.0 - v, warn=5.0, danger=10.0) if v < 100 else "ok"
-        metrics.append({
-            "key": "on_time",
-            "label": str(on_time_it.get("name") or "Заказы вовремя"),
-            "value": v,
-            "unit": "percent",
-            "level": lvl,
-            "status": on_time_it.get("status"),
-        })
-
-    return metrics
+    # Фиксированный порядок: сначала отмены, потом просрочки
+    return [by_key[k] for k in ("cancellation", "overdue") if k in by_key]
 
 
-def _extract_error_index(data: Any) -> Optional[float]:
-    if not isinstance(data, dict):
-        return None
-    block = data.get("result") if isinstance(data.get("result"), dict) else data
-    for key in (
-        "index",
-        "error_index",
-        "index_value",
-        "value",
-        "rating_index",
-        "current_value",
-        "localization_index",
-    ):
-        raw = block.get(key) if isinstance(block, dict) else None
+def _quality_debug_log(store_id: int, label: str, payload: Any) -> None:
+    if not _QUALITY_DEBUG_LOG:
+        return
+    try:
+        txt = json.dumps(payload, ensure_ascii=False, default=str)
+    except Exception:
+        txt = str(payload)
+    if len(txt) > _QUALITY_DEBUG_MAX_LEN:
+        txt = txt[:_QUALITY_DEBUG_MAX_LEN] + "…"
+    log.info("QUALITY_DEBUG store_id=%s %s: %s", store_id, label, txt)
+
+
+def _pick_float(d: dict, *keys: str) -> Optional[float]:
+    for k in keys:
+        raw = d.get(k)
         if raw is None:
             continue
+        if isinstance(raw, dict):
+            for nk in ("value", "index", "percent", "current_value", "index_value"):
+                if nk in raw:
+                    raw = raw[nk]
+                    break
+            else:
+                continue
         try:
             return float(raw)
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _pick_nested_float(block: dict, parent_keys: tuple[str, ...], value_keys: tuple[str, ...]) -> Optional[float]:
+    for pk in parent_keys:
+        sub = block.get(pk)
+        if isinstance(sub, dict):
+            v = _pick_float(sub, *value_keys)
+            if v is not None:
+                return v
+    return None
+
+
+def _parse_ozon_error_index(data: Any) -> Optional[dict]:
+    """
+    POST /v1/rating/index/fbs/info — итоговый индекс, компоненты (просрочки/отмены), множитель платы.
+    Имена полей в API могут отличаться — подбираем по списку + временный QUALITY_DEBUG лог.
+    """
+    if not isinstance(data, dict):
+        return None
+
+    block: dict = data
+    res = data.get("result")
+    if isinstance(res, dict):
+        block = res
+
+    nested = block
+    for nest_key in ("index", "error_index", "rating_index", "fbs_index"):
+        sub = block.get(nest_key)
+        if isinstance(sub, dict):
+            nested = sub
+            break
+
+    total = _pick_float(block, "index", "error_index", "total_index", "index_value", "rating_index", "current_value", "value")
+    if total is None:
+        total = _pick_float(nested, "index", "error_index", "total_index", "index_value", "value", "current_value")
+
+    cancel = _pick_nested_float(
+        block,
+        ("cancellation", "cancel", "canceled", "cancelled", "cancellation_index", "index_cancellation"),
+        ("index", "value", "percent", "current_value", "index_value", "cancellation_index", "cancel_index"),
+    )
+    if cancel is None:
+        cancel = _pick_float(
+            block,
+            "cancellation_index",
+            "cancel_index",
+            "index_cancellation",
+            "cancellation_percent",
+            "cancel_percent",
+            "canceled_percent",
+        )
+
+    delay = _pick_nested_float(
+        block,
+        ("delay", "late", "overdue", "shipment_delay", "late_shipment", "delay_index", "shipment"),
+        ("index", "value", "percent", "current_value", "index_value", "delay_index", "late_index"),
+    )
+    if delay is None:
+        delay = _pick_float(
+            block,
+            "delay_index",
+            "late_index",
+            "overdue_index",
+            "shipment_delay_index",
+            "late_shipment_index",
+            "delay_percent",
+            "overdue_percent",
+        )
+
+    tariff = _pick_float(
+        block,
+        "tariff_multiplier",
+        "multiplier",
+        "fee_multiplier",
+        "payment_multiplier",
+        "tariff_coefficient",
+        "coefficient",
+        "tariff",
+    )
+    if tariff is None:
+        tariff = _pick_nested_float(
+            block,
+            ("tariff", "payment", "fee"),
+            ("multiplier", "coefficient", "value", "tariff_multiplier"),
+        )
+
+    if total is None and cancel is None and delay is None:
+        return None
+
+    hint_parts: list[str] = ["Индекс ошибок FBS/rFBS за 14 дней"]
+    if delay is not None:
+        hint_parts.append(f"за просрочки {delay:g}%")
+    if cancel is not None:
+        hint_parts.append(f"за отмены {cancel:g}%")
+    if tariff is not None and tariff > 1:
+        hint_parts.append(f"плата ×{tariff:g}")
+
+    extra = ""
+    if tariff is not None and tariff > 1:
+        extra = f"×{tariff:g}".replace(".0", "")
+
+    return {
+        "total": total,
+        "cancel_component": cancel,
+        "delay_component": delay,
+        "tariff_multiplier": tariff,
+        "hint": " · ".join(hint_parts),
+        "extra": extra,
+    }
+
+
+async def _wb_estimate_rating_with_retry(client: WbClient, store_id: int) -> dict:
+    last_err: Optional[HttpStatusError] = None
+    for attempt in range(3):
+        try:
+            est = await client.estimate_seller_rating_from_feedbacks(take=100)
+            _quality_debug_log(store_id, "wb_rating_fallback", est)
+            return est
+        except HttpStatusError as e:
+            last_err = e
+            if e.status == 429 and attempt < 2:
+                await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            raise
+    if last_err:
+        raise last_err
+    return {}
 
 
 async def _fetch_wb_quality(store: Store) -> dict:
@@ -189,26 +355,73 @@ async def _fetch_wb_quality(store: Store) -> dict:
         return out
     try:
         client = WbClient(key)
-        data = await client.get_seller_rating()
-        valuation = data.get("valuation")
-        count = data.get("feedbackCount") or data.get("feedback_count")
+        rating: Optional[float] = None
+        feedback_count: Optional[int] = None
+        rating_hint = "Рейтинг по отзывам"
+        rating_extra = ""
+
+        # 1) Отзывы — на базовом токене обычно работают (как автозагрузка отзывов).
         try:
-            rating = float(valuation) if valuation is not None else None
-        except (TypeError, ValueError):
-            rating = None
+            est = await _wb_estimate_rating_with_retry(client, store.id)
+            try:
+                rating = float(est["rating"]) if est.get("rating") is not None else None
+            except (TypeError, ValueError):
+                rating = None
+            sample = int(est.get("sample_size") or 0)
+            if rating is not None:
+                rating_hint = f"≈ среднее по {sample} последним отзывам"
+                rating_extra = "≈"
+        except HttpStatusError as e:
+            _quality_debug_log(store.id, "wb_feedbacks_error", {"status": e.status, "body": (e.body or "")[:800]})
+            out["error"] = f"WB: нет доступа к отзывам (HTTP {e.status})"
+            log.warning("quality wb store_id=%s: feedbacks HTTP %s", store.id, e.status)
+            return out
+
+        # 2) Официальный рейтинг — только сервисный токен; если есть, заменяем ≈ на точное значение.
         try:
-            feedback_count = int(count) if count is not None else None
-        except (TypeError, ValueError):
-            feedback_count = None
+            data = await client.get_seller_rating()
+            _quality_debug_log(store.id, "wb_rating", data)
+            valuation = data.get("valuation")
+            count = data.get("feedbackCount") or data.get("feedback_count")
+            if valuation is not None:
+                try:
+                    rating = float(valuation)
+                    rating_hint = "Рейтинг продавца (WB API)"
+                    rating_extra = ""
+                except (TypeError, ValueError):
+                    pass
+            if count is not None:
+                try:
+                    feedback_count = int(count)
+                except (TypeError, ValueError):
+                    feedback_count = None
+        except HttpStatusError as e:
+            _quality_debug_log(store.id, "wb_rating_error", {"status": e.status, "body": (e.body or "")[:800]})
+            if e.status not in (401, 403, 429) and rating is None:
+                raise
+            if rating is None:
+                out["error"] = f"WB API {e.status}"
+                return out
+
+        if rating is None:
+            out["error"] = "WB: в отзывах нет оценок для расчёта рейтинга"
+            return out
+
         lvl = _metric_level(rating, warn=_WB_RATING_WARN, danger=_WB_RATING_DANGER, lower_is_better=False)
+        extra = f"{feedback_count:,}".replace(",", " ") + " отзывов" if feedback_count is not None else ""
+        if rating_extra and extra:
+            extra = f"{rating_extra} · {extra}"
+        elif rating_extra:
+            extra = rating_extra
         out["metrics"] = [
             {
                 "key": "review_rating",
-                "label": "Рейтинг по отзывам",
+                "label": "Рейтинг",
                 "value": rating,
                 "unit": "stars",
                 "level": lvl,
-                "extra": f"{feedback_count:,}".replace(",", " ") + " отзывов" if feedback_count is not None else "",
+                "hint": rating_hint,
+                "extra": extra,
             }
         ]
         out["ok"] = rating is not None
@@ -240,15 +453,19 @@ async def _fetch_ozon_quality(store: Store) -> dict:
     try:
         client = OzonClient(cid, key)
         summary = await client.rating_summary()
+        if isinstance(summary, dict):
+            _quality_debug_log(store.id, "ozon_rating_summary", summary)
         metrics = _parse_ozon_summary(summary if isinstance(summary, dict) else {})
 
         try:
             idx_data = await client.rating_index_fbs_info()
-            idx_val = _extract_error_index(idx_data)
-            if idx_val is not None:
+            _quality_debug_log(store.id, "ozon_index_fbs_info", idx_data)
+            parsed_idx = _parse_ozon_error_index(idx_data)
+            if parsed_idx and parsed_idx.get("total") is not None:
+                idx_val = parsed_idx["total"]
                 metrics.append({
                     "key": "error_index",
-                    "label": "Индекс ошибок FBS",
+                    "label": _OZON_METRIC_LABELS["error_index"],
                     "value": idx_val,
                     "unit": "percent",
                     "level": _metric_level(
@@ -256,8 +473,22 @@ async def _fetch_ozon_quality(store: Store) -> dict:
                         warn=_OZON_ERROR_INDEX_WARN,
                         danger=_OZON_ERROR_INDEX_DANGER,
                     ),
+                    "hint": parsed_idx.get("hint") or "Индекс ошибок FBS/rFBS",
+                    "extra": parsed_idx.get("extra") or "",
+                    "components": {
+                        "delay": parsed_idx.get("delay_component"),
+                        "cancel": parsed_idx.get("cancel_component"),
+                    },
+                    "tariff_multiplier": parsed_idx.get("tariff_multiplier"),
                 })
+            elif parsed_idx:
+                log.warning(
+                    "quality ozon index fbs store_id=%s: parsed without total, parts=%s",
+                    store.id,
+                    parsed_idx,
+                )
         except HttpStatusError as e:
+            _quality_debug_log(store.id, "ozon_index_fbs_error", {"status": e.status, "body": (e.body or "")[:800]})
             log.warning("quality ozon index fbs store_id=%s: HTTP %s", store.id, e.status)
         except Exception:
             log.exception("quality ozon index fbs store_id=%s failed", store.id)
@@ -308,10 +539,15 @@ async def fetch_all_quality(stores: list[Store], *, use_cache: bool = True, acti
     wb_stores = [s for s in rows if (s.marketplace or "").lower() == "wb"]
     ozon_stores = [s for s in rows if (s.marketplace or "").lower() == "ozon"]
 
-    import asyncio
+    wb_results: list[dict] = []
+    for i, s in enumerate(wb_stores):
+        wb_results.append(await fetch_store_quality(s, use_cache=use_cache))
+        if i + 1 < len(wb_stores):
+            await asyncio.sleep(_WB_STORE_GAP_SEC)
 
-    wb_results = await asyncio.gather(*[fetch_store_quality(s, use_cache=use_cache) for s in wb_stores])
-    ozon_results = await asyncio.gather(*[fetch_store_quality(s, use_cache=use_cache) for s in ozon_stores])
+    ozon_results: list[dict] = []
+    for s in ozon_stores:
+        ozon_results.append(await fetch_store_quality(s, use_cache=use_cache))
 
     return {
         "cache_ttl_sec": _CACHE_TTL_SEC,

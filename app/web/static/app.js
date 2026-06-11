@@ -412,70 +412,77 @@
     if (!m || m.value == null || m.value === '') return '—';
     const v = Number(m.value);
     if (Number.isNaN(v)) return '—';
-    if (m.unit === 'stars') return v.toFixed(2).replace(/\.00$/, '') + ' ★';
-    if (m.unit === 'percent') return v.toFixed(1).replace(/\.0$/, '') + '%';
+    if (m.unit === 'stars') {
+      const stars = v.toFixed(2).replace(/\.00$/, '') + ' ★';
+      return m.extra === '≈' ? '≈ ' + stars : stars;
+    }
+    if (m.unit === 'percent') {
+      let s = v.toFixed(1).replace(/\.0$/, '') + '%';
+      if (m.key === 'error_index' && m.extra) s += ' ' + m.extra;
+      return s;
+    }
     return String(v);
   }
 
-  function qualityBarPercent(m) {
-    if (!m || m.value == null) return 0;
-    const v = Number(m.value);
-    if (Number.isNaN(v)) return 0;
-    if (m.unit === 'stars') return Math.max(0, Math.min(100, (v / 5) * 100));
-    if (m.unit === 'percent') {
-      if (m.key === 'error_index' || m.key === 'cancellation' || m.key === 'overdue') {
-        return Math.max(0, Math.min(100, v * 5));
-      }
-      return Math.max(0, Math.min(100, v));
-    }
-    return Math.max(0, Math.min(100, v));
+  const QUALITY_WB_COLUMNS = [
+    { key: 'review_rating', label: 'Рейтинг', title: 'Рейтинг по отзывам WB' },
+  ];
+  const QUALITY_OZON_COLUMNS = [
+    { key: 'cancellation', label: 'Отмены', title: 'Рейтинг · % отмен (риск блокировки ~2%)' },
+    { key: 'overdue', label: 'Просрочки', title: 'Рейтинг · % просрочек отгрузки (~5%)' },
+    { key: 'error_index', label: 'Индекс', title: 'Индекс ошибок за 14 дней · плата за ошибки' },
+  ];
+
+  function qualityMetricByKey(row, key) {
+    return (row.metrics || []).find(m => m.key === key) || null;
   }
 
-  function renderQualityMetricRow(m) {
+  function renderQualityCell(m, col) {
+    if (!m) return '<td class="quality-td quality-td--empty">—</td>';
     const lvl = m.level || 'na';
-    const pct = qualityBarPercent(m);
-    const extra = m.extra ? `<div class="quality-metric-extra">${escapeHtml(m.extra)}</div>` : '';
-    return `
-      <div class="quality-metric quality-metric--${escapeHtml(lvl)}">
-        <div class="quality-metric-top">
-          <span class="quality-metric-label">${escapeHtml(m.label || '')}</span>
-          <span class="quality-metric-value">${escapeHtml(formatQualityMetricValue(m))}</span>
-        </div>
-        <div class="quality-metric-bar" aria-hidden="true"><div class="quality-metric-bar-fill" style="width:${pct}%"></div></div>
-        ${extra}
-      </div>`;
+    const tip = [m.hint, col.title, m.extra].filter(Boolean).join(' · ');
+    const titleAttr = tip ? ` title="${escapeHtml(tip)}"` : '';
+    return `<td class="quality-td"${titleAttr}>
+      <span class="quality-cell quality-cell--${escapeHtml(lvl)}">${escapeHtml(formatQualityMetricValue(m))}</span>
+    </td>`;
   }
 
-  function renderQualityStoreCard(row) {
-    const inactive = row.active === false ? ' quality-store-card--inactive' : '';
-    if (row.error && !row.metrics?.length) {
-      return `
-        <article class="quality-store-card${inactive}">
-          <header class="quality-store-card-head">
-            <h4 class="quality-store-name">${escapeHtml(row.store_name || '')}</h4>
-          </header>
-          <p class="quality-store-error">${escapeHtml(row.error)}</p>
-        </article>`;
-    }
-    const metrics = (row.metrics || []).map(renderQualityMetricRow).join('');
-    return `
-      <article class="quality-store-card${inactive}">
-        <header class="quality-store-card-head">
-          <h4 class="quality-store-name">${escapeHtml(row.store_name || '')}</h4>
-        </header>
-        <div class="quality-metrics-list">${metrics || '<p class="form-hint">Нет данных</p>'}</div>
-        ${row.error ? `<p class="quality-store-warn">${escapeHtml(row.error)}</p>` : ''}
-      </article>`;
-  }
-
-  function renderQualityColumn(wrapId, rows, emptyLabel) {
+  function renderQualityTable(wrapId, rows, columns, emptyLabel, opts = {}) {
     const wrap = document.getElementById(wrapId);
     if (!wrap) return;
     if (!rows || !rows.length) {
       wrap.innerHTML = `<div class="quality-empty">${escapeHtml(emptyLabel)}</div>`;
       return;
     }
-    wrap.innerHTML = rows.map(renderQualityStoreCard).join('');
+    const groupHead = opts.groupHead
+      ? `<tr class="quality-table-group-row">${opts.groupHead}</tr>`
+      : '';
+    const head = columns.map(c => `<th title="${escapeHtml(c.title || '')}">${escapeHtml(c.label)}</th>`).join('');
+    const body = rows.map(row => {
+      if (row.error && !row.metrics?.length) {
+        return `<tr class="quality-tr quality-tr--error">
+          <td class="quality-td quality-td--store">${escapeHtml(row.store_name || '')}</td>
+          <td class="quality-td quality-td--error-msg" colspan="${columns.length}">${escapeHtml(row.error)}</td>
+        </tr>`;
+      }
+      const cells = columns.map(c => renderQualityCell(qualityMetricByKey(row, c.key), c)).join('');
+      const trClass = row.error ? 'quality-tr quality-tr--warn' : 'quality-tr';
+      const trTitle = row.error ? ` title="${escapeHtml(row.error)}"` : '';
+      return `<tr class="${trClass}"${trTitle}>
+        <td class="quality-td quality-td--store">${escapeHtml(row.store_name || '')}</td>
+        ${cells}
+      </tr>`;
+    }).join('');
+    wrap.innerHTML = `
+      <div class="quality-table-wrap">
+        <table class="quality-table">
+          <thead>
+            ${groupHead}
+            <tr><th>Магазин</th>${head}</tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>`;
   }
 
   async function loadQualityMetrics(refresh = false) {
@@ -488,8 +495,19 @@
     try {
       const q = refresh ? '?refresh=1' : '';
       const data = await api('/quality-metrics' + q, { timeoutMs: 120000 });
-      renderQualityColumn('quality-wb-stores', data.wb || [], 'Нет активных магазинов WB');
-      renderQualityColumn('quality-ozon-stores', data.ozon || [], 'Нет активных магазинов Ozon');
+      renderQualityTable('quality-wb-stores', data.wb || [], QUALITY_WB_COLUMNS, 'Нет активных магазинов WB');
+      renderQualityTable(
+        'quality-ozon-stores',
+        data.ozon || [],
+        QUALITY_OZON_COLUMNS,
+        'Нет активных магазинов Ozon',
+        {
+          groupHead:
+            '<th></th>' +
+            '<th colspan="2" class="quality-th-group">Рейтинг (блокировка)</th>' +
+            '<th class="quality-th-group">Индекс ошибок</th>',
+        },
+      );
       const ttl = Number(data.cache_ttl_sec) || 1800;
       const ttlMin = Math.round(ttl / 60);
       if (hint) {

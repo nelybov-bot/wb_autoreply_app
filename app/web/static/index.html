@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
-  <link rel="stylesheet" href="/static/styles.css?v=14">
+  <link rel="stylesheet" href="/static/styles.css?v=17">
 </head>
 <body>
   <div class="bg-noise" aria-hidden="true"></div>
@@ -146,18 +146,21 @@
             <header class="quality-mp-col-head">
               <span class="mp-pill mp-wb">WB</span>
               <span class="quality-mp-col-title">Wildberries</span>
+              <span class="quality-mp-col-note">рейтинг по отзывам</span>
             </header>
-            <div class="quality-store-grid" id="quality-wb-stores"></div>
+            <div class="quality-panel-body" id="quality-wb-stores"></div>
           </div>
           <div class="quality-mp-col" data-mp="ozon">
             <header class="quality-mp-col-head">
               <span class="mp-pill mp-ozon">OZON</span>
               <span class="quality-mp-col-title">Ozon</span>
+              <span class="quality-mp-col-note">рейтинг + индекс ошибок (14 дн.)</span>
             </header>
-            <div class="quality-store-grid" id="quality-ozon-stores"></div>
+            <div class="quality-panel-body" id="quality-ozon-stores"></div>
           </div>
         </div>
       </section>
+      <h3 class="summary-block-title">Очередь и отправки</h3>
       <div class="stats-grid" id="stats-cards">
         <div class="stat-card highlight">
           <div class="value" id="stat-today">—</div>
@@ -1061,6 +1064,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=33"></script>
+  <script src="/static/app.js?v=34"></script>
 </body>
 </html>
