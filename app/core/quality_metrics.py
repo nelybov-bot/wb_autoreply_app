@@ -25,6 +25,9 @@ _WB_RATING_COOLDOWN_MSG = (
     "WB разрешает получать рейтинг продавца не чаще одного раза в минуту. "
     "Данные будут обновлены позже."
 )
+_WB_RATING_PENDING_MSG = (
+    "Рейтинг загружается… WB разрешает обновлять не чаще одного раза в минуту на магазин."
+)
 _WB_TOKEN_MSG = 'Нужен сервисный токен WB категории "Вопросы и отзывы".'
 
 # WB seller rating: кэш и cooldown по нормализованному API key (лимит WB: 1 req/min/account)
@@ -35,6 +38,9 @@ _WB_RATING_COOLDOWN_KIND: dict[str, str] = {}  # "rate" | "auth"
 _WB_RATING_LOCKS: dict[str, asyncio.Lock] = {}
 _WB_RATING_GLOBAL_LOCK = asyncio.Lock()
 _WB_RATING_GLOBAL_NEXT_AT: float = 0.0  # WB rating: не чаще 1 HTTP-вызова/мин на процесс (лимит IP/аккаунта)
+_WB_RATING_BG_QUEUE: list[tuple[str, str, list[int]]] = []
+_WB_RATING_BG_QUEUED: set[str] = set()
+_WB_RATING_BG_TASK: Optional[asyncio.Task] = None
 _WB_AUTH_ERROR_CACHE_SEC = 5 * 60
 _WB_RATING_CLEANUP_MARGIN_SEC = 5 * 60
 
@@ -398,25 +404,103 @@ def _wb_rating_cache_get(norm_key: str, now: float) -> Optional[dict[str, Any]]:
     return dict(payload)
 
 
-def _wb_rating_serve_from_last_ok(norm_key: str, store_ids: list[int]) -> Optional[dict[str, Any]]:
+def _wb_rating_serve_from_last_ok(
+    norm_key: str,
+    store_ids: list[int],
+    *,
+    quiet: bool = False,
+) -> Optional[dict[str, Any]]:
     hit = _WB_RATING_LAST_OK.get(norm_key)
     if not hit:
         return None
     fetched_at, payload = hit
     if (time.time() - fetched_at) >= _WB_RATING_CACHE_TTL_SEC:
         return None
-    log.info(
-        "quality wb rating cooldown key=%s stores=%s (last successful result)",
-        _wb_key_log_hash(norm_key),
-        store_ids,
-    )
+    if not quiet:
+        log.info(
+            "quality wb rating cooldown key=%s stores=%s (last successful result)",
+            _wb_key_log_hash(norm_key),
+            store_ids,
+        )
     return dict(payload)
+
+
+def _wb_rating_needs_refresh(norm_key: str, now: float) -> bool:
+    cached = _wb_rating_cache_get(norm_key, now)
+    if cached and cached.get("ok"):
+        return False
+    hit = _WB_RATING_LAST_OK.get(norm_key)
+    if hit and (now - hit[0]) < _WB_RATING_CACHE_TTL_SEC:
+        return False
+    return True
+
+
+def schedule_wb_rating_refresh(wb_stores: list[Store]) -> None:
+    """Поставить в очередь фоновое обновление рейтинга (1 ключ / мин)."""
+    groups: dict[str, tuple[str, list[int]]] = {}
+    for s in wb_stores:
+        nk = _norm_wb_api_key(s.api_key or "")
+        if not nk:
+            continue
+        if nk not in groups:
+            groups[nk] = (s.api_key, [])
+        groups[nk][1].append(int(s.id))
+    now = time.time()
+    for nk, (api_key, store_ids) in groups.items():
+        if nk in _WB_RATING_BG_QUEUED:
+            continue
+        if not _wb_rating_needs_refresh(nk, now):
+            continue
+        _WB_RATING_BG_QUEUE.append((nk, api_key, store_ids))
+        _WB_RATING_BG_QUEUED.add(nk)
+    ensure_wb_rating_background_started()
+
+
+def ensure_wb_rating_background_started() -> None:
+    global _WB_RATING_BG_TASK
+    if _WB_RATING_BG_TASK is None or _WB_RATING_BG_TASK.done():
+        _WB_RATING_BG_TASK = asyncio.create_task(_wb_rating_background_worker())
+
+
+async def _wb_rating_background_worker() -> None:
+    while True:
+        try:
+            if not _WB_RATING_BG_QUEUE:
+                await asyncio.sleep(3)
+                continue
+            nk, api_key, store_ids = _WB_RATING_BG_QUEUE.pop(0)
+            _WB_RATING_BG_QUEUED.discard(nk)
+            now = time.time()
+            if not _wb_rating_needs_refresh(nk, now):
+                continue
+            result = await _get_wb_rating_for_key(
+                nk, api_key, store_ids, use_cache=False, allow_network=True, quiet=True,
+            )
+            if result.get("ok"):
+                log.info(
+                    "quality wb rating background ok key=%s stores=%s",
+                    _wb_key_log_hash(nk),
+                    store_ids,
+                )
+            elif result.get("error") == _WB_RATING_COOLDOWN_MSG:
+                _WB_RATING_BG_QUEUE.append((nk, api_key, store_ids))
+                _WB_RATING_BG_QUEUED.add(nk)
+            wait = max(0.0, _WB_RATING_GLOBAL_NEXT_AT - time.time())
+            if wait > 0:
+                await asyncio.sleep(wait)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("quality wb rating background worker failed")
+            await asyncio.sleep(15)
 
 
 def _wb_rating_resolve_cooldown(
     norm_key: str,
     store_ids: list[int],
     now: float,
+    *,
+    quiet: bool = False,
 ) -> Optional[dict[str, Any]]:
     """Ответ из cooldown без запроса в WB. None — cooldown не активен."""
     cooldown_until = _WB_RATING_COOLDOWN_UNTIL.get(norm_key, 0.0)
@@ -432,13 +516,14 @@ def _wb_rating_resolve_cooldown(
             return cached
         return _wb_rating_template_empty(error=_WB_TOKEN_MSG)
 
-    stale = _wb_rating_serve_from_last_ok(norm_key, store_ids)
+    stale = _wb_rating_serve_from_last_ok(norm_key, store_ids, quiet=quiet)
     if stale is not None:
         return stale
     cached = _wb_rating_cache_get(norm_key, now)
     if cached is not None and cached.get("ok"):
         return cached
-    log.info("quality wb rating cooldown key=%s stores=%s", key_hash, store_ids)
+    if not quiet:
+        log.info("quality wb rating cooldown key=%s stores=%s", key_hash, store_ids)
     return _wb_rating_template_empty(error=_WB_RATING_COOLDOWN_MSG)
 
 
@@ -502,6 +587,8 @@ async def _get_wb_rating_for_key(
     store_ids: list[int],
     *,
     use_cache: bool,
+    allow_network: bool = True,
+    quiet: bool = False,
 ) -> dict[str, Any]:
     """Рейтинг продавца WB для группы магазинов с одним API key."""
     if not norm_key:
@@ -512,20 +599,26 @@ async def _get_wb_rating_for_key(
         now = time.time()
         key_hash = _wb_key_log_hash(norm_key)
 
-        resolved = _wb_rating_resolve_cooldown(norm_key, store_ids, now)
+        resolved = _wb_rating_resolve_cooldown(norm_key, store_ids, now, quiet=quiet)
         if resolved is not None:
             return resolved
 
-        if use_cache:
-            cached = _wb_rating_cache_get(norm_key, now)
-            if cached is not None:
-                return cached
+        cached = _wb_rating_cache_get(norm_key, now)
+        if cached is not None and (use_cache or cached.get("ok")):
+            return cached
+
+        stale = _wb_rating_serve_from_last_ok(norm_key, store_ids, quiet=quiet)
+        if stale is not None:
+            return stale
+
+        if not allow_network:
+            return _wb_rating_template_empty(error=_WB_RATING_PENDING_MSG)
 
         async with _WB_RATING_GLOBAL_LOCK:
             global _WB_RATING_GLOBAL_NEXT_AT
             now = time.time()
             if now < _WB_RATING_GLOBAL_NEXT_AT:
-                stale = _wb_rating_serve_from_last_ok(norm_key, store_ids)
+                stale = _wb_rating_serve_from_last_ok(norm_key, store_ids, quiet=quiet)
                 if stale is not None:
                     return stale
                 return _wb_rating_template_empty(error=_WB_RATING_COOLDOWN_MSG)
@@ -548,10 +641,11 @@ async def _get_wb_rating_for_key(
         if status == 429:
             _WB_RATING_COOLDOWN_KIND[norm_key] = "rate"
             _WB_RATING_COOLDOWN_UNTIL[norm_key] = now + _WB_RATING_COOLDOWN_SEC
-            stale = _wb_rating_serve_from_last_ok(norm_key, store_ids)
+            stale = _wb_rating_serve_from_last_ok(norm_key, store_ids, quiet=quiet)
             if stale is not None:
                 return stale
-            log.info("quality wb rating 429 key=%s stores=%s", key_hash, store_ids)
+            if not quiet:
+                log.info("quality wb rating 429 key=%s stores=%s", key_hash, store_ids)
             return clean
 
         if status in (401, 403):
@@ -596,6 +690,8 @@ async def _fetch_all_wb_quality(wb_stores: list[Store], *, use_cache: bool) -> l
     if not wb_stores:
         return []
 
+    schedule_wb_rating_refresh(wb_stores)
+
     groups: dict[str, list[Store]] = {}
     for s in wb_stores:
         nk = _norm_wb_api_key(s.api_key or "")
@@ -618,7 +714,12 @@ async def _fetch_all_wb_quality(wb_stores: list[Store], *, use_cache: bool) -> l
             continue
         store_ids = [int(s.id) for s in group]
         templates[nk] = await _get_wb_rating_for_key(
-            nk, group[0].api_key, store_ids, use_cache=use_cache,
+            nk,
+            group[0].api_key,
+            store_ids,
+            use_cache=True,
+            allow_network=not use_cache,
+            quiet=use_cache,
         )
 
     return [

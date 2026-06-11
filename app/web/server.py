@@ -102,7 +102,7 @@ from app.core.ozon_alerts import (
     is_legacy_telegram_template,
 )
 from app.core.config_backup import export_config, import_config
-from app.core.quality_metrics import fetch_all_quality
+from app.core.quality_metrics import ensure_wb_rating_background_started, fetch_all_quality
 from app.core.workflows import (
     auto_process_ozon_buyer_chats,
     auto_process_ozon_important_alerts,
@@ -1368,6 +1368,11 @@ async def _auto_scheduler_loop() -> None:
                                 run_reason = slot
                             break
                 if run_reason and not busy:
+                    if mode == "interval":
+                        try:
+                            db.set_setting(AUTO_LAST_RUN_KEY, now.isoformat(timespec="seconds"))
+                        except Exception:
+                            pass
                     _auto_run_task = asyncio.create_task(_run_auto_slot(run_reason))
 
             await asyncio.sleep(15)
@@ -3259,6 +3264,7 @@ async def _startup_scheduler():
     if _telegram_report_task is None or _telegram_report_task.done():
         _telegram_report_task = asyncio.create_task(_telegram_report_loop())
         log.info("Telegram report scheduler started (MSK)")
+    ensure_wb_rating_background_started()
 
 
 @app.on_event("shutdown")

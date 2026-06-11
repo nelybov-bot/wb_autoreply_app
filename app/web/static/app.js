@@ -488,6 +488,23 @@
   }
 
   let _qualityLoading = false;
+  let _qualityPollTimer = null;
+
+  function syncQualityPoll(wbRows) {
+    const pending = (wbRows || []).some((r) => {
+      const err = r.error || '';
+      return err.includes('загружается') || err.includes('обновлены позже');
+    });
+    if (pending && !_qualityPollTimer) {
+      _qualityPollTimer = setInterval(() => {
+        if (_qualityLoading) return;
+        void loadQualityMetrics(false);
+      }, 65000);
+    } else if (!pending && _qualityPollTimer) {
+      clearInterval(_qualityPollTimer);
+      _qualityPollTimer = null;
+    }
+  }
 
   function formatPercentValue(v) {
     const n = Number(v);
@@ -592,7 +609,9 @@
     try {
       const q = refresh ? '?refresh=1' : '';
       const data = await api('/quality-metrics' + q, { timeoutMs: 120000 });
-      renderQualityTable('quality-wb-stores', data.wb || [], QUALITY_WB_COLUMNS, 'Нет активных магазинов WB');
+      const wbRows = data.wb || [];
+      renderQualityTable('quality-wb-stores', wbRows, QUALITY_WB_COLUMNS, 'Нет активных магазинов WB');
+      syncQualityPoll(wbRows);
       const wbKeyWarn = document.getElementById('quality-wb-key-warning');
       if (wbKeyWarn) {
         const isAdmin = currentUser && currentUser.role === 'admin';
