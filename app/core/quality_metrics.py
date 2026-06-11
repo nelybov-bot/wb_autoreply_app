@@ -65,9 +65,36 @@ _OZON_METRIC_LABELS = {
     "error_index": "Индекс",
 }
 
-# Временный лог сырого JSON Ozon (смотреть в «Журнал» по QUALITY_DEBUG)
-_QUALITY_DEBUG_LOG = True
+# Сырой JSON в журнал (QUALITY_DEBUG) — по умолчанию выкл.
+_QUALITY_DEBUG_LOG = False
 _QUALITY_DEBUG_MAX_LEN = 2500
+
+# Точные slug из /v1/rating/summary (см. QUALITY_DEBUG в журнале)
+_OZON_SLUG_TO_KEY: dict[str, str] = {
+    "rating_order_cancellation_cb": "cancellation",
+    "rating_order_cancellation_fbs": "cancellation",
+    "rating_order_cancellation_rfbs": "cancellation",
+    "rating_order_cancellation_global": "cancellation",
+    "rating_shipment_delay_cb": "overdue",
+    "rating_shipment_delay_fbs": "overdue",
+    "rating_shipment_delay_rfbs": "overdue",
+    "rating_shipment_delay_rfbs_sd": "overdue",
+}
+
+_OZON_SLUG_PRIORITY: dict[str, tuple[str, ...]] = {
+    "cancellation": (
+        "rating_order_cancellation_fbs",
+        "rating_order_cancellation_rfbs",
+        "rating_order_cancellation_cb",
+        "rating_order_cancellation_global",
+    ),
+    "overdue": (
+        "rating_shipment_delay_fbs",
+        "rating_shipment_delay_rfbs",
+        "rating_shipment_delay_rfbs_sd",
+        "rating_shipment_delay_cb",
+    ),
+}
 
 
 def _classify_ozon_rating_item(it: dict) -> Optional[str]:
@@ -135,7 +162,7 @@ def _ozon_metric_from_item(it: dict, key: str) -> dict:
         v = float(it.get("current_value")) if it.get("current_value") is not None else None
     except (TypeError, ValueError):
         v = None
-    if str(it.get("value_type") or "").upper() == "PERCENT":
+    if str(it.get("value_type") or "").upper() in ("PERCENT", "RATIO"):
         v = _normalize_ozon_percent(v)
 
     lvl = _ozon_status_level(str(it.get("status") or ""))
@@ -176,6 +203,19 @@ def _parse_ozon_summary(data: dict) -> list[dict]:
             all_items.extend(x for x in items if isinstance(x, dict))
 
     by_key: dict[str, dict] = {}
+    by_slug: dict[str, dict] = {}
+    for it in all_items:
+        slug = str(it.get("rating") or "").lower()
+        if slug:
+            by_slug[slug] = it
+
+    for metric_key, slugs in _OZON_SLUG_PRIORITY.items():
+        for slug in slugs:
+            it = by_slug.get(slug)
+            if it is not None:
+                by_key[metric_key] = _ozon_metric_from_item(it, metric_key)
+                break
+
     for it in all_items:
         key = _classify_ozon_rating_item(it)
         if not key or key in by_key:
@@ -263,20 +303,20 @@ def _pick_float(d: dict, *keys: str) -> Optional[float]:
     return None
 
 
-def _pick_nested_float(block: dict, parent_keys: tuple[str, ...], value_keys: tuple[str, ...]) -> Optional[float]:
-    for pk in parent_keys:
-        sub = block.get(pk)
-        if isinstance(sub, dict):
-            v = _pick_float(sub, *value_keys)
-            if v is not None:
-                return v
-    return None
+def _ozon_error_index_tariff(index_pct: float) -> float:
+    """Множитель платы за ошибки по шкале Ozon (ориентир ЛК)."""
+    if index_pct <= 5:
+        return 1.0
+    if index_pct <= 10:
+        return 2.0
+    return 3.0
 
 
 def _parse_ozon_error_index(data: Any) -> Optional[dict]:
     """
-    POST /v1/rating/index/fbs/info — итоговый индекс, компоненты (просрочки/отмены), множитель платы.
-    Имена полей в API могут отличаться — подбираем по списку + временный QUALITY_DEBUG лог.
+    POST /v1/rating/index/fbs/info
+    Ответ: {"index": 0.25, "processing_costs_sum": 501.81, "defects": [...], ...}
+    index — доля 0–1 (0.25 = 25%).
     """
     if not isinstance(data, dict):
         return None
@@ -286,109 +326,41 @@ def _parse_ozon_error_index(data: Any) -> Optional[dict]:
     if isinstance(res, dict):
         block = res
 
-    nested = block
-    for nest_key in ("index", "error_index", "rating_index", "fbs_index"):
-        sub = block.get(nest_key)
-        if isinstance(sub, dict):
-            nested = sub
-            break
+    raw_idx = block.get("index")
+    total: Optional[float] = None
+    if isinstance(raw_idx, (int, float)):
+        total = float(raw_idx)
+    elif isinstance(raw_idx, dict):
+        total = _pick_float(raw_idx, "value", "index", "current_value")
 
-    total = _pick_float(
-        block,
-        "total_index",
-        "error_index_value",
-        "fbs_error_index",
-        "total",
-        "index_value",
-        "rating_index",
-        "current_value",
-        "value",
-    )
     if total is None:
-        total = _pick_float(
-            nested,
-            "total_index",
-            "error_index_value",
-            "index_value",
-            "value",
-            "current_value",
-            "index",
-        )
-
-    cancel = _pick_nested_float(
-        block,
-        ("cancellation", "cancel", "canceled", "cancelled", "cancellation_index", "index_cancellation"),
-        ("index", "value", "percent", "current_value", "index_value", "cancellation_index", "cancel_index"),
-    )
-    if cancel is None:
-        cancel = _pick_float(
-            block,
-            "cancellation_index",
-            "cancel_index",
-            "index_cancellation",
-            "cancellation_percent",
-            "cancel_percent",
-            "canceled_percent",
-        )
-
-    delay = _pick_nested_float(
-        block,
-        ("delay", "late", "overdue", "shipment_delay", "late_shipment", "delay_index", "shipment"),
-        ("index", "value", "percent", "current_value", "index_value", "delay_index", "late_index"),
-    )
-    if delay is None:
-        delay = _pick_float(
-            block,
-            "delay_index",
-            "late_index",
-            "overdue_index",
-            "shipment_delay_index",
-            "late_shipment_index",
-            "delay_percent",
-            "overdue_percent",
-        )
-
-    tariff = _pick_float(
-        block,
-        "tariff_multiplier",
-        "multiplier",
-        "fee_multiplier",
-        "payment_multiplier",
-        "tariff_coefficient",
-        "coefficient",
-        "tariff",
-    )
-    if tariff is None:
-        tariff = _pick_nested_float(
-            block,
-            ("tariff", "payment", "fee"),
-            ("multiplier", "coefficient", "value", "tariff_multiplier"),
-        )
+        total = _pick_float(block, "index")
 
     total = _normalize_ozon_percent(total)
-    cancel = _normalize_ozon_percent(cancel)
-    delay = _normalize_ozon_percent(delay)
-
-    if total is None and cancel is None and delay is None:
+    if total is None:
         return None
 
-    hint_parts: list[str] = ["Индекс ошибок FBS/rFBS за 14 дней"]
-    if delay is not None:
-        hint_parts.append(f"за просрочки {delay:g}%")
-    if cancel is not None:
-        hint_parts.append(f"за отмены {cancel:g}%")
-    if tariff is not None and tariff > 1:
-        hint_parts.append(f"плата ×{tariff:g}")
+    costs: Optional[float] = None
+    try:
+        if block.get("processing_costs_sum") is not None:
+            costs = float(block["processing_costs_sum"])
+    except (TypeError, ValueError):
+        costs = None
 
-    extra = ""
-    if tariff is not None and tariff > 1:
-        extra = f"×{tariff:g}".replace(".0", "")
+    tariff = _ozon_error_index_tariff(total)
+    hint_parts = [f"Индекс ошибок FBS/rFBS · {total:g}%"]
+    if costs is not None and costs > 0:
+        hint_parts.append(f"плата {costs:,.0f} ₽".replace(",", " "))
+    if tariff > 1:
+        hint_parts.append(f"тариф ×{tariff:g}")
+
+    extra = f"×{tariff:g}".replace(".0", "") if tariff > 1 else ""
 
     return {
         "total": total,
-        "cancel_component": cancel,
-        "delay_component": delay,
-        "tariff_multiplier": tariff,
+        "cancel_component": None,
+        "delay_component": None,
+        "tariff_multiplier": tariff if tariff > 1 else None,
         "hint": " · ".join(hint_parts),
         "extra": extra,
     }
