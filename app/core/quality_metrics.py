@@ -19,7 +19,6 @@ log = logging.getLogger("quality")
 
 _CACHE: dict[int, tuple[float, dict]] = {}
 _CACHE_TTL_SEC = 30 * 60
-_WB_STORE_GAP_SEC = 1.25  # пауза между запросами rating для разных API key
 _WB_RATING_CACHE_TTL_SEC = 30 * 60
 _WB_RATING_COOLDOWN_SEC = 60
 _WB_RATING_COOLDOWN_MSG = (
@@ -34,6 +33,8 @@ _WB_RATING_LAST_OK: dict[str, tuple[float, dict]] = {}
 _WB_RATING_COOLDOWN_UNTIL: dict[str, float] = {}
 _WB_RATING_COOLDOWN_KIND: dict[str, str] = {}  # "rate" | "auth"
 _WB_RATING_LOCKS: dict[str, asyncio.Lock] = {}
+_WB_RATING_GLOBAL_LOCK = asyncio.Lock()
+_WB_RATING_GLOBAL_NEXT_AT: float = 0.0  # WB rating: не чаще 1 HTTP-вызова/мин на процесс (лимит IP/аккаунта)
 _WB_AUTH_ERROR_CACHE_SEC = 5 * 60
 _WB_RATING_CLEANUP_MARGIN_SEC = 5 * 60
 
@@ -520,7 +521,18 @@ async def _get_wb_rating_for_key(
             if cached is not None:
                 return cached
 
-        template = await _call_wb_rating_api(api_key)
+        async with _WB_RATING_GLOBAL_LOCK:
+            global _WB_RATING_GLOBAL_NEXT_AT
+            now = time.time()
+            if now < _WB_RATING_GLOBAL_NEXT_AT:
+                stale = _wb_rating_serve_from_last_ok(norm_key, store_ids)
+                if stale is not None:
+                    return stale
+                return _wb_rating_template_empty(error=_WB_RATING_COOLDOWN_MSG)
+
+            template = await _call_wb_rating_api(api_key)
+            _WB_RATING_GLOBAL_NEXT_AT = time.time() + _WB_RATING_COOLDOWN_SEC
+
         now = time.time()
         status = template.get("_http_status")
         clean = {k: v for k, v in template.items() if k != "_http_status"}
@@ -599,7 +611,7 @@ async def _fetch_all_wb_quality(wb_stores: list[Store], *, use_cache: bool) -> l
         seen.add(nk)
         keys_in_order.append(nk)
 
-    for i, nk in enumerate(keys_in_order):
+    for nk in keys_in_order:
         group = groups[nk]
         if not nk:
             templates[nk] = _wb_rating_template_empty(error="не задан API-ключ")
@@ -608,8 +620,6 @@ async def _fetch_all_wb_quality(wb_stores: list[Store], *, use_cache: bool) -> l
         templates[nk] = await _get_wb_rating_for_key(
             nk, group[0].api_key, store_ids, use_cache=use_cache,
         )
-        if i + 1 < len(keys_in_order):
-            await asyncio.sleep(_WB_STORE_GAP_SEC)
 
     return [
         _apply_wb_template_to_store(templates[_norm_wb_api_key(s.api_key or "")], s)
