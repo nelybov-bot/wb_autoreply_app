@@ -446,3 +446,13 @@ class OzonClient:
             return res if isinstance(res, dict) else {}
         return {}
 
+    async def rating_summary(self) -> dict:
+        """POST /v1/rating/summary — текущие рейтинги продавца."""
+        data = await self._request("POST", "/v1/rating/summary", json_body={})
+        return data if isinstance(data, dict) else {}
+
+    async def rating_index_fbs_info(self) -> dict:
+        """POST /v1/rating/index/fbs/info — индекс ошибок FBS/rFBS."""
+        data = await self._request("POST", "/v1/rating/index/fbs/info", json_body={})
+        return data if isinstance(data, dict) else {}
+

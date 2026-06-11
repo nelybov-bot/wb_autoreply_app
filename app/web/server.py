@@ -101,6 +101,7 @@ from app.core.ozon_alerts import (
     is_legacy_telegram_template,
 )
 from app.core.config_backup import export_config, import_config
+from app.core.quality_metrics import fetch_all_quality
 from app.core.workflows import (
     auto_process_ozon_buyer_chats,
     auto_process_ozon_important_alerts,
@@ -3062,6 +3063,17 @@ async def api_ozon_actions_auto_remove(
 @app.get("/api/stats")
 def api_stats(db: Database = Depends(get_db), _: UserRow = Depends(require_user)):
     return db.get_stats()
+
+
+@app.get("/api/quality-metrics")
+async def api_quality_metrics(
+    refresh: bool = Query(False),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    """Показатели качества по магазинам WB и Ozon (кэш ~30 мин)."""
+    stores = db.list_stores()
+    return await fetch_all_quality(stores, use_cache=not refresh)
 
 
 def _collapse_traceback_lines_for_log_ui(lines: list[str]) -> list[str]:

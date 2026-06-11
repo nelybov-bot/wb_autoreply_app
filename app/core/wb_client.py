@@ -59,6 +59,11 @@ class WbClient:
         # 429 от WB «global limiter» повторять бессмысно — только усугубляет лимит; отдаём наверх сразу.
         return await retry(_do, retry_on_status=(500, 502, 503, 504), retries=4)
 
+    async def get_seller_rating(self) -> dict:
+        """GET /api/common/v1/rating — рейтинг продавца по отзывам и их количество."""
+        data = await self._request("GET", "/api/common/v1/rating")
+        return data if isinstance(data, dict) else {}
+
     async def has_new(self) -> dict:
         return await self._request("GET", "/api/v1/new-feedbacks-questions")
 

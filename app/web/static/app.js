@@ -400,10 +400,115 @@
       if (wrap) {
         wrap.innerHTML = summary.map(x => `<div class="summary-item"><div class="k">${escapeHtml(x.k)}</div><div class="v">${escapeHtml(x.v)}</div></div>`).join('');
       }
+      void loadQualityMetrics(false);
     } catch (err) {
       toast(err.message, 'error');
     }
   }
+
+  let _qualityLoading = false;
+
+  function formatQualityMetricValue(m) {
+    if (!m || m.value == null || m.value === '') return '—';
+    const v = Number(m.value);
+    if (Number.isNaN(v)) return '—';
+    if (m.unit === 'stars') return v.toFixed(2).replace(/\.00$/, '') + ' ★';
+    if (m.unit === 'percent') return v.toFixed(1).replace(/\.0$/, '') + '%';
+    return String(v);
+  }
+
+  function qualityBarPercent(m) {
+    if (!m || m.value == null) return 0;
+    const v = Number(m.value);
+    if (Number.isNaN(v)) return 0;
+    if (m.unit === 'stars') return Math.max(0, Math.min(100, (v / 5) * 100));
+    if (m.unit === 'percent') {
+      if (m.key === 'error_index' || m.key === 'cancellation' || m.key === 'overdue') {
+        return Math.max(0, Math.min(100, v * 5));
+      }
+      return Math.max(0, Math.min(100, v));
+    }
+    return Math.max(0, Math.min(100, v));
+  }
+
+  function renderQualityMetricRow(m) {
+    const lvl = m.level || 'na';
+    const pct = qualityBarPercent(m);
+    const extra = m.extra ? `<div class="quality-metric-extra">${escapeHtml(m.extra)}</div>` : '';
+    return `
+      <div class="quality-metric quality-metric--${escapeHtml(lvl)}">
+        <div class="quality-metric-top">
+          <span class="quality-metric-label">${escapeHtml(m.label || '')}</span>
+          <span class="quality-metric-value">${escapeHtml(formatQualityMetricValue(m))}</span>
+        </div>
+        <div class="quality-metric-bar" aria-hidden="true"><div class="quality-metric-bar-fill" style="width:${pct}%"></div></div>
+        ${extra}
+      </div>`;
+  }
+
+  function renderQualityStoreCard(row) {
+    const inactive = row.active === false ? ' quality-store-card--inactive' : '';
+    if (row.error && !row.metrics?.length) {
+      return `
+        <article class="quality-store-card${inactive}">
+          <header class="quality-store-card-head">
+            <h4 class="quality-store-name">${escapeHtml(row.store_name || '')}</h4>
+          </header>
+          <p class="quality-store-error">${escapeHtml(row.error)}</p>
+        </article>`;
+    }
+    const metrics = (row.metrics || []).map(renderQualityMetricRow).join('');
+    return `
+      <article class="quality-store-card${inactive}">
+        <header class="quality-store-card-head">
+          <h4 class="quality-store-name">${escapeHtml(row.store_name || '')}</h4>
+        </header>
+        <div class="quality-metrics-list">${metrics || '<p class="form-hint">Нет данных</p>'}</div>
+        ${row.error ? `<p class="quality-store-warn">${escapeHtml(row.error)}</p>` : ''}
+      </article>`;
+  }
+
+  function renderQualityColumn(wrapId, rows, emptyLabel) {
+    const wrap = document.getElementById(wrapId);
+    if (!wrap) return;
+    if (!rows || !rows.length) {
+      wrap.innerHTML = `<div class="quality-empty">${escapeHtml(emptyLabel)}</div>`;
+      return;
+    }
+    wrap.innerHTML = rows.map(renderQualityStoreCard).join('');
+  }
+
+  async function loadQualityMetrics(refresh = false) {
+    if (_qualityLoading) return;
+    _qualityLoading = true;
+    const hint = document.getElementById('quality-updated-hint');
+    const btn = document.getElementById('btn-refresh-quality');
+    if (hint) hint.textContent = 'Загрузка показателей…';
+    if (btn) btn.disabled = true;
+    try {
+      const q = refresh ? '?refresh=1' : '';
+      const data = await api('/quality-metrics' + q, { timeoutMs: 120000 });
+      renderQualityColumn('quality-wb-stores', data.wb || [], 'Нет активных магазинов WB');
+      renderQualityColumn('quality-ozon-stores', data.ozon || [], 'Нет активных магазинов Ozon');
+      const ttl = Number(data.cache_ttl_sec) || 1800;
+      const ttlMin = Math.round(ttl / 60);
+      if (hint) {
+        hint.textContent = refresh
+          ? `Обновлено только что · кэш ${ttlMin} мин`
+          : `Данные с маркетплейсов · кэш до ${ttlMin} мин`;
+      }
+    } catch (err) {
+      if (hint) hint.textContent = 'Не удалось загрузить показатели';
+      toast(err.message || 'Ошибка загрузки показателей', 'error');
+    } finally {
+      _qualityLoading = false;
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  document.getElementById('btn-refresh-quality')?.addEventListener('click', () => {
+    void loadQualityMetrics(true);
+  });
 
   // ---- Stores ----
   let stores = [];

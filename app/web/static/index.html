@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
-  <link rel="stylesheet" href="/static/styles.css?v=13">
+  <link rel="stylesheet" href="/static/styles.css?v=14">
 </head>
 <body>
   <div class="bg-noise" aria-hidden="true"></div>
@@ -132,9 +132,32 @@
       <header class="panel-head">
         <div>
           <h2 class="panel-title">Сводка</h2>
-          <p class="panel-desc">Очередь, отправки за сегодня и операционные метрики по всем маркетплейсам</p>
+          <p class="panel-desc">Показатели качества, очередь ответов и операционная сводка</p>
         </div>
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-quality" title="Обновить показатели с маркетплейсов">Обновить показатели</button>
       </header>
+      <section class="quality-section" aria-labelledby="quality-section-title">
+        <div class="quality-section-head">
+          <h3 id="quality-section-title" class="quality-section-title">Показатели качества</h3>
+          <p class="form-hint quality-section-hint" id="quality-updated-hint">Загрузка…</p>
+        </div>
+        <div class="quality-mp-board" id="quality-mp-board">
+          <div class="quality-mp-col" data-mp="wb">
+            <header class="quality-mp-col-head">
+              <span class="mp-pill mp-wb">WB</span>
+              <span class="quality-mp-col-title">Wildberries</span>
+            </header>
+            <div class="quality-store-grid" id="quality-wb-stores"></div>
+          </div>
+          <div class="quality-mp-col" data-mp="ozon">
+            <header class="quality-mp-col-head">
+              <span class="mp-pill mp-ozon">OZON</span>
+              <span class="quality-mp-col-title">Ozon</span>
+            </header>
+            <div class="quality-store-grid" id="quality-ozon-stores"></div>
+          </div>
+        </div>
+      </section>
       <div class="stats-grid" id="stats-cards">
         <div class="stat-card highlight">
           <div class="value" id="stat-today">—</div>
