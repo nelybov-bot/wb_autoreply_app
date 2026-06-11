@@ -1160,7 +1160,8 @@ async def _send_telegram_report(
     except Exception:
         pass
     log.info(
-        "telegram_report sent interval=%s manual=%s reviews=%s questions=%s chats=%s ozon_removed=%s",
+        "telegram_report sent interval=%s manual=%s reviews=%s questions=%s chats=%s "
+        "ozon_removed=%s ozon_alerts=%s",
         interval,
         manual,
         stats.get("reviews_sent"),

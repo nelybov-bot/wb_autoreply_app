@@ -81,6 +81,10 @@ def _classify_ozon_rating_item(it: dict) -> Optional[str]:
         "rating_cancellation_global",
         "rating_fbs_cancellation",
         "rating_fbs_cancellation_percent",
+        "rating_order_cancellation",
+        "rating_order_cancel",
+        "rating_cancellation",
+        "rating_fbs_order_cancellation",
     ):
         return "cancellation"
     if rating in (
@@ -89,6 +93,9 @@ def _classify_ozon_rating_item(it: dict) -> Optional[str]:
         "rating_global_shipment_delay",
         "rating_fbs_late_shipment",
         "rating_fbs_late_shipment_percent",
+        "rating_shipment_delay",
+        "rating_fbs_shipment_delay",
+        "rating_order_shipment_delay",
     ):
         return "overdue"
 
@@ -128,6 +135,8 @@ def _ozon_metric_from_item(it: dict, key: str) -> dict:
         v = float(it.get("current_value")) if it.get("current_value") is not None else None
     except (TypeError, ValueError):
         v = None
+    if str(it.get("value_type") or "").upper() == "PERCENT":
+        v = _normalize_ozon_percent(v)
 
     lvl = _ozon_status_level(str(it.get("status") or ""))
     if lvl == "na":
@@ -191,6 +200,16 @@ def _quality_debug_log(store_id: int, label: str, payload: Any) -> None:
     if len(txt) > _QUALITY_DEBUG_MAX_LEN:
         txt = txt[:_QUALITY_DEBUG_MAX_LEN] + "…"
     log.info("QUALITY_DEBUG store_id=%s %s: %s", store_id, label, txt)
+
+
+def _normalize_ozon_percent(value: Optional[float]) -> Optional[float]:
+    """Привести к процентам 0–100: Ozon иногда отдаёт долю (0.03 = 3%)."""
+    if value is None:
+        return None
+    av = abs(value)
+    if 0 < av < 0.01:
+        return value * 100
+    return value
 
 
 def _pick_float(d: dict, *keys: str) -> Optional[float]:
@@ -296,6 +315,10 @@ def _parse_ozon_error_index(data: Any) -> Optional[dict]:
             ("multiplier", "coefficient", "value", "tariff_multiplier"),
         )
 
+    total = _normalize_ozon_percent(total)
+    cancel = _normalize_ozon_percent(cancel)
+    delay = _normalize_ozon_percent(delay)
+
     if total is None and cancel is None and delay is None:
         return None
 
@@ -321,24 +344,6 @@ def _parse_ozon_error_index(data: Any) -> Optional[dict]:
     }
 
 
-async def _wb_estimate_rating_with_retry(client: WbClient, store_id: int) -> dict:
-    last_err: Optional[HttpStatusError] = None
-    for attempt in range(3):
-        try:
-            est = await client.estimate_seller_rating_from_feedbacks(take=100)
-            _quality_debug_log(store_id, "wb_rating_fallback", est)
-            return est
-        except HttpStatusError as e:
-            last_err = e
-            if e.status == 429 and attempt < 2:
-                await asyncio.sleep(1.5 * (attempt + 1))
-                continue
-            raise
-    if last_err:
-        raise last_err
-    return {}
-
-
 async def _fetch_wb_quality(store: Store) -> dict:
     out: dict[str, Any] = {
         "store_id": store.id,
@@ -357,27 +362,10 @@ async def _fetch_wb_quality(store: Store) -> dict:
         client = WbClient(key)
         rating: Optional[float] = None
         feedback_count: Optional[int] = None
-        rating_hint = "Рейтинг по отзывам"
-        rating_extra = ""
+        rating_hint = "Рейтинг продавца по отзывам (WB API)"
 
-        # 1) Отзывы — на базовом токене обычно работают (как автозагрузка отзывов).
-        try:
-            est = await _wb_estimate_rating_with_retry(client, store.id)
-            try:
-                rating = float(est["rating"]) if est.get("rating") is not None else None
-            except (TypeError, ValueError):
-                rating = None
-            sample = int(est.get("sample_size") or 0)
-            if rating is not None:
-                rating_hint = f"≈ среднее по {sample} последним отзывам"
-                rating_extra = "≈"
-        except HttpStatusError as e:
-            _quality_debug_log(store.id, "wb_feedbacks_error", {"status": e.status, "body": (e.body or "")[:800]})
-            out["error"] = f"WB: нет доступа к отзывам (HTTP {e.status})"
-            log.warning("quality wb store_id=%s: feedbacks HTTP %s", store.id, e.status)
-            return out
-
-        # 2) Официальный рейтинг — только сервисный токен; если есть, заменяем ≈ на точное значение.
+        # Только GET /api/common/v1/rating — как на странице продавца WB.
+        # Очередь неотвеченных отзывов (isAnswered=false) к рейтингу магазина не относится.
         try:
             data = await client.get_seller_rating()
             _quality_debug_log(store.id, "wb_rating", data)
@@ -386,10 +374,8 @@ async def _fetch_wb_quality(store: Store) -> dict:
             if valuation is not None:
                 try:
                     rating = float(valuation)
-                    rating_hint = "Рейтинг продавца (WB API)"
-                    rating_extra = ""
                 except (TypeError, ValueError):
-                    pass
+                    rating = None
             if count is not None:
                 try:
                     feedback_count = int(count)
@@ -397,22 +383,22 @@ async def _fetch_wb_quality(store: Store) -> dict:
                     feedback_count = None
         except HttpStatusError as e:
             _quality_debug_log(store.id, "wb_rating_error", {"status": e.status, "body": (e.body or "")[:800]})
-            if e.status not in (401, 403, 429) and rating is None:
-                raise
-            if rating is None:
+            if e.status in (401, 403):
+                out["error"] = (
+                    "Нет доступа к рейтингу — нужен сервисный токен WB «Вопросы и отзывы» "
+                    "(очередь отзывов ≠ рейтинг магазина)"
+                )
+            else:
                 out["error"] = f"WB API {e.status}"
-                return out
+            log.warning("quality wb store_id=%s: rating HTTP %s", store.id, e.status)
+            return out
 
         if rating is None:
-            out["error"] = "WB: в отзывах нет оценок для расчёта рейтинга"
+            out["error"] = "WB: API не вернул рейтинг продавца"
             return out
 
         lvl = _metric_level(rating, warn=_WB_RATING_WARN, danger=_WB_RATING_DANGER, lower_is_better=False)
         extra = f"{feedback_count:,}".replace(",", " ") + " отзывов" if feedback_count is not None else ""
-        if rating_extra and extra:
-            extra = f"{rating_extra} · {extra}"
-        elif rating_extra:
-            extra = rating_extra
         out["metrics"] = [
             {
                 "key": "review_rating",

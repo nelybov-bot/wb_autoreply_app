@@ -71,8 +71,8 @@ class WbClient:
 
     async def estimate_seller_rating_from_feedbacks(self, *, take: int = 100) -> dict:
         """
-        Запасной вариант, если /api/common/v1/rating недоступен (часто 403 на базовом токене).
-        Средняя productValuation по последним отзывам — приближение к рейтингу в ЛК.
+        Средняя productValuation по неотвеченным отзывам в очереди (isAnswered=false).
+        НЕ использовать как рейтинг магазина — для этого только GET /api/common/v1/rating.
         """
         f = await self.list_feedbacks(take=take, skip=0)
         fdata = (f or {}).get("data") if isinstance(f, dict) else None

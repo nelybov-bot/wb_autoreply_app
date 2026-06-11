@@ -441,7 +441,8 @@
       return m.extra === '≈' ? '≈ ' + stars : stars;
     }
     if (m.unit === 'percent') {
-      let s = v.toFixed(1).replace(/\.0$/, '') + '%';
+      const pct = v < 1 && v > 0 ? v.toFixed(2).replace(/\.?0+$/, '') : v.toFixed(1).replace(/\.0$/, '');
+      let s = pct + '%';
       if (m.key === 'error_index' && m.extra) s += ' ' + m.extra;
       return s;
     }
