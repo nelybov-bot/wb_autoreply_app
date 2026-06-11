@@ -359,6 +359,24 @@
   wireAppNav();
 
   // ---- Сводка ----
+  function wireSummaryOpsToggle() {
+    const btn = document.getElementById('btn-summary-ops-toggle');
+    const body = document.getElementById('summary-ops-body');
+    const wrap = document.getElementById('summary-ops-collapsible');
+    if (!btn || !body) return;
+    const setOpen = (open) => {
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      body.hidden = !open;
+      if (wrap) wrap.classList.toggle('is-open', open);
+    };
+    setOpen(false);
+    btn.addEventListener('click', () => {
+      setOpen(btn.getAttribute('aria-expanded') !== 'true');
+    });
+  }
+
+  wireSummaryOpsToggle();
+
   async function loadStats() {
     try {
       const s = await api('/stats');
@@ -372,6 +390,12 @@
       set('stat-queue-questions', q.new_questions ?? 0);
       set('stat-wb-chats-today', s.wb_chat_sent_today ?? 0);
       set('stat-ozon-chats-today', s.ozon_chat_sent_today ?? 0);
+      const metaEl = document.getElementById('summary-ops-toggle-meta');
+      if (metaEl) {
+        const sent = Number(s.sent_today) || 0;
+        const queue = (Number(q.new_reviews) || 0) + (Number(q.new_questions) || 0);
+        metaEl.textContent = `сегодня ${sent} · в очереди ${queue}`;
+      }
       const storesMeta = s.stores || {};
       let auto = null;
       try { auto = await api('/auto-schedule/status'); } catch (_) {}

@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
-  <link rel="stylesheet" href="/static/styles.css?v=17">
+  <link rel="stylesheet" href="/static/styles.css?v=18">
 </head>
 <body>
   <div class="bg-noise" aria-hidden="true"></div>
@@ -132,10 +132,47 @@
       <header class="panel-head">
         <div>
           <h2 class="panel-title">Сводка</h2>
-          <p class="panel-desc">Показатели качества, очередь ответов и операционная сводка</p>
+          <p class="panel-desc">Показатели качества по магазинам WB и Ozon</p>
         </div>
         <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-quality" title="Обновить показатели с маркетплейсов">Обновить показатели</button>
       </header>
+      <section class="summary-ops-collapsible" id="summary-ops-collapsible" aria-label="Очередь и операционка">
+        <button type="button" class="summary-ops-toggle" id="btn-summary-ops-toggle" aria-expanded="false" aria-controls="summary-ops-body">
+          <span class="summary-ops-toggle-main">
+            <span class="summary-ops-toggle-title">Очередь и операционка</span>
+            <span class="summary-ops-toggle-meta" id="summary-ops-toggle-meta">загрузка…</span>
+          </span>
+          <span class="summary-ops-chevron" aria-hidden="true"></span>
+        </button>
+        <div class="summary-ops-body" id="summary-ops-body" hidden>
+          <div class="stats-grid stats-grid--compact" id="stats-cards">
+            <div class="stat-card highlight">
+              <div class="value" id="stat-today">—</div>
+              <div class="label">Отправлено сегодня</div>
+            </div>
+            <div class="stat-card">
+              <div class="value" id="stat-queue-reviews">—</div>
+              <div class="label">Новых отзывов</div>
+            </div>
+            <div class="stat-card">
+              <div class="value" id="stat-queue-questions">—</div>
+              <div class="label">Новых вопросов</div>
+            </div>
+            <div class="stat-card">
+              <div class="value" id="stat-wb-chats-today">—</div>
+              <div class="label">Чаты WB сегодня</div>
+            </div>
+            <div class="stat-card">
+              <div class="value" id="stat-ozon-chats-today">—</div>
+              <div class="label">Чаты Ozon сегодня</div>
+            </div>
+          </div>
+          <div class="chart-section chart-section--compact">
+            <h3 class="chart-section-title">Операционная сводка</h3>
+            <div class="summary-grid" id="summary-grid"></div>
+          </div>
+        </div>
+      </section>
       <section class="quality-section" aria-labelledby="quality-section-title">
         <div class="quality-section-head">
           <h3 id="quality-section-title" class="quality-section-title">Показатели качества</h3>
@@ -160,33 +197,6 @@
           </div>
         </div>
       </section>
-      <h3 class="summary-block-title">Очередь и отправки</h3>
-      <div class="stats-grid" id="stats-cards">
-        <div class="stat-card highlight">
-          <div class="value" id="stat-today">—</div>
-          <div class="label">Отправлено сегодня</div>
-        </div>
-        <div class="stat-card">
-          <div class="value" id="stat-queue-reviews">—</div>
-          <div class="label">Новых отзывов</div>
-        </div>
-        <div class="stat-card">
-          <div class="value" id="stat-queue-questions">—</div>
-          <div class="label">Новых вопросов</div>
-        </div>
-        <div class="stat-card">
-          <div class="value" id="stat-wb-chats-today">—</div>
-          <div class="label">Чаты WB сегодня</div>
-        </div>
-        <div class="stat-card">
-          <div class="value" id="stat-ozon-chats-today">—</div>
-          <div class="label">Чаты Ozon сегодня</div>
-        </div>
-      </div>
-      <div class="chart-section">
-        <h3>Операционная сводка</h3>
-        <div class="summary-grid" id="summary-grid"></div>
-      </div>
     </section>
 
     <!-- Магазины -->
@@ -1064,6 +1074,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=34"></script>
+  <script src="/static/app.js?v=35"></script>
 </body>
 </html>
