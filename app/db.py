@@ -54,6 +54,7 @@ def _empty_activity_stats() -> dict:
         "ozon_threat_hide_products": 0,
         "ozon_threat_fine_products": 0,
         "ozon_threat_fine_by_amount": {},
+        "reviews_by_rating": {},
     }
 
 
@@ -541,6 +542,54 @@ class Database:
             self._conn.commit()
 
     # ---------- Ozon important alerts ----------
+    def has_recent_ozon_alert_telegram(
+        self,
+        store_id: int,
+        alert_category: str,
+        product_skus: str,
+        *,
+        hours: int = 24,
+    ) -> bool:
+        """Уже отправляли в Telegram похожий инцидент (магазин + категория + SKU)."""
+        cat = (alert_category or "").strip().lower()
+        if not cat:
+            return False
+        skus = [s.strip() for s in (product_skus or "").split(",") if s.strip()]
+        if not skus:
+            return False
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=max(1, int(hours)))
+        cutoff_iso = cutoff.isoformat(timespec="seconds")
+        with _DB_LOCK:
+            rows = self._conn.execute(
+                """SELECT product_skus FROM ozon_important_alerts
+                   WHERE store_id=? AND alert_category=? AND telegram_sent=1
+                     AND status!='ignored' AND ts >= ?
+                   ORDER BY id DESC LIMIT 40""",
+                (int(store_id), cat, cutoff_iso),
+            ).fetchall()
+        sku_set = set(skus)
+        for row in rows:
+            raw = row["product_skus"] if isinstance(row, dict) else row[0]
+            other = {s.strip() for s in str(raw or "").split(",") if s.strip()}
+            if sku_set & other:
+                return True
+        return False
+
+    def list_ozon_alerts_pending_telegram(self, store_id: int, *, limit: int = 20) -> list[dict]:
+        with _DB_LOCK:
+            rows = self._conn.execute(
+                """SELECT id, chat_type, message_at, message_text, threat_type, amount,
+                          product_ref, summary, action_needed, alert_category, product_skus
+                   FROM ozon_important_alerts
+                   WHERE store_id=? AND telegram_sent=0 AND status='new'
+                   ORDER BY id ASC LIMIT ?""",
+                (int(store_id), int(limit)),
+            ).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            out.append({k: r[k] for k in r.keys()})
+        return out
+
     def has_ozon_important_alert(self, store_id: int, chat_id: str, message_id: str) -> bool:
         with _DB_LOCK:
             row = self._conn.execute(
@@ -1411,6 +1460,13 @@ class Database:
                      AND {ts_rng}""",
                 tuple(ae_params),
             ).fetchall()
+            rating_rows = self._conn.execute(
+                f"""SELECT rating, COUNT(*) AS n FROM items
+                   WHERE status='sent' AND item_type='review' AND rating BETWEEN 1 AND 5
+                     AND {sent_rng}
+                   GROUP BY rating""",
+                tuple(item_params),
+            ).fetchall()
         products_removed = 0
         for row in audit_rows:
             raw = row["meta_json"] if isinstance(row, dict) else row[0]
@@ -1421,11 +1477,21 @@ class Database:
                 products_removed += int(meta.get("products_removed") or 0)
             except Exception:
                 continue
+        reviews_by_rating: dict[int, int] = {}
+        for row in rating_rows:
+            try:
+                r = int(row["rating"] if isinstance(row, dict) else row[0])
+                n = int(row["n"] if isinstance(row, dict) else row[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if 1 <= r <= 5 and n > 0:
+                reviews_by_rating[r] = n
         wb_chats = int(wb["n"]) if wb else 0
         oz_chats = int(oz["n"]) if oz else 0
         card_errors = self.count_card_error_alerts_since(since_iso, until_iso)
         stats = {
             "reviews_sent": int(rev["n"]) if rev else 0,
+            "reviews_by_rating": reviews_by_rating,
             "questions_sent": int(qu["n"]) if qu else 0,
             "ozon_products_removed": products_removed,
             "wb_chat_replies": wb_chats,

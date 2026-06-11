@@ -74,8 +74,12 @@ def _export_auto_schedule(db: Database, id_to_key: dict[int, str]) -> dict:
         "store_keys": [],
         "schedule_mode": "slots",
         "interval_hours": 1,
-        "run_reviews": True,
-        "run_questions": True,
+        "run_reviews_wb": True,
+        "run_reviews_yam": True,
+        "run_reviews_ozon": False,
+        "run_questions_wb": True,
+        "run_questions_yam": True,
+        "run_questions_ozon": True,
         "run_wb_chats": False,
         "run_ozon_chats": False,
         "run_ozon_alerts": False,
@@ -104,8 +108,27 @@ def _export_auto_schedule(db: Database, id_to_key: dict[int, str]) -> dict:
         cfg["interval_hours"] = max(1, min(int(obj.get("interval_hours") or 1), 24))
     except (TypeError, ValueError):
         cfg["interval_hours"] = 1
-    cfg["run_reviews"] = bool(obj.get("run_reviews", True))
-    cfg["run_questions"] = bool(obj.get("run_questions", True))
+    _mp_keys = (
+        "run_reviews_wb", "run_reviews_yam", "run_reviews_ozon",
+        "run_questions_wb", "run_questions_yam", "run_questions_ozon",
+    )
+    if not any(k in obj for k in _mp_keys[:3]):
+        legacy_r = bool(obj.get("run_reviews", True))
+        legacy_q = bool(obj.get("run_questions", True))
+        ozon_r = bool(obj.get("run_ozon_reviews", False)) if "run_ozon_reviews" in obj else False
+        cfg["run_reviews_wb"] = legacy_r
+        cfg["run_reviews_yam"] = legacy_r
+        cfg["run_reviews_ozon"] = ozon_r
+        cfg["run_questions_wb"] = legacy_q
+        cfg["run_questions_yam"] = legacy_q
+        cfg["run_questions_ozon"] = legacy_q
+    else:
+        cfg["run_reviews_wb"] = bool(obj.get("run_reviews_wb", True))
+        cfg["run_reviews_yam"] = bool(obj.get("run_reviews_yam", True))
+        cfg["run_reviews_ozon"] = bool(obj.get("run_reviews_ozon", False))
+        cfg["run_questions_wb"] = bool(obj.get("run_questions_wb", True))
+        cfg["run_questions_yam"] = bool(obj.get("run_questions_yam", True))
+        cfg["run_questions_ozon"] = bool(obj.get("run_questions_ozon", True))
     cfg["run_wb_chats"] = bool(obj.get("run_wb_chats", False))
     cfg["run_ozon_chats"] = bool(obj.get("run_ozon_chats", False))
     cfg["run_ozon_alerts"] = bool(obj.get("run_ozon_alerts", False))
@@ -246,8 +269,12 @@ def _import_auto_schedule(db: Database, data: dict, key_to_id: dict[str, int]) -
         "store_ids": store_ids,
         "schedule_mode": mode,
         "interval_hours": interval_hours,
-        "run_reviews": bool(data.get("run_reviews", True)),
-        "run_questions": bool(data.get("run_questions", True)),
+        "run_reviews_wb": bool(data.get("run_reviews_wb", True)),
+        "run_reviews_yam": bool(data.get("run_reviews_yam", True)),
+        "run_reviews_ozon": bool(data.get("run_reviews_ozon", False)),
+        "run_questions_wb": bool(data.get("run_questions_wb", True)),
+        "run_questions_yam": bool(data.get("run_questions_yam", True)),
+        "run_questions_ozon": bool(data.get("run_questions_ozon", True)),
         "run_wb_chats": bool(data.get("run_wb_chats", False)),
         "run_ozon_chats": bool(data.get("run_ozon_chats", False)),
         "run_ozon_alerts": bool(data.get("run_ozon_alerts", False)),

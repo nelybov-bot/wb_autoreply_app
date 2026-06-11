@@ -35,8 +35,10 @@ DEFAULT_PROMPT = (
 )
 
 DEFAULT_TELEGRAM_TEMPLATE = (
-    "⚠️ <b>{telegram_title}</b>\n\n"
+    "{category_banner}\n"
+    "<b>{telegram_title}</b>\n\n"
     "🏪 <b>Магазин:</b> {store_name}\n"
+    "🏷 <b>Статус:</b> {status_line}\n"
     "{optional_threat_type}"
     "📅 <b>Срок до:</b> {deadline_html}\n"
     "⚡ <b>Последствия:</b> {consequence}\n"
@@ -50,6 +52,13 @@ ALERT_CAT_CERT = "cert_request"
 ALERT_CAT_HIDDEN = "product_hidden"
 ALERT_CAT_THREAT = "threat"
 ALERT_CAT_OTHER = "other"
+
+_CATEGORY_VISUAL: dict[str, tuple[str, str, str]] = {
+    ALERT_CAT_CERT: ("📄", "ЗАПРОС ДОКУМЕНТОВ", "Нужно загрузить сертификат или документы"),
+    ALERT_CAT_HIDDEN: ("🚫", "СНЯТО С ПРОДАЖИ", "Товар уже скрыт или снят с витрины"),
+    ALERT_CAT_THREAT: ("⚠️", "УГРОЗА", "Ещё не скрыли — есть срок на исправление"),
+    ALERT_CAT_OTHER: ("ℹ️", "ВАЖНОЕ OZON", "Требуется внимание продавца"),
+}
 
 _SKU_RE = re.compile(r"\b(\d{6,12})\b")
 
@@ -466,6 +475,16 @@ def normalize_alert_for_telegram(parsed: dict, message_text: str) -> dict:
     return out
 
 
+def _category_visual_lines(alert_category: str, *, has_fine: bool = False) -> tuple[str, str, str]:
+    cat = (alert_category or "").strip().lower()
+    if cat == ALERT_CAT_THREAT and has_fine:
+        emoji, label, status = "💸", "ШТРАФ", "Угроза со штрафом — проверьте срок и сумму"
+    else:
+        emoji, label, status = _CATEGORY_VISUAL.get(cat, _CATEGORY_VISUAL[ALERT_CAT_OTHER])
+    banner = f"{emoji} <b>{label}</b>"
+    return banner, label, status
+
+
 def render_telegram_message(
     db: Database,
     *,
@@ -481,6 +500,7 @@ def render_telegram_message(
     telegram_title: str = "",
     deadline: str = "",
     consequence: str = "",
+    alert_category: str = "",
 ) -> Tuple[str, str]:
     """Текст для Telegram (HTML, parse_mode=HTML)."""
     template = get_telegram_template(db)
@@ -500,7 +520,17 @@ def render_telegram_message(
             return f"<b>{esc(parts[0])}</b> {esc(' '.join(parts[1:]))}"
         return esc(s)
 
-    title = _truncate_text(telegram_title or "Важное уведомление Ozon", 60)
+    cat = classify_alert_category(
+        threat_type=threat_type,
+        summary=summary,
+        message_text=message_text,
+        telegram_title=telegram_title,
+        consequence=consequence,
+        alert_category=alert_category,
+    )
+    has_fine = _has_fine_in_alert(amount, threat_type, summary, message_text)
+    category_banner, cat_label, status_line = _category_visual_lines(cat, has_fine=has_fine)
+    title = _truncate_text(telegram_title or cat_label.title(), 60)
     threat_short = _truncate_text(threat_type, 45) if not _dash(threat_type) else ""
     known_titles = {label for _, label in _TITLE_RULES}
     show_type = bool(
@@ -522,6 +552,8 @@ def render_telegram_message(
         "summary": esc(summary),
         "action_needed": esc(action_needed),
         "telegram_title": esc(title),
+        "category_banner": category_banner,
+        "status_line": esc(status_line),
         "deadline": esc(deadline if not _dash(deadline) else "—"),
         "deadline_html": _deadline_html(deadline),
         "consequence": esc(consequence if not _dash(consequence) else "—"),
@@ -573,6 +605,163 @@ def _role_label(role: str) -> str:
     return role or "Сообщение"
 
 
+# Эвристики до вызова ИИ: маркетинг/новости — пропуск, явные угрозы — сразу алерт.
+_HEURISTIC_STRONG_IMPORTANT: tuple[str, ...] = (
+    r"снят с продаж",
+    r"сняли с продаж",
+    r"товар скрыт",
+    r"был скрыт",
+    r"скрыт с площадк",
+    r"заблокирован",
+    r"удалён с площадк",
+    r"удален с площадк",
+    r"интеллектуальн",
+    r"правообладател",
+    r"фальсификат",
+    r"подделк",
+    r"предоставьте документ",
+    r"загрузите документ",
+    r"запросил документ",
+    r"запрос документ",
+    r"сертификат.{0,30}качеств",
+    r"деклараци.{0,20}соответств",
+    r"начисл\w*\s+штраф",
+    r"штраф.{0,40}₽",
+    r"штраф.{0,40}\bруб",
+    r"балл\w*\s+за\s+нарушен",
+)
+
+_HEURISTIC_IMPORTANT_WEAK: tuple[str, ...] = (
+    r"\bштраф",
+    r"скроют",
+    r"скроем",
+    r"будет скрыт",
+    r"снять с продаж",
+    r"снимем",
+    r"претенз",
+    r"санкци",
+    r"в течение\s+\d+\s+дн",
+    r"до\s+\d{1,2}[.\-/]\d{1,2}",
+    r"документ.{0,25}качеств",
+    r"сертификат",
+    r"декларац",
+)
+
+_HEURISTIC_NOISE: tuple[str, ...] = (
+    r"вебинар",
+    r"приглашаем на",
+    r"приглашаем вас",
+    r"обучени",
+    r"\bкурс\b",
+    r"совет\w*\s+дня",
+    r"новост\w*\s+платформ",
+    r"обновлени\w*\s+сервис",
+    r"поздравля",
+    r"увеличьте продаж",
+    r"выйдите в топ",
+    r"подключите подписк",
+    r"ozon\s+premium",
+    r"рекламн",
+    r"маркетплейс\s+развива",
+    r"новые возможност",
+    r"рассказываем о",
+    r"присоединяйтесь",
+    r"эфир\s+для\s+продавц",
+    r"бесплатн\w*\s+вебинар",
+    r"ознакомьтесь с изменени",
+    r"изменени\w*\s+в\s+правил",  # без санкций — часто инфо
+    r"напоминаем.{0,40}рекоменду",
+    r"советы по продвижен",
+    r"как увеличить",
+    r"подборка товаров",
+)
+
+def _heuristic_blob(message_text: str) -> str:
+    return _strip_urls((message_text or "").strip())
+
+
+def _heuristic_has_important(blob: str) -> bool:
+    low = blob.lower()
+    for pat in _HEURISTIC_STRONG_IMPORTANT:
+        if re.search(pat, low):
+            return True
+    weak_hits = sum(1 for pat in _HEURISTIC_IMPORTANT_WEAK if re.search(pat, low))
+    if weak_hits >= 2:
+        return True
+    if weak_hits == 1 and re.search(r"штраф|скры|снят|документ|сертификат|претенз", low):
+        return True
+    return False
+
+
+def _heuristic_is_noise(blob: str) -> bool:
+    if len(blob) < 10:
+        return True
+    low = blob.lower()
+    if _heuristic_has_important(low):
+        return False
+    for pat in _HEURISTIC_NOISE:
+        if re.search(pat, low):
+            return True
+    # Короткие информационные пуши без цифр SKU и без санкций
+    if len(blob) < 90 and not re.search(r"штраф|скры|снят|документ|сертификат|₽|\bруб", low):
+        if re.search(r"новост|обновлен|совет|подсказк|рекомендуем", low):
+            return True
+    return False
+
+
+def _heuristic_default_action(alert_category: str) -> str:
+    if alert_category == ALERT_CAT_CERT:
+        return "Загрузить документы в ЛК Ozon и привязать к товару"
+    if alert_category == ALERT_CAT_HIDDEN:
+        return "Проверить карточку и статус товара в ЛК"
+    if alert_category == ALERT_CAT_THREAT:
+        return "Выполнить требование Ozon до указанного срока"
+    return "Проверить уведомление в личном кабинете Ozon"
+
+
+def _heuristic_build_parsed(blob: str) -> dict:
+    cat = classify_alert_category(message_text=blob)
+    threat_type = "—"
+    for pattern, label in _TITLE_RULES:
+        if re.search(pattern, blob, re.IGNORECASE):
+            threat_type = label
+            break
+    skus = extract_product_skus(blob)
+    product_ref = f"{skus[0]} — товар" if skus else "—"
+    amount = _fine_amount_label("", blob)
+    summary = _truncate_text(re.sub(r"\s+", " ", blob), 120)
+    title = _infer_title(blob, threat_type, "")
+    return {
+        "telegram_title": title,
+        "threat_type": threat_type if threat_type != "—" else title,
+        "deadline": _infer_deadline(blob, ""),
+        "consequence": _infer_consequence(blob, ""),
+        "amount": amount if _has_fine_in_alert(amount, blob) else "—",
+        "product_ref": product_ref,
+        "summary": summary,
+        "action_needed": _heuristic_default_action(cat),
+        "alert_category": cat,
+    }
+
+
+def try_heuristic_classify_ozon_message(
+    message_text: str,
+) -> Optional[tuple[Optional[dict], bool, str]]:
+    """
+    Быстрая классификация без ИИ.
+    Возвращает (parsed, mark_ignored, source) или None — тогда нужен ИИ.
+    source: heuristic_important | heuristic_ignored
+    """
+    blob = _heuristic_blob(message_text)
+    if not blob:
+        return None, True, "heuristic_ignored"
+    if _heuristic_has_important(blob):
+        return _heuristic_build_parsed(blob), False, "heuristic_important"
+    if _heuristic_is_noise(blob):
+        return None, True, "heuristic_ignored"
+    return None
+
+
 def build_conversation_excerpt(
     lines: List[Tuple[str, str, str, str]],
     *,
@@ -600,8 +789,14 @@ async def classify_ozon_support_message(
     message_text: str,
     message_at: str,
     conversation_excerpt: str,
-) -> tuple[Optional[dict], bool]:
-    """Возвращает (результат, пометить_как_проверенное). При сбое ИИ — не помечать."""
+) -> tuple[Optional[dict], bool, str]:
+    """Возвращает (результат, пометить_как_проверенное, источник). При сбое ИИ — не помечать."""
+    heuristic = try_heuristic_classify_ozon_message(message_text)
+    if heuristic is not None:
+        parsed, mark_ignored, source = heuristic
+        if source == "heuristic_important":
+            log.debug("ozon_alert heuristic important: %s", _truncate_text(message_text, 80))
+        return parsed, mark_ignored, source
     task = db.get_prompt("ozon_important_alert", "general")
     if not task.strip():
         task = DEFAULT_PROMPT
@@ -621,11 +816,86 @@ async def classify_ozon_support_message(
         )
     except Exception as e:
         log.warning("ozon_alert classify failed: %s", e)
-        return None, False
+        return None, False, "ai_failed"
     parsed = parse_ozon_alert_json(txt)
     if parsed:
-        return parsed, False
-    return None, True
+        return parsed, False, "ai"
+    return None, True, "ai"
+
+
+async def _send_ozon_alert_telegram(
+    db: Database,
+    *,
+    alert_id: int,
+    store_name: str,
+    chat_type: str,
+    message_at: str,
+    message_text: str,
+    parsed: dict,
+    alert_category: str,
+) -> bool:
+    if not ozon_alerts_telegram_enabled(db):
+        return False
+    token = (db.get_setting("telegram_bot_token") or "").strip()
+    chat_tg = resolve_telegram_chat_id(db, "ozon_alerts")
+    if not token or not chat_tg:
+        return False
+    compact = normalize_alert_for_telegram(parsed, message_text)
+    body, parse_mode = render_telegram_message(
+        db,
+        store_name=store_name,
+        chat_type=chat_type,
+        message_at=format_message_at_display(message_at),
+        message_text=message_text,
+        threat_type=compact["threat_type"],
+        amount=compact["amount"],
+        product_ref=compact["product_ref"],
+        summary=compact["summary"],
+        action_needed=compact["action_needed"],
+        telegram_title=compact.get("telegram_title", ""),
+        deadline=compact.get("deadline", ""),
+        consequence=compact.get("consequence", ""),
+        alert_category=alert_category,
+    )
+    ok, _ = await send_telegram_message(token, chat_tg, body, parse_mode=parse_mode, db=db)
+    if ok:
+        db.mark_ozon_important_alert_telegram_sent(alert_id)
+    else:
+        log.warning("ozon_alert telegram send failed alert_id=%s", alert_id)
+    return ok
+
+
+async def flush_pending_ozon_alert_telegrams(
+    db: Database,
+    *,
+    store_id: int,
+    store_name: str,
+) -> int:
+    """Повторная отправка в Telegram, если прошлый раз не дошло."""
+    sent = 0
+    for row in db.list_ozon_alerts_pending_telegram(store_id):
+        parsed = {
+            "threat_type": row.get("threat_type") or "—",
+            "amount": row.get("amount") or "—",
+            "product_ref": row.get("product_ref") or "—",
+            "summary": row.get("summary") or "—",
+            "action_needed": row.get("action_needed") or "—",
+            "telegram_title": row.get("summary") or "",
+            "deadline": "—",
+            "consequence": "—",
+        }
+        if await _send_ozon_alert_telegram(
+            db,
+            alert_id=int(row["id"]),
+            store_name=store_name,
+            chat_type=str(row.get("chat_type") or ""),
+            message_at=str(row.get("message_at") or ""),
+            message_text=str(row.get("message_text") or ""),
+            parsed=parsed,
+            alert_category=str(row.get("alert_category") or ""),
+        ):
+            sent += 1
+    return sent
 
 
 async def maybe_record_ozon_alert(
@@ -650,6 +920,17 @@ async def maybe_record_ozon_alert(
         message_text=message_text,
         parsed=parsed,
     )
+    skus_csv = str(product_skus or "").strip()
+    if skus_csv and db.has_recent_ozon_alert_telegram(store_id, alert_category, skus_csv, hours=24):
+        db.mark_ozon_message_alert_processed(
+            store_id=store_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            chat_type=chat_type,
+            message_at=message_at,
+            message_text=message_text,
+        )
+        return None
     alert_id = db.add_ozon_important_alert(
         store_id=store_id,
         chat_id=chat_id,
@@ -663,7 +944,7 @@ async def maybe_record_ozon_alert(
         summary=parsed["summary"],
         action_needed=parsed["action_needed"],
         alert_category=alert_category,
-        product_skus=product_skus,
+        product_skus=skus_csv,
     )
     try:
         db.add_audit_event(
@@ -683,33 +964,16 @@ async def maybe_record_ozon_alert(
         )
     except Exception:
         pass
-    if ozon_alerts_telegram_enabled(db):
-        token = (db.get_setting("telegram_bot_token") or "").strip()
-        chat_tg = resolve_telegram_chat_id(db, "ozon_alerts")
-        if token and chat_tg:
-            compact = normalize_alert_for_telegram(parsed, message_text)
-            body, parse_mode = render_telegram_message(
-                db,
-                store_name=store_name,
-                chat_type=chat_type,
-                message_at=format_message_at_display(message_at),
-                message_text=message_text,
-                threat_type=compact["threat_type"],
-                amount=compact["amount"],
-                product_ref=compact["product_ref"],
-                summary=compact["summary"],
-                action_needed=compact["action_needed"],
-                telegram_title=compact.get("telegram_title", ""),
-                deadline=compact.get("deadline", ""),
-                consequence=compact.get("consequence", ""),
-            )
-            ok, _ = await send_telegram_message(
-                token, chat_tg, body, parse_mode=parse_mode, db=db
-            )
-            if ok:
-                db.mark_ozon_important_alert_telegram_sent(alert_id)
-            else:
-                log.warning("ozon_alert telegram send failed alert_id=%s", alert_id)
+    await _send_ozon_alert_telegram(
+        db,
+        alert_id=alert_id,
+        store_name=store_name,
+        chat_type=chat_type,
+        message_at=message_at,
+        message_text=message_text,
+        parsed=parsed,
+        alert_category=alert_category,
+    )
     return alert_id
 
 

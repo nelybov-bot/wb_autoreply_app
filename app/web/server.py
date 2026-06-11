@@ -110,6 +110,7 @@ from app.core.workflows import (
     generate_ozon_buyer_chat_reply,
     generate_wb_buyer_chat_reply,
     load_new_all,
+    load_new_items,
     ozon_buyer_chats_mass_generate_send_for_store,
     ozon_actions_auto_remove_for_store,
     send_mass_all,
@@ -422,8 +423,12 @@ class AutoScheduleBody(BaseModel):
     store_ids: list[int] = []  # обязательный выбор магазинов
     schedule_mode: str = "slots"  # slots | interval
     interval_hours: int = 1
-    run_reviews: bool = True
-    run_questions: bool = True
+    run_reviews_wb: bool = True
+    run_reviews_yam: bool = True
+    run_reviews_ozon: bool = False
+    run_questions_wb: bool = True
+    run_questions_yam: bool = True
+    run_questions_ozon: bool = True
     run_wb_chats: bool = False
     run_ozon_chats: bool = False
     run_ozon_alerts: bool = False
@@ -504,6 +509,64 @@ def _store_watched_action_ids(cfg: dict, store_id: int) -> list[int]:
     return out
 
 
+_AUTO_MP_REVIEW_KEYS = ("run_reviews_wb", "run_reviews_yam", "run_reviews_ozon")
+_AUTO_MP_QUESTION_KEYS = ("run_questions_wb", "run_questions_yam", "run_questions_ozon")
+
+
+def _auto_mp_flags_from_obj(obj: dict) -> dict[str, bool]:
+    """Флаги отзывов/вопросов по маркетплейсам; миграция со старых run_reviews/run_questions."""
+    has_new = any(k in obj for k in _AUTO_MP_REVIEW_KEYS)
+    if not has_new:
+        legacy_r = bool(obj.get("run_reviews", True))
+        legacy_q = bool(obj.get("run_questions", True))
+        ozon_r = bool(obj.get("run_ozon_reviews", False)) if "run_ozon_reviews" in obj else False
+        return {
+            "run_reviews_wb": legacy_r,
+            "run_reviews_yam": legacy_r,
+            "run_reviews_ozon": ozon_r,
+            "run_questions_wb": legacy_q,
+            "run_questions_yam": legacy_q,
+            "run_questions_ozon": legacy_q,
+        }
+    return {
+        "run_reviews_wb": bool(obj.get("run_reviews_wb", True)),
+        "run_reviews_yam": bool(obj.get("run_reviews_yam", True)),
+        "run_reviews_ozon": bool(obj.get("run_reviews_ozon", False)),
+        "run_questions_wb": bool(obj.get("run_questions_wb", True)),
+        "run_questions_yam": bool(obj.get("run_questions_yam", True)),
+        "run_questions_ozon": bool(obj.get("run_questions_ozon", True)),
+    }
+
+
+def _any_auto_reviews(cfg: dict) -> bool:
+    return any(bool(cfg.get(k)) for k in _AUTO_MP_REVIEW_KEYS)
+
+
+def _any_auto_questions(cfg: dict) -> bool:
+    return any(bool(cfg.get(k)) for k in _AUTO_MP_QUESTION_KEYS)
+
+
+def _item_types_for_store(store: Store, cfg: dict) -> list[str]:
+    mp = (store.marketplace or "").strip().lower()
+    types: list[str] = []
+    if mp == "wb":
+        if cfg.get("run_reviews_wb"):
+            types.append("review")
+        if cfg.get("run_questions_wb"):
+            types.append("question")
+    elif mp == "yam":
+        if cfg.get("run_reviews_yam"):
+            types.append("review")
+        if cfg.get("run_questions_yam"):
+            types.append("question")
+    elif mp == "ozon":
+        if cfg.get("run_reviews_ozon"):
+            types.append("review")
+        if cfg.get("run_questions_ozon"):
+            types.append("question")
+    return types
+
+
 def _normalize_slots(slots: list[str]) -> list[str]:
     out: list[str] = []
     for s in slots or []:
@@ -528,8 +591,12 @@ def _get_auto_schedule(db: Database) -> dict:
         "store_ids": [],
         "schedule_mode": "slots",
         "interval_hours": 1,
-        "run_reviews": True,
-        "run_questions": True,
+        "run_reviews_wb": True,
+        "run_reviews_yam": True,
+        "run_reviews_ozon": False,
+        "run_questions_wb": True,
+        "run_questions_yam": True,
+        "run_questions_ozon": True,
         "run_wb_chats": False,
         "run_ozon_chats": False,
         "run_ozon_alerts": False,
@@ -545,8 +612,7 @@ def _get_auto_schedule(db: Database) -> dict:
         mode = str(obj.get("schedule_mode") or "slots").strip().lower()
         cfg["schedule_mode"] = mode if mode in ("slots", "interval") else "slots"
         cfg["interval_hours"] = max(1, min(int(obj.get("interval_hours") or 1), 24))
-        cfg["run_reviews"] = bool(obj.get("run_reviews", True))
-        cfg["run_questions"] = bool(obj.get("run_questions", True))
+        cfg.update(_auto_mp_flags_from_obj(obj))
         cfg["run_wb_chats"] = bool(obj.get("run_wb_chats", False))
         cfg["run_ozon_chats"] = bool(obj.get("run_ozon_chats", False))
         cfg["run_ozon_alerts"] = bool(obj.get("run_ozon_alerts", False))
@@ -566,16 +632,20 @@ def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
         "store_ids": [int(x) for x in (body.store_ids or [])],
         "schedule_mode": mode,
         "interval_hours": interval_hours,
-        "run_reviews": bool(body.run_reviews),
-        "run_questions": bool(body.run_questions),
+        "run_reviews_wb": bool(body.run_reviews_wb),
+        "run_reviews_yam": bool(body.run_reviews_yam),
+        "run_reviews_ozon": bool(body.run_reviews_ozon),
+        "run_questions_wb": bool(body.run_questions_wb),
+        "run_questions_yam": bool(body.run_questions_yam),
+        "run_questions_ozon": bool(body.run_questions_ozon),
         "run_wb_chats": bool(body.run_wb_chats),
         "run_ozon_chats": bool(body.run_ozon_chats),
         "run_ozon_alerts": bool(body.run_ozon_alerts),
         "run_ozon_actions_remove": bool(body.run_ozon_actions_remove),
     }
     if not (
-        cfg["run_reviews"]
-        or cfg["run_questions"]
+        _any_auto_reviews(cfg)
+        or _any_auto_questions(cfg)
         or cfg["run_wb_chats"]
         or cfg["run_ozon_chats"]
         or cfg["run_ozon_alerts"]
@@ -583,7 +653,7 @@ def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
     ):
         raise HTTPException(
             400,
-            "Нужно включить хотя бы один тип: отзывы, вопросы, чаты WB/Ozon, уведомления Ozon или автоудаление из акций",
+            "Нужно включить хотя бы одну задачу: отзывы/вопросы по WB, ЯМ или Ozon, чаты, уведомления или автоудаление из акций",
         )
     db.set_setting(AUTO_SCHEDULE_KEY, json.dumps(cfg, ensure_ascii=False))
     return cfg
@@ -650,7 +720,14 @@ async def _process_auto_store(
         try:
             _auto_state["phase"] = "load_new"
             # Не очищаем БД до загрузки: при ошибке API (403 Ozon и т.д.) локальные записи сохраняются.
-            result["added"] = await load_new_all(db, [store])
+            load_reviews = "review" in item_types
+            load_questions = "question" in item_types
+            result["added"] = await load_new_items(
+                db,
+                store,
+                load_reviews=load_reviews,
+                load_questions=load_questions,
+            )
             _auto_state["phase"] = "generate"
             item_ids = _collect_pending_item_ids(db, [store.id], item_types=item_types)
             result["candidates"] = len(item_ids)
@@ -908,25 +985,23 @@ async def _run_auto_slot(slot: str, *, force: bool = False) -> None:
         "last_error": "",
     })
     try:
-        run_reviews = bool(cfg.get("run_reviews", True))
-        run_questions = bool(cfg.get("run_questions", True))
         run_wb_chats = bool(cfg.get("run_wb_chats", False))
         run_ozon_chats = bool(cfg.get("run_ozon_chats", False))
         run_ozon_alerts = bool(cfg.get("run_ozon_alerts", False))
         run_ozon_actions_remove = bool(cfg.get("run_ozon_actions_remove", False))
-        item_types: list[str] = []
-        if run_reviews:
-            item_types.append("review")
-        if run_questions:
-            item_types.append("question")
         key = (db.get_setting("openai_key") or "").strip()
         ozon_actions_cfg = _get_ozon_actions_settings(db)
         log.info(
-            "auto_run start slot=%s stores=%s reviews=%s questions=%s wb_chats=%s ozon_chats=%s ozon_alerts=%s ozon_actions=%s",
+            "auto_run start slot=%s stores=%s reviews_wb=%s reviews_yam=%s reviews_ozon=%s "
+            "questions_wb=%s questions_yam=%s questions_ozon=%s wb_chats=%s ozon_chats=%s ozon_alerts=%s ozon_actions=%s",
             slot,
             [s.id for s in sorted_stores],
-            run_reviews,
-            run_questions,
+            cfg.get("run_reviews_wb"),
+            cfg.get("run_reviews_yam"),
+            cfg.get("run_reviews_ozon"),
+            cfg.get("run_questions_wb"),
+            cfg.get("run_questions_yam"),
+            cfg.get("run_questions_ozon"),
             run_wb_chats,
             run_ozon_chats,
             run_ozon_alerts,
@@ -943,10 +1018,11 @@ async def _run_auto_slot(slot: str, *, force: bool = False) -> None:
                 slot_store.id,
                 slot_store.marketplace,
             )
+            store_item_types = _item_types_for_store(slot_store, cfg)
             store_meta = await _process_auto_store(
                 db,
                 slot_store,
-                item_types=item_types,
+                item_types=store_item_types,
                 run_wb_chats=run_wb_chats,
                 run_ozon_chats=run_ozon_chats,
                 run_ozon_alerts=run_ozon_alerts,
@@ -962,7 +1038,7 @@ async def _run_auto_slot(slot: str, *, force: bool = False) -> None:
             "stores_processed": n_stores,
             "stores_results": stores_results,
             "ozon_actions_totals": ozon_actions_totals,
-            "item_types": item_types,
+            "auto_mp_flags": {k: bool(cfg.get(k)) for k in _AUTO_MP_REVIEW_KEYS + _AUTO_MP_QUESTION_KEYS},
             "deleted_before_load": _sum_store_results(stores_results, "deleted_before_load"),
             "added": _sum_store_results(stores_results, "added"),
             "candidates": _sum_store_results(stores_results, "candidates"),
@@ -1270,8 +1346,8 @@ def _auto_run_readiness(cfg: dict, db: Database, *, check_schedule: bool = True)
             if not slots:
                 return "Режим «по слотам»: укажите время как 09:00, 14:30 (два символа в часе) и сохраните."
     if not (
-        cfg.get("run_reviews")
-        or cfg.get("run_questions")
+        _any_auto_reviews(cfg)
+        or _any_auto_questions(cfg)
         or cfg.get("run_wb_chats")
         or cfg.get("run_ozon_chats")
         or cfg.get("run_ozon_alerts")
@@ -1279,10 +1355,10 @@ def _auto_run_readiness(cfg: dict, db: Database, *, check_schedule: bool = True)
     ):
         return "Включите хотя бы один тип задач в автозапуске и сохраните."
     openai_key = (db.get_setting("openai_key") or "").strip()
-    if (cfg.get("run_reviews") or cfg.get("run_questions")) and not openai_key:
+    if (_any_auto_reviews(cfg) or _any_auto_questions(cfg)) and not openai_key:
         return "Для автоответов на отзывы и вопросы нужен ключ OpenAI в «Настройки»."
     if (
-        (cfg.get("run_reviews") or cfg.get("run_questions") or cfg.get("run_wb_chats") or cfg.get("run_ozon_chats"))
+        (_any_auto_reviews(cfg) or _any_auto_questions(cfg) or cfg.get("run_wb_chats") or cfg.get("run_ozon_chats"))
         and (db.get_setting(SETTING_CARD_CHECK_ENABLED) or "1").strip() == "0"
     ):
         return "Проверка карточек выключена в «Настройки → Карточки» — при генерации ответов она не выполняется."
@@ -1372,8 +1448,7 @@ def _auto_status(db: Database) -> dict:
         "store_ids": cfg.get("store_ids") or [],
         "schedule_mode": cfg.get("schedule_mode") or "slots",
         "interval_hours": int(cfg.get("interval_hours") or 1),
-        "run_reviews": bool(cfg.get("run_reviews", True)),
-        "run_questions": bool(cfg.get("run_questions", True)),
+        **{k: bool(cfg.get(k, False)) for k in _AUTO_MP_REVIEW_KEYS + _AUTO_MP_QUESTION_KEYS},
         "run_wb_chats": bool(cfg.get("run_wb_chats", False)),
         "run_ozon_chats": bool(cfg.get("run_ozon_chats", False)),
         "run_ozon_alerts": bool(cfg.get("run_ozon_alerts", False)),
@@ -1893,6 +1968,7 @@ def _ozon_alert_to_out(row: OzonImportantAlertRow, store_name: str = "") -> dict
         "action_needed": row.action_needed,
         "status": row.status,
         "telegram_sent": row.telegram_sent,
+        "alert_category": row.alert_category or "",
     }
 
 

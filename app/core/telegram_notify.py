@@ -331,6 +331,16 @@ async def send_telegram_message(
         return False, str(e)
 
 
+def _ru_review_word(n: int) -> str:
+    n = abs(int(n))
+    mod10, mod100 = n % 10, n % 100
+    if mod10 == 1 and mod100 != 11:
+        return "отзыв"
+    if mod10 in (2, 3, 4) and mod100 not in (12, 13, 14):
+        return "отзыва"
+    return "отзывов"
+
+
 def format_activity_report(
     stats: dict,
     *,
@@ -359,10 +369,22 @@ def format_activity_report(
         f"<b>Период:</b> {period}",
         "",
         f"<b>Отзывы:</b> отвечено {reviews}",
+    ]
+    if interval == "day":
+        by_rating = stats.get("reviews_by_rating") or {}
+        if isinstance(by_rating, dict):
+            for star in sorted((int(k) for k in by_rating.keys() if int(k) >= 1), reverse=True):
+                cnt = int(by_rating.get(star) or by_rating.get(str(star)) or 0)
+                if cnt <= 0:
+                    continue
+                lines.append(
+                    f"  ⭐{star} — {cnt} {_ru_review_word(cnt)} за сутки"
+                )
+    lines.extend([
         f"<b>Вопросы:</b> отвечено {questions}",
         f"<b>Чаты с покупателями:</b> {chat_total} "
         f"<i>(WB: {wb_chats}, Ozon: {ozon_chats})</i>",
-    ]
+    ])
     ozon_lines: list[str] = []
     if cert_products:
         ozon_lines.append(

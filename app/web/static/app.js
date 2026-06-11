@@ -567,24 +567,53 @@
     }
   });
 
+  function mpPillHtml(marketplace) {
+    const mp = String(marketplace || '').toLowerCase();
+    const labels = { wb: 'WB', yam: 'ЯМ', ozon: 'Ozon' };
+    const cls = mp === 'wb' ? 'mp-wb' : mp === 'yam' ? 'mp-yam' : mp === 'ozon' ? 'mp-ozon' : '';
+    const label = labels[mp] || escapeHtml(marketplace);
+    return `<span class="mp-pill ${cls}">${label}</span>`;
+  }
+
+  function rolePillHtml(role) {
+    const r = String(role || '').toLowerCase();
+    const cls = r === 'admin' ? 'role-admin' : 'role-user';
+    const label = r === 'admin' ? 'Админ' : escapeHtml(role);
+    return `<span class="role-pill ${cls}">${label}</span>`;
+  }
+
+  function ozonAlertCategoryBadge(row) {
+    const cat = String(row.alert_category || '').toLowerCase();
+    const amt = String(row.amount || '');
+    if (amt && amt !== '—' && /\d/.test(amt)) {
+      return '<span class="ozon-alert-cat ozon-cat-fine">💸 Штраф</span>';
+    }
+    const map = {
+      cert_request: ['ozon-cat-cert', '📄 Документы'],
+      product_hidden: ['ozon-cat-hidden', '🚫 Снято'],
+      threat: ['ozon-cat-threat', '⚠️ Угроза'],
+    };
+    const [cls, label] = map[cat] || ['ozon-cat-other', 'ℹ️ Важное'];
+    return `<span class="ozon-alert-cat ${cls}">${label}</span>`;
+  }
+
   function renderStores() {
     const wrap = document.getElementById('stores-list');
     if (!stores.length) {
       wrap.innerHTML = '<p class="empty-state">Нет магазинов. Добавьте первый выше.</p>';
       return;
     }
-    wrap.innerHTML = stores.map(s => {
-      const mp = s.marketplace === 'wb' ? 'WB' : s.marketplace === 'yam' ? 'Яндекс' : 'Ozon';
-      return `
-        <div class="store-card" data-store-id="${s.id}">
-          <h3>${escapeHtml(s.name)} <span class="badge">${mp}</span></h3>
-          <div class="meta">ID ${s.id} ${s.active ? '' : '· неактивен'}</div>
+    wrap.innerHTML = stores.map(s => `
+        <div class="store-card${s.active ? '' : ' inactive'}" data-store-id="${s.id}">
+          <div class="store-card-head">
+            <h3>${escapeHtml(s.name)} ${mpPillHtml(s.marketplace)}</h3>
+          </div>
+          <div class="meta">ID ${s.id}${s.active ? '' : ' · неактивен'}</div>
           <div class="actions">
             <button type="button" class="btn btn-secondary btn-sm btn-edit-store" data-id="${s.id}">Изменить</button>
             <button type="button" class="btn btn-danger btn-sm btn-delete-store" data-id="${s.id}">Удалить</button>
           </div>
-        </div>`;
-    }).join('');
+        </div>`).join('');
 
     wrap.querySelectorAll('.btn-edit-store').forEach(btn => {
       btn.addEventListener('click', () => openEditStore(Number(btn.getAttribute('data-id'))));
@@ -751,7 +780,7 @@
     wrap.innerHTML = stores.map(s => `
       <label class="auto-store-item">
         <input type="checkbox" value="${s.id}" ${sel.has(Number(s.id)) ? 'checked' : ''}>
-        <span>${escapeHtml(s.name)} <span class="badge">${escapeHtml(s.marketplace)}</span></span>
+        <span class="auto-store-label">${escapeHtml(s.name)} ${mpPillHtml(s.marketplace)}</span>
       </label>
     `).join('');
   }
@@ -2473,18 +2502,31 @@
       const autoSlots = document.getElementById('auto-slots');
       const autoMode = document.getElementById('auto-schedule-mode');
       const autoInt = document.getElementById('auto-interval-hours');
-      const autoRunReviews = document.getElementById('auto-run-reviews');
-      const autoRunQuestions = document.getElementById('auto-run-questions');
-      const autoRunWbChats = document.getElementById('auto-run-wb-chats');
+      const autoMpToggleMap = {
+        'auto-run-reviews-wb': 'run_reviews_wb',
+        'auto-run-reviews-yam': 'run_reviews_yam',
+        'auto-run-reviews-ozon': 'run_reviews_ozon',
+        'auto-run-questions-wb': 'run_questions_wb',
+        'auto-run-questions-yam': 'run_questions_yam',
+        'auto-run-questions-ozon': 'run_questions_ozon',
+        'auto-run-wb-chats': 'run_wb_chats',
+        'auto-run-ozon-chats': 'run_ozon_chats',
+      };
       if (autoEnabled) autoEnabled.checked = !!autoCfg.enabled;
       if (autoSlots) autoSlots.value = (autoCfg.slots || []).join(', ');
       if (autoMode) autoMode.value = autoCfg.schedule_mode || 'slots';
       if (autoInt) autoInt.value = String(autoCfg.interval_hours || 1);
-      if (autoRunReviews) autoRunReviews.checked = !!autoCfg.run_reviews;
-      if (autoRunQuestions) autoRunQuestions.checked = !!autoCfg.run_questions;
-      if (autoRunWbChats) autoRunWbChats.checked = !!autoCfg.run_wb_chats;
-      const autoRunOzonChats = document.getElementById('auto-run-ozon-chats');
-      if (autoRunOzonChats) autoRunOzonChats.checked = !!autoCfg.run_ozon_chats;
+      Object.entries(autoMpToggleMap).forEach(([elId, cfgKey]) => {
+        const el = document.getElementById(elId);
+        if (el) {
+          const legacy = cfgKey.startsWith('run_reviews')
+            ? !!autoCfg.run_reviews
+            : cfgKey.startsWith('run_questions')
+              ? !!autoCfg.run_questions
+              : false;
+          el.checked = autoCfg[cfgKey] != null ? !!autoCfg[cfgKey] : legacy;
+        }
+      });
       const autoRunOzonAlerts = document.getElementById('auto-run-ozon-alerts');
       if (autoRunOzonAlerts) autoRunOzonAlerts.checked = !!autoCfg.run_ozon_alerts;
       const autoRunOzonActions = document.getElementById('auto-run-ozon-actions-remove');
@@ -2538,8 +2580,12 @@
       const slots = slotsRaw ? slotsRaw.split(',').map(x => x.trim()).filter(Boolean) : [];
       const schedule_mode = (document.getElementById('auto-schedule-mode')?.value || 'slots');
       const interval_hours = parseInt(document.getElementById('auto-interval-hours')?.value || '1', 10) || 1;
-      const run_reviews = !!document.getElementById('auto-run-reviews')?.checked;
-      const run_questions = !!document.getElementById('auto-run-questions')?.checked;
+      const run_reviews_wb = !!document.getElementById('auto-run-reviews-wb')?.checked;
+      const run_reviews_yam = !!document.getElementById('auto-run-reviews-yam')?.checked;
+      const run_reviews_ozon = !!document.getElementById('auto-run-reviews-ozon')?.checked;
+      const run_questions_wb = !!document.getElementById('auto-run-questions-wb')?.checked;
+      const run_questions_yam = !!document.getElementById('auto-run-questions-yam')?.checked;
+      const run_questions_ozon = !!document.getElementById('auto-run-questions-ozon')?.checked;
       const run_wb_chats = !!document.getElementById('auto-run-wb-chats')?.checked;
       const run_ozon_chats = !!document.getElementById('auto-run-ozon-chats')?.checked;
       const run_ozon_alerts = !!document.getElementById('auto-run-ozon-alerts')?.checked;
@@ -2549,12 +2595,23 @@
         toast('Выбери хотя бы один магазин для автозапуска', 'error');
         return;
       }
-      if (!run_reviews && !run_questions && !run_wb_chats && !run_ozon_chats && !run_ozon_alerts && !run_ozon_actions_remove) {
-        toast('Выбери хотя бы один тип: отзывы, вопросы, чаты, уведомления или акции Ozon', 'error');
+      const anyTask = run_reviews_wb || run_reviews_yam || run_reviews_ozon
+        || run_questions_wb || run_questions_yam || run_questions_ozon
+        || run_wb_chats || run_ozon_chats || run_ozon_alerts || run_ozon_actions_remove;
+      if (!anyTask) {
+        toast('Выбери хотя бы одну задачу в блоках WB / ЯМ / Ozon', 'error');
         return;
       }
       try {
-        await api('/auto-schedule', { method: 'POST', body: JSON.stringify({ enabled, slots, store_ids, schedule_mode, interval_hours, run_reviews, run_questions, run_wb_chats, run_ozon_chats, run_ozon_alerts, run_ozon_actions_remove }) });
+        await api('/auto-schedule', {
+          method: 'POST',
+          body: JSON.stringify({
+            enabled, slots, store_ids, schedule_mode, interval_hours,
+            run_reviews_wb, run_reviews_yam, run_reviews_ozon,
+            run_questions_wb, run_questions_yam, run_questions_ozon,
+            run_wb_chats, run_ozon_chats, run_ozon_alerts, run_ozon_actions_remove,
+          }),
+        });
         toast('Автозапуск сохранён');
         await loadAutoSchedulePanel();
       } catch (err) {
@@ -2890,7 +2947,12 @@
     }
     if (action === 'store_auto' && meta.summary) return String(meta.summary);
     if (action === 'store_ozon_alerts_auto') {
-      return `Ozon уведомления: новых ${meta.ozon_alert_new ?? 0}, чатов ${meta.ozon_alert_chats_scanned ?? 0}`;
+      const heur = [];
+      if (meta.ozon_alert_heuristic_ignored) heur.push(`без ИИ пропущено ${meta.ozon_alert_heuristic_ignored}`);
+      if (meta.ozon_alert_heuristic_important) heur.push(`без ИИ важных ${meta.ozon_alert_heuristic_important}`);
+      if (meta.ozon_alert_ai_calls) heur.push(`ИИ ${meta.ozon_alert_ai_calls}`);
+      const heurPart = heur.length ? ` (${heur.join(', ')})` : '';
+      return `Ozon уведомления: новых ${meta.ozon_alert_new ?? 0}, чатов ${meta.ozon_alert_chats_scanned ?? 0}${heurPart}`;
     }
     if (action === 'store_wb_chats_auto' || action === 'store_ozon_chats_auto') {
       const sent = meta.wb_chat_sent ?? meta.ozon_chat_sent ?? 0;
@@ -2923,6 +2985,15 @@
       let line = `${intervalRu}: отзывы ${meta.reviews_sent ?? 0}, вопросы ${meta.questions_sent ?? 0}, `
         + `чаты ${meta.chat_replies_total ?? 0} (WB ${meta.wb_chat_replies ?? 0}, Ozon ${meta.ozon_chat_replies ?? 0}), `
         + `уведомл. Ozon ${meta.ozon_alerts ?? 0}, удалено с акций ${meta.ozon_products_removed ?? 0}`;
+      if (meta.interval === 'day' && meta.reviews_by_rating && typeof meta.reviews_by_rating === 'object') {
+        const stars = Object.keys(meta.reviews_by_rating)
+          .map((k) => parseInt(k, 10))
+          .filter((n) => n >= 1 && parseInt(meta.reviews_by_rating[n] || meta.reviews_by_rating[String(n)], 10) > 0)
+          .sort((a, b) => b - a);
+        if (stars.length) {
+          line += '\nПо оценкам: ' + stars.map((s) => `⭐${s}=${meta.reviews_by_rating[s] ?? meta.reviews_by_rating[String(s)]}`).join(', ');
+        }
+      }
       if (meta.card_errors != null) line += `, ошибки карточек ${meta.card_errors}`;
       return line;
     }
@@ -3103,30 +3174,35 @@
     try {
       const rows = await api(url);
       if (!rows.length) {
-        wrap.innerHTML = '<div class="form-hint">Важных уведомлений пока нет. Включите проверку в «Настройки → Ozon» и нажмите «Проверить чаты сейчас».</div>';
+        wrap.innerHTML = '<div class="empty-state empty-state--compact">Важных уведомлений пока нет. Включите проверку в «Настройки → Ozon» и нажмите «Проверить чаты».</div>';
         return;
       }
       wrap.innerHTML = `
-        <table class="items-table">
+        <table class="ops-log-table ozon-alerts-table">
           <thead><tr>
-            <th>Время</th><th>Магазин</th><th>Тип</th><th>Сумма</th><th>Товар</th><th>Сводка</th><th>Действия</th><th></th>
+            <th>Время</th><th>Магазин</th><th>Категория</th><th>Тип</th><th>Сумма</th><th>Товар</th><th>Сводка</th><th>Статус</th>
           </tr></thead>
           <tbody>
-            ${rows.map(r => `
+            ${rows.map(r => {
+              const stCls = r.status === 'new' ? 'ops-log-result-other' : r.status === 'resolved' ? 'ops-log-result-ok' : 'ops-log-result-err';
+              const stLabel = r.status === 'new' ? 'новое' : r.status === 'resolved' ? 'обработано' : escapeHtml(r.status);
+              const resolveBtn = r.status === 'new'
+                ? `<button type="button" class="btn btn-secondary btn-sm" data-ozon-alert-resolve="${r.id}">Обработано</button>`
+                : '';
+              const tg = r.telegram_sent ? ' · TG ✓' : '';
+              return `
               <tr>
-                <td>${escapeHtml(r.message_at_label || r.ts || '—')}</td>
-                <td>${escapeHtml(r.store_name || r.store_id)}</td>
+                <td class="ops-log-ts">${escapeHtml(r.message_at_label || r.ts || '—')}</td>
+                <td class="ops-log-store">${escapeHtml(r.store_name || r.store_id)}</td>
+                <td>${ozonAlertCategoryBadge(r)}</td>
                 <td>${escapeHtml(r.threat_type || '—')}</td>
                 <td>${escapeHtml(r.amount || '—')}</td>
                 <td>${escapeHtml(r.product_ref || '—')}</td>
-                <td>${escapeHtml(r.summary || '—')}</td>
-                <td>${escapeHtml(r.action_needed || '—')}</td>
-                <td>${r.status === 'new'
-                  ? `<button type="button" class="btn btn-secondary btn-sm" data-ozon-alert-resolve="${r.id}">Обработано</button>`
-                  : escapeHtml(r.status)}</td>
+                <td><div class="ops-log-summary">${escapeHtml(r.summary || '—')}</div><div class="form-hint ozon-alert-action">${escapeHtml(r.action_needed || '')}</div></td>
+                <td><span class="ops-log-badge ${stCls}">${stLabel}</span><span class="form-hint">${tg}</span>${resolveBtn}</td>
               </tr>
-              <tr><td colspan="8" style="font-size:.85em;color:var(--text-muted);">${escapeHtml((r.message_text || '').slice(0, 500))}</td></tr>
-            `).join('')}
+              <tr class="ozon-alert-msg-row"><td colspan="8"><div class="ozon-alert-msg">${escapeHtml((r.message_text || '').slice(0, 600))}${(r.message_text || '').length > 600 ? '…' : ''}</div></td></tr>`;
+            }).join('')}
           </tbody>
         </table>`;
       wrap.querySelectorAll('[data-ozon-alert-resolve]').forEach(btn => {
@@ -3158,11 +3234,11 @@
     let url = '/card-errors?limit=300';
     if (storeId) url += '&store_id=' + encodeURIComponent(storeId);
     if (status) url += '&status=' + encodeURIComponent(status);
-    wrap.innerHTML = '<div class="form-hint" style="padding:16px;">Загрузка…</div>';
+    wrap.innerHTML = '<div class="form-hint panel-loading-hint">Загрузка…</div>';
     try {
       const items = await api(url);
       if (!items.length) {
-        wrap.innerHTML = '<div class="empty-state" style="padding:24px;">Нет записей</div>';
+        wrap.innerHTML = '<div class="empty-state empty-state--compact">Нет записей</div>';
         return;
       }
       const rows = items.map(row => {
@@ -3202,7 +3278,7 @@
         });
       });
     } catch (err) {
-      wrap.innerHTML = '<div class="empty-state" style="padding:24px;">Ошибка: ' + escapeHtml(err.message) + '</div>';
+      wrap.innerHTML = '<div class="empty-state empty-state--compact">Ошибка: ' + escapeHtml(err.message) + '</div>';
     }
   }
 
@@ -3234,8 +3310,10 @@
       });
       const cleared = Number(r.ozon_alert_ignored_cleared || 0);
       const clearedPart = rescan && cleared ? `, сброшено «не важно»: ${cleared}` : '';
+      const saveAi = (r.ozon_alert_heuristic_ignored || 0) + (r.ozon_alert_heuristic_important || 0);
+      const aiPart = saveAi ? `, без ИИ ${saveAi} (ИИ ${r.ozon_alert_ai_calls ?? 0})` : '';
       toast(
-        `Готово: новых важных ${r.ozon_alert_new ?? 0}, проверено сообщений ${r.ozon_alert_messages_checked ?? 0}${clearedPart}`,
+        `Готово: новых важных ${r.ozon_alert_new ?? 0}, проверено сообщений ${r.ozon_alert_messages_checked ?? 0}${aiPart}${clearedPart}`,
       );
       await loadOzonAlerts();
     } catch (err) {
@@ -3341,18 +3419,17 @@
           const opsLogChecked = isAdminUser || perms.includes('view_ops_log');
           const disablePerms = isAdminUser ? ' disabled title="У админа все права"' : '';
           return `
-          <div class="store-card">
-            <div class="store-head">
-              <div class="store-name">${escapeHtml(u.username)}</div>
-              <span class="badge">${escapeHtml(u.role)}</span>
+          <div class="store-card user-card">
+            <div class="store-card-head">
+              <h3>${escapeHtml(u.username)} ${rolePillHtml(u.role)}</h3>
             </div>
-            <div class="store-meta" style="margin-top:8px;font-size:0.85rem;color:var(--text-muted);">
-              <label style="display:inline-flex;align-items:center;gap:6px;margin-right:12px;"><input type="checkbox" data-user-id="${u.id}" data-perm="view_settings" ${settingsChecked ? 'checked' : ''}${disablePerms}> Настройки</label>
-              <label style="display:inline-flex;align-items:center;gap:6px;"><input type="checkbox" data-user-id="${u.id}" data-perm="view_log" ${logChecked ? 'checked' : ''}${disablePerms}> Лог</label>
-              <label style="display:inline-flex;align-items:center;gap:6px;margin-left:12px;"><input type="checkbox" data-user-id="${u.id}" data-perm="view_ops_log" ${opsLogChecked ? 'checked' : ''}${disablePerms}> Операции</label>
+            <div class="user-perms">
+              <label class="user-perm"><input type="checkbox" data-user-id="${u.id}" data-perm="view_settings" ${settingsChecked ? 'checked' : ''}${disablePerms}> Настройки</label>
+              <label class="user-perm"><input type="checkbox" data-user-id="${u.id}" data-perm="view_log" ${logChecked ? 'checked' : ''}${disablePerms}> Лог</label>
+              <label class="user-perm"><input type="checkbox" data-user-id="${u.id}" data-perm="view_ops_log" ${opsLogChecked ? 'checked' : ''}${disablePerms}> Операции</label>
             </div>
-            <div class="store-actions">
-              <button type="button" class="btn btn-danger" data-user-del="${u.id}">Удалить</button>
+            <div class="actions">
+              <button type="button" class="btn btn-danger btn-sm" data-user-del="${u.id}">Удалить</button>
             </div>
           </div>`;
         }).join('');

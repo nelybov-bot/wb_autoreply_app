@@ -130,6 +130,9 @@ async def load_new_items(
     db: Database,
     store: Store,
     progress_queue: Optional[Queue] = None,
+    *,
+    load_reviews: bool = True,
+    load_questions: bool = True,
 ) -> int:
     """
     Тянет новые вопросы+отзывы с маркетплейса и upsert'ит в SQLite.
@@ -138,14 +141,17 @@ async def load_new_items(
     """
     _put_progress(progress_queue, 0, 1)
     store_id = store.id
+    if not load_reviews and not load_questions:
+        _put_progress(progress_queue, 1, 1)
+        return 0
     if store.marketplace == "wb":
-        n = await _load_new_wb(db, store)
+        n = await _load_new_wb(db, store, load_reviews=load_reviews, load_questions=load_questions)
     elif store.marketplace == "yam":
         if store.business_id is None:
             log.warning("YAM store id=%s без business_id, пропуск загрузки", store_id)
             _put_progress(progress_queue, 1, 1)
             return 0
-        n = await _load_new_yam(db, store)
+        n = await _load_new_yam(db, store, load_reviews=load_reviews, load_questions=load_questions)
     elif store.marketplace == "ozon":
         if not (store.client_id or "").strip():
             log.warning("Ozon store id=%s без client_id, пропуск загрузки", store_id)
@@ -157,7 +163,9 @@ async def load_new_items(
             await _ozon_recheck_processed(db, store)
         except Exception as e:
             log.warning("Ozon recheck processed failed store_id=%s: %s", store_id, e)
-        n = await _load_new_ozon(db, store)
+        n = await _load_new_ozon(
+            db, store, load_reviews=load_reviews, load_questions=load_questions
+        )
     else:
         log.warning("Неизвестный маркетплейс %s для store_id=%s", store.marketplace, store_id)
         _put_progress(progress_queue, 1, 1)
@@ -166,70 +174,83 @@ async def load_new_items(
     return n
 
 
-async def _load_new_wb(db: Database, store: Store) -> int:
+async def _load_new_wb(
+    db: Database,
+    store: Store,
+    *,
+    load_reviews: bool = True,
+    load_questions: bool = True,
+) -> int:
     store_id = store.id
     wb = WbClient(store.api_key)
     try:
-        trig = await wb.has_new()
-        data = (trig or {}).get("data") or {}
-        if not (data.get("hasNewQuestions") or data.get("hasNewFeedbacks")):
-            return 0
+        if load_questions or load_reviews:
+            trig = await wb.has_new()
+            data = (trig or {}).get("data") or {}
+            if load_questions and not load_reviews and not data.get("hasNewQuestions"):
+                return 0
+            if load_reviews and not load_questions and not data.get("hasNewFeedbacks"):
+                return 0
+            if not (data.get("hasNewQuestions") or data.get("hasNewFeedbacks")):
+                return 0
 
         added = 0
-        q = await wb.list_questions(take=100, skip=0)
-        qdata = (q or {}).get("data") or {}
-        for it in qdata.get("questions", []) or []:
-            ext_id = str(it.get("id",""))
-            text = str(it.get("text") or "")
-            created = str(it.get("createdDate") or "")
-            was_viewed = bool(it.get("wasViewed"))
-            author = ""
-            product_title = str(((it.get("productDetails") or {}).get("productName")) or "")
-            _, was_new = db.upsert_item(
-                store_id=store_id,
-                external_id=ext_id,
-                item_type="question",
-                date=created or _iso_now(),
-                rating=None,
-                text=text,
-                author=author,
-                product_title=product_title,
-                was_viewed=was_viewed,
-            )
-            if was_new:
-                added += 1
+        if load_questions:
+            q = await wb.list_questions(take=100, skip=0)
+            qdata = (q or {}).get("data") or {}
+            for it in qdata.get("questions", []) or []:
+                ext_id = str(it.get("id",""))
+                text = str(it.get("text") or "")
+                created = str(it.get("createdDate") or "")
+                was_viewed = bool(it.get("wasViewed"))
+                author = ""
+                product_title = str(((it.get("productDetails") or {}).get("productName")) or "")
+                _, was_new = db.upsert_item(
+                    store_id=store_id,
+                    external_id=ext_id,
+                    item_type="question",
+                    date=created or _iso_now(),
+                    rating=None,
+                    text=text,
+                    author=author,
+                    product_title=product_title,
+                    was_viewed=was_viewed,
+                )
+                if was_new:
+                    added += 1
 
-        f = await wb.list_feedbacks(take=100, skip=0)
-        fdata = (f or {}).get("data") or {}
-        for it in fdata.get("feedbacks", []) or []:
-            ext_id = str(it.get("id",""))
-            text = str(it.get("text") or "")
-            pros = str(it.get("pros") or "")
-            cons = str(it.get("cons") or "")
-            full_text = text
-            if pros.strip():
-                full_text += ("\nПлюсы: " + pros.strip())
-            if cons.strip():
-                full_text += ("\nМинусы: " + cons.strip())
-            created = str(it.get("createdDate") or "")
-            rating = it.get("productValuation")
-            rating_i = int(rating) if rating is not None else None
-            was_viewed = bool(it.get("wasViewed"))
-            author = ""
-            product_title = str(((it.get("productDetails") or {}).get("productName")) or "")
-            _, was_new = db.upsert_item(
-                store_id=store_id,
-                external_id=ext_id,
-                item_type="review",
-                date=created or _iso_now(),
-                rating=rating_i,
-                text=full_text.strip(),
-                author=author,
-                product_title=product_title,
-                was_viewed=was_viewed,
-            )
-            if was_new:
-                added += 1
+        if load_reviews:
+            f = await wb.list_feedbacks(take=100, skip=0)
+            fdata = (f or {}).get("data") or {}
+            for it in fdata.get("feedbacks", []) or []:
+                ext_id = str(it.get("id",""))
+                text = str(it.get("text") or "")
+                pros = str(it.get("pros") or "")
+                cons = str(it.get("cons") or "")
+                full_text = text
+                if pros.strip():
+                    full_text += ("\nПлюсы: " + pros.strip())
+                if cons.strip():
+                    full_text += ("\nМинусы: " + cons.strip())
+                created = str(it.get("createdDate") or "")
+                rating = it.get("productValuation")
+                rating_i = int(rating) if rating is not None else None
+                was_viewed = bool(it.get("wasViewed"))
+                author = ""
+                product_title = str(((it.get("productDetails") or {}).get("productName")) or "")
+                _, was_new = db.upsert_item(
+                    store_id=store_id,
+                    external_id=ext_id,
+                    item_type="review",
+                    date=created or _iso_now(),
+                    rating=rating_i,
+                    text=full_text.strip(),
+                    author=author,
+                    product_title=product_title,
+                    was_viewed=was_viewed,
+                )
+                if was_new:
+                    added += 1
         return added
     except HttpStatusError as e:
         if e.status == 401:
@@ -263,32 +284,48 @@ async def _load_new_wb(db: Database, store: Store) -> int:
         return 0
 
 
-async def _load_new_yam(db: Database, store: Store) -> int:
+async def _load_new_yam(
+    db: Database,
+    store: Store,
+    *,
+    load_reviews: bool = True,
+    load_questions: bool = True,
+) -> int:
     store_id = store.id
     assert store.business_id is not None
     yam = YamClient(store.api_key, store.business_id)
     try:
         trig = await yam.has_new()
+        if load_questions and not load_reviews and not trig.get("questions"):
+            return 0
+        if load_reviews and not load_questions and not trig.get("feedbacks"):
+            return 0
         if not (trig.get("feedbacks") or trig.get("questions")):
             return 0
 
-        q = await yam.list_questions(limit=50, need_answer=True)
-        f = await yam.list_feedbacks(limit=50, reaction_status="NEED_REACTION")
+        q = await yam.list_questions(limit=50, need_answer=True) if load_questions else {}
+        f = (
+            await yam.list_feedbacks(limit=50, reaction_status="NEED_REACTION")
+            if load_reviews
+            else {}
+        )
 
         # Собираем все offerId из вопросов и отзывов для запроса названий товаров
         offer_ids: set[str] = set()
         q_result = (q or {}).get("result") or {}
-        for it in q_result.get("questions", []) or []:
-            ids_obj = it.get("questionIdentifiers") or {}
-            oid = (ids_obj.get("offerId") or "").strip()
-            if oid:
-                offer_ids.add(oid)
+        if load_questions:
+            for it in q_result.get("questions", []) or []:
+                ids_obj = it.get("questionIdentifiers") or {}
+                oid = (ids_obj.get("offerId") or "").strip()
+                if oid:
+                    offer_ids.add(oid)
         f_result = (f or {}).get("result") or {}
-        for it in f_result.get("feedbacks", []) or []:
-            idents = it.get("identifiers") or {}
-            oid = (idents.get("offerId") or "").strip()
-            if oid:
-                offer_ids.add(oid)
+        if load_reviews:
+            for it in f_result.get("feedbacks", []) or []:
+                idents = it.get("identifiers") or {}
+                oid = (idents.get("offerId") or "").strip()
+                if oid:
+                    offer_ids.add(oid)
 
         offer_names: Dict[str, str] = {}
         if offer_ids:
@@ -301,6 +338,11 @@ async def _load_new_yam(db: Database, store: Store) -> int:
             return offer_names.get(offer_id, offer_id) if offer_id else ""
 
         added = 0
+
+        if not load_questions:
+            q_result = {"questions": []}
+        if not load_reviews:
+            f_result = {"feedbacks": []}
 
         for it in q_result.get("questions", []) or []:
             ids_obj = it.get("questionIdentifiers") or {}
@@ -540,7 +582,13 @@ async def _ozon_collect_reviews(
     return out
 
 
-async def _load_new_ozon(db: Database, store: Store) -> int:
+async def _load_new_ozon(
+    db: Database,
+    store: Store,
+    *,
+    load_reviews: bool = True,
+    load_questions: bool = True,
+) -> int:
     store_id = store.id
     assert (store.client_id or "").strip()
     ozon = OzonClient(store.client_id, store.api_key)
@@ -548,27 +596,29 @@ async def _load_new_ozon(db: Database, store: Store) -> int:
     questions_to_save: List[dict] = []
     reviews_to_save: List[dict] = []
 
-    try:
-        questions_to_save = await _ozon_collect_questions(ozon)
-    except HttpStatusError as e:
-        if e.status == 401:
-            raise UnauthorizedStoreError(store_id, store.name, str(e)) from e
-        load_errors.append(f"вопросы: {_ozon_http_user_message(e, feature='вопросам')}")
-        log.warning("Ozon questions store_id=%s: HTTP %s %s", store_id, e.status, _wb_http_body_one_line(e.body or ""))
-    except Exception:
-        log.exception("Ozon questions store_id=%s", store_id)
-        load_errors.append("вопросы: ошибка загрузки")
+    if load_questions:
+        try:
+            questions_to_save = await _ozon_collect_questions(ozon)
+        except HttpStatusError as e:
+            if e.status == 401:
+                raise UnauthorizedStoreError(store_id, store.name, str(e)) from e
+            load_errors.append(f"вопросы: {_ozon_http_user_message(e, feature='вопросам')}")
+            log.warning("Ozon questions store_id=%s: HTTP %s %s", store_id, e.status, _wb_http_body_one_line(e.body or ""))
+        except Exception:
+            log.exception("Ozon questions store_id=%s", store_id)
+            load_errors.append("вопросы: ошибка загрузки")
 
-    try:
-        reviews_to_save = await _ozon_collect_reviews(ozon)
-    except HttpStatusError as e:
-        if e.status == 401:
-            raise UnauthorizedStoreError(store_id, store.name, str(e)) from e
-        load_errors.append(f"отзывы: {_ozon_http_user_message(e, feature='отзывам')}")
-        log.warning("Ozon reviews store_id=%s: HTTP %s %s", store_id, e.status, _wb_http_body_one_line(e.body or ""))
-    except Exception:
-        log.exception("Ozon reviews store_id=%s", store_id)
-        load_errors.append("отзывы: ошибка загрузки")
+    if load_reviews:
+        try:
+            reviews_to_save = await _ozon_collect_reviews(ozon)
+        except HttpStatusError as e:
+            if e.status == 401:
+                raise UnauthorizedStoreError(store_id, store.name, str(e)) from e
+            load_errors.append(f"отзывы: {_ozon_http_user_message(e, feature='отзывам')}")
+            log.warning("Ozon reviews store_id=%s: HTTP %s %s", store_id, e.status, _wb_http_body_one_line(e.body or ""))
+        except Exception:
+            log.exception("Ozon reviews store_id=%s", store_id)
+            load_errors.append("отзывы: ошибка загрузки")
 
     if not questions_to_save and not reviews_to_save and load_errors:
         raise OzonApiAccessError(
@@ -1744,6 +1794,9 @@ async def scan_ozon_important_alerts_for_store(
         "ozon_alert_skipped_no_access": 0,
         "ozon_alert_skip_reason": "",
         "ozon_alert_ignored_cleared": 0,
+        "ozon_alert_heuristic_important": 0,
+        "ozon_alert_heuristic_ignored": 0,
+        "ozon_alert_ai_calls": 0,
     }
     if rescan:
         stats["ozon_alert_ignored_cleared"] = db.clear_ozon_ignored_alerts(store.id)
@@ -1765,6 +1818,11 @@ async def scan_ozon_important_alerts_for_store(
     oz_client = OzonClient(store.client_id or "", store.api_key)
     oai = OpenAIClient(key, model=model)
     store_name = _store_name(db, store.id)
+    from .ozon_alerts import flush_pending_ozon_alert_telegrams
+
+    stats["ozon_alert_telegram_resent"] = await flush_pending_ozon_alert_telegrams(
+        db, store_id=store.id, store_name=store_name
+    )
 
     try:
         rows = await oz_client.list_all_chats(max_pages=20)
@@ -1818,7 +1876,7 @@ async def scan_ozon_important_alerts_for_store(
                 break
             excerpt = build_conversation_excerpt(lines, up_to_message_id=mid)
             try:
-                parsed, mark_ignored = await classify_ozon_support_message(
+                parsed, mark_ignored, classify_source = await classify_ozon_support_message(
                     db,
                     oai,
                     store_name=store_name,
@@ -1827,6 +1885,12 @@ async def scan_ozon_important_alerts_for_store(
                     message_at=format_ozon_datetime_msk(created) or created,
                     conversation_excerpt=excerpt,
                 )
+                if classify_source == "heuristic_important":
+                    stats["ozon_alert_heuristic_important"] += 1
+                elif classify_source == "heuristic_ignored":
+                    stats["ozon_alert_heuristic_ignored"] += 1
+                elif classify_source in ("ai", "ai_failed"):
+                    stats["ozon_alert_ai_calls"] += 1
             except Exception:
                 log.exception("ozon_alert classify store=%s chat=%s", store.id, chat_id)
                 stats["ozon_alert_ai_failed"] += 1
@@ -1873,6 +1937,9 @@ async def auto_process_ozon_important_alerts(
         "ozon_alert_new": 0,
         "ozon_alert_chats_scanned": 0,
         "ozon_alert_skipped_no_access": 0,
+        "ozon_alert_heuristic_important": 0,
+        "ozon_alert_heuristic_ignored": 0,
+        "ozon_alert_ai_calls": 0,
     }
     if not ozon_alerts_enabled(db):
         return stats
@@ -1898,6 +1965,12 @@ async def auto_process_ozon_important_alerts(
         stats["ozon_alert_new"] += int(part.get("ozon_alert_new") or 0)
         stats["ozon_alert_chats_scanned"] += int(part.get("ozon_alert_chats_scanned") or 0)
         stats["ozon_alert_skipped_no_access"] += int(part.get("ozon_alert_skipped_no_access") or 0)
+        for k in (
+            "ozon_alert_heuristic_important",
+            "ozon_alert_heuristic_ignored",
+            "ozon_alert_ai_calls",
+        ):
+            stats[k] = int(stats.get(k) or 0) + int(part.get(k) or 0)
         _audit_activity(
             db,
             action="store_ozon_alerts_auto",
