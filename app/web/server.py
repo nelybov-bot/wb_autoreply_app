@@ -660,6 +660,32 @@ def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
     db.set_setting(AUTO_SCHEDULE_KEY, json.dumps(cfg, ensure_ascii=False))
     return cfg
 
+
+def _disable_auto_schedule(db: Database) -> dict:
+    """Выключить автозапуск в настройках (расписание и задачи сохраняются)."""
+    cfg = _get_auto_schedule(db)
+    cfg["enabled"] = False
+    db.set_setting(AUTO_SCHEDULE_KEY, json.dumps(cfg, ensure_ascii=False))
+    return cfg
+
+
+async def _cancel_auto_run_if_busy() -> bool:
+    global _auto_run_task, _interval_skip_logged
+    if _auto_run_task is None or _auto_run_task.done():
+        return False
+    _auto_run_task.cancel()
+    try:
+        await _auto_run_task
+    except Exception:
+        pass
+    _auto_run_task = None
+    _interval_skip_logged = False
+    _auto_state["running"] = False
+    _auto_state["phase"] = "cancelled"
+    _auto_state["last_finished_at"] = dt.datetime.now(MSK_TZ).isoformat(timespec="seconds")
+    return True
+
+
 def _collect_pending_item_ids(db: Database, store_ids: list[int], *, item_types: list[str], limit_per_type: int = 2000) -> list[int]:
     ids: list[int] = []
     for sid in store_ids:
@@ -1851,8 +1877,19 @@ def api_get_auto_schedule(db: Database = Depends(get_db), _: UserRow = Depends(r
 
 
 @app.post("/api/auto-schedule")
-def api_set_auto_schedule(body: AutoScheduleBody, db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
-    return _set_auto_schedule(db, body)
+async def api_set_auto_schedule(body: AutoScheduleBody, db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
+    cfg = _set_auto_schedule(db, body)
+    if not cfg.get("enabled"):
+        await _cancel_auto_run_if_busy()
+    return cfg
+
+
+@app.post("/api/auto-schedule/disable")
+async def api_auto_schedule_disable(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
+    """Сразу выключить автозапуск в БД и остановить текущий цикл, если он идёт."""
+    cancelled = await _cancel_auto_run_if_busy()
+    cfg = _disable_auto_schedule(db)
+    return {"ok": True, "enabled": bool(cfg.get("enabled")), "cancelled_running": cancelled}
 
 
 @app.get("/api/auto-schedule/status")
@@ -1879,20 +1916,9 @@ async def api_auto_schedule_run_now(
 
 @app.post("/api/auto-schedule/stop")
 async def api_auto_schedule_stop(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
-    global _auto_run_task
-    if _auto_run_task and not _auto_run_task.done():
-        _auto_run_task.cancel()
-        try:
-            await _auto_run_task
-        except Exception:
-            pass
-        _auto_run_task = None
-        _interval_skip_logged = False
-        _auto_state["running"] = False
-        _auto_state["phase"] = "cancelled"
-        _auto_state["last_finished_at"] = dt.datetime.now(MSK_TZ).isoformat(timespec="seconds")
-        return {"ok": True, "stopped": True}
-    return {"ok": True, "stopped": False}
+    cancelled = await _cancel_auto_run_if_busy()
+    _disable_auto_schedule(db)
+    return {"ok": True, "stopped": cancelled, "enabled": False}
 
 
 # ---------- API: prompts ----------

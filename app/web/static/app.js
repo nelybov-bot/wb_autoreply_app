@@ -2998,9 +2998,27 @@
     btnStopAuto.addEventListener('click', async () => {
       try {
         const r = await api('/auto-schedule/stop', { method: 'POST', body: JSON.stringify({}) });
-        toast(r && r.stopped ? 'Автозапуск остановлен' : 'Сейчас автозапуск не выполняется');
+        const autoEnabled = document.getElementById('auto-enabled');
+        if (autoEnabled) autoEnabled.checked = false;
+        if (r && r.stopped) toast('Текущий цикл остановлен, автозапуск выключен');
+        else toast('Автозапуск выключен');
         refreshAutoStatus();
       } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+  }
+
+  const autoEnabledToggle = document.getElementById('auto-enabled');
+  if (autoEnabledToggle) {
+    autoEnabledToggle.addEventListener('change', async () => {
+      if (autoEnabledToggle.checked) return;
+      try {
+        await api('/auto-schedule/disable', { method: 'POST', body: JSON.stringify({}) });
+        toast('Автозапуск выключен');
+        await refreshAutoStatus();
+      } catch (err) {
+        autoEnabledToggle.checked = true;
         toast(err.message, 'error');
       }
     });

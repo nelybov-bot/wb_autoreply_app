@@ -289,10 +289,10 @@ def _normalize_ozon_percent(value: Optional[float]) -> Optional[float]:
 
 
 def _norm_wb_api_key(key: str) -> str:
-    k = (key or "").strip().replace("\n", "").replace("\r", "").replace(" ", "")
+    k = (key or "").strip().replace("\n", "").replace("\r", "")
     if k.lower().startswith("bearer "):
         k = k[7:].strip()
-    return k
+    return k.replace(" ", "")
 
 
 def _wb_key_log_hash(norm_key: str) -> str:
