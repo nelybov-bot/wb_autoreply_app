@@ -328,6 +328,7 @@
       }
     }
     if (tabId === 'auto') loadAutoSchedulePanel();
+    if (tabId === 'agent') loadAgentPanel();
     if (tabId === 'settings') {
       syncSettingsSectionUI();
       loadSettings();
@@ -2812,6 +2813,8 @@
         'telegram_chat_id',
         'telegram_report_chat_id',
         'telegram_card_error_chat_id',
+        'telegram_agent_chat_id',
+        'telegram_agent_user_id',
         'buyer_chat_reply_from_date',
       ].forEach(k => {
         const el = document.getElementById('setting-' + k);
@@ -2825,6 +2828,8 @@
       if (tgReport) tgReport.checked = String(data.telegram_report_enabled || '0') === '1';
       const tgInterval = document.getElementById('setting-telegram_report_interval');
       if (tgInterval) tgInterval.value = (data.telegram_report_interval || 'hour') === 'day' ? 'day' : 'hour';
+      const tgAgent = document.getElementById('setting-telegram_agent_enabled');
+      if (tgAgent) tgAgent.checked = String(data.telegram_agent_enabled || '0') === '1';
       const cardEnabled = document.getElementById('setting-card_check_enabled');
       if (cardEnabled) cardEnabled.checked = String(data.card_check_enabled || '1') !== '0';
       const cardTg = document.getElementById('setting-card_check_telegram_enabled');
@@ -3162,6 +3167,9 @@
       telegram_enabled: document.getElementById('setting-telegram_enabled')?.checked ? '1' : '0',
       telegram_report_enabled: document.getElementById('setting-telegram_report_enabled')?.checked ? '1' : '0',
       telegram_report_interval: document.getElementById('setting-telegram_report_interval')?.value === 'day' ? 'day' : 'hour',
+      telegram_agent_enabled: document.getElementById('setting-telegram_agent_enabled')?.checked ? '1' : '0',
+      telegram_agent_chat_id: document.getElementById('setting-telegram_agent_chat_id')?.value || '',
+      telegram_agent_user_id: document.getElementById('setting-telegram_agent_user_id')?.value || '',
       card_check_enabled: document.getElementById('setting-card_check_enabled')?.checked ? '1' : '0',
       card_check_telegram_enabled: document.getElementById('setting-card_check_telegram_enabled')?.checked ? '1' : '0',
       card_check_include_in_periodic_report: document.getElementById('setting-card_check_include_in_periodic_report')?.checked ? '1' : '0',
@@ -3857,6 +3865,167 @@
     }
   }
 
+  // ---- AI agent ----
+  let agentSessionId = null;
+  let agentBusy = false;
+
+  try {
+    agentSessionId = localStorage.getItem('agentSessionId') || null;
+  } catch (_) {}
+
+  function escapeAgentHtml(text) {
+    return String(text || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function renderAgentMessages(messages) {
+    const wrap = document.getElementById('agent-messages');
+    if (!wrap) return;
+    if (!messages || !messages.length) {
+      wrap.innerHTML = '<div class="agent-welcome"><p>Напишите, что нужно сделать. Для опасных действий (загрузка, генерация, отправка) ассистент запросит подтверждение.</p></div>';
+      return;
+    }
+    wrap.innerHTML = messages.map(msg => {
+      const role = msg.role === 'user' ? 'user' : 'assistant';
+      return `<div class="agent-msg agent-msg--${role}">${escapeAgentHtml(msg.content)}</div>`;
+    }).join('');
+    wrap.scrollTop = wrap.scrollHeight;
+  }
+
+  function updateAgentPending(pending, needsConfirm) {
+    const box = document.getElementById('agent-pending');
+    const textEl = document.getElementById('agent-pending-text');
+    if (!box || !textEl) return;
+    const show = !!(pending && (needsConfirm || pending.summary));
+    box.hidden = !show;
+    if (show) {
+      textEl.textContent = pending.summary || 'Подтвердите действие';
+    }
+  }
+
+  async function sendAgentChat(opts = {}) {
+    if (agentBusy) return;
+    const input = document.getElementById('agent-input');
+    const sendBtn = document.getElementById('btn-agent-send');
+    let message = opts.message;
+    if (message === undefined) {
+      message = (input && input.value || '').trim();
+    }
+    const confirm = opts.confirm;
+    if (confirm === undefined && !message) return;
+
+    agentBusy = true;
+    setButtonBusy(sendBtn, true, 'Думаю…');
+    const wrap = document.getElementById('agent-messages');
+    let typingEl = null;
+    if (wrap && confirm === undefined && message) {
+      typingEl = document.createElement('div');
+      typingEl.className = 'agent-msg agent-msg--assistant agent-msg--typing';
+      typingEl.textContent = 'Думаю…';
+      wrap.appendChild(typingEl);
+      wrap.scrollTop = wrap.scrollHeight;
+    }
+
+    try {
+      const body = {
+        message: message || '',
+        session_id: agentSessionId,
+      };
+      if (confirm !== undefined) body.confirm = confirm;
+      const data = await api('/agent/chat', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        timeoutMs: 120000,
+      });
+      agentSessionId = data.session_id || agentSessionId;
+      try {
+        if (agentSessionId) localStorage.setItem('agentSessionId', agentSessionId);
+        else localStorage.removeItem('agentSessionId');
+      } catch (_) {}
+      renderAgentMessages(data.messages || []);
+      updateAgentPending(data.pending, data.needs_confirm);
+      if (input && confirm === undefined) input.value = '';
+      if (data.tool_used && (data.tool_used === 'load_new_items' || data.tool_used === 'generate_answers' || data.tool_used === 'send_answers')) {
+        loadStats();
+        if (data.tool_used !== 'load_new_items') {
+          loadReviews();
+          loadQuestions();
+        }
+      }
+    } catch (err) {
+      if (typingEl) typingEl.remove();
+      toast(err.message, 'error');
+    } finally {
+      agentBusy = false;
+      setButtonBusy(sendBtn, false);
+    }
+  }
+
+  function loadAgentPanel() {
+    if (!agentSessionId) return;
+    api('/agent/session/' + encodeURIComponent(agentSessionId))
+      .then(data => {
+        renderAgentMessages(data.messages || []);
+        updateAgentPending(data.pending, !!data.pending);
+      })
+      .catch(() => {
+        agentSessionId = null;
+        try { localStorage.removeItem('agentSessionId'); } catch (_) {}
+      });
+  }
+
+  function wireAgentPanel() {
+    const form = document.getElementById('agent-form');
+    const input = document.getElementById('agent-input');
+    if (form) {
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        sendAgentChat();
+      });
+    }
+    if (input) {
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendAgentChat();
+        }
+      });
+    }
+    const btnConfirm = document.getElementById('btn-agent-confirm');
+    if (btnConfirm) {
+      btnConfirm.addEventListener('click', () => sendAgentChat({ confirm: true, message: '' }));
+    }
+    const btnCancel = document.getElementById('btn-agent-cancel');
+    if (btnCancel) {
+      btnCancel.addEventListener('click', () => sendAgentChat({ confirm: false, message: '' }));
+    }
+    const btnClear = document.getElementById('btn-agent-clear');
+    if (btnClear) {
+      btnClear.addEventListener('click', async () => {
+        if (agentSessionId) {
+          try {
+            await api('/agent/session/' + encodeURIComponent(agentSessionId), { method: 'DELETE' });
+          } catch (_) {}
+        }
+        agentSessionId = null;
+        try { localStorage.removeItem('agentSessionId'); } catch (_) {}
+        renderAgentMessages([]);
+        updateAgentPending(null, false);
+        if (input) input.value = '';
+        toast('Новый диалог');
+      });
+    }
+    document.querySelectorAll('[data-agent-prompt]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const prompt = btn.getAttribute('data-agent-prompt') || '';
+        if (input) input.value = prompt;
+        sendAgentChat({ message: prompt });
+      });
+    });
+  }
+
   const btnCreateUser = document.getElementById('btn-create-user');
   if (btnCreateUser) {
     btnCreateUser.addEventListener('click', async () => {
@@ -3895,6 +4064,7 @@
     wireWbChatsPanel();
     wireOzonChatsPanel();
     wireOzonActionsPanel();
+    wireAgentPanel();
     ensureStoresLoaded().then(() => {
       fillStoreSelects();
       loadReviews();

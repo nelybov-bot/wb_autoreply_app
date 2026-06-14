@@ -15,6 +15,7 @@ APP_NAME = "wb_autoreply"
 RUNTIME_SETTING_KEYS = frozenset({
     "auto_schedule_last_run_at",
     "telegram_report_last_sent",
+    "telegram_agent_update_offset",
 })
 
 # Все настройки, которые обычно задаются через веб-интерфейс.
@@ -27,6 +28,9 @@ SETTING_KEYS = (
     "telegram_enabled",
     "telegram_report_enabled",
     "telegram_report_interval",
+    "telegram_agent_enabled",
+    "telegram_agent_chat_id",
+    "telegram_agent_user_id",
     "card_check_enabled",
     "card_check_telegram_enabled",
     "card_check_include_in_periodic_report",

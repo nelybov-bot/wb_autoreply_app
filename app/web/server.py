@@ -45,7 +45,11 @@ from app.db import (
 )
 from app.web import tasks as web_tasks
 from app.web.store_locks import StoreBusyError, store_locks
-from app.core.net import HttpStatusError
+from app.agent.orchestrator import handle_agent_message
+from app.agent.session import clear_session, get_or_create_session, get_session_if_owner, session_public_view
+from app.agent.tools import AgentContext
+from app.agent.telegram_bot import configure_telegram_agent, start_telegram_agent_task, stop_telegram_agent_task
+from app.core.net import HttpStatusError, OzonApiAccessError
 from app.core.wb_buyer_chat import (
     WbBuyerChatClient,
     build_wb_thread_lines,
@@ -379,6 +383,12 @@ class GenerateBody(BaseModel):
 
 class SendBody(BaseModel):
     item_ids: list[int]
+
+
+class AgentChatBody(BaseModel):
+    message: str = ""
+    session_id: Optional[str] = None
+    confirm: Optional[bool] = None
 
 class ApplyTemplateBody(BaseModel):
     item_ids: list[int]
@@ -771,6 +781,13 @@ async def _process_auto_store(
                 result["sent_failed"] = sent_failed
         except (asyncio.CancelledError, GeneratorExit):
             raise
+        except OzonApiAccessError as e:
+            reviews_phase_error = str(e)[:800]
+            log.warning(
+                "auto_run store_id=%s: отзывы/вопросы пропущены (%s); чаты/акции продолжаются",
+                store.id,
+                reviews_phase_error[:200],
+            )
         except Exception as e:
             reviews_phase_error = str(e)[:800]
             log.exception(
@@ -1511,6 +1528,58 @@ def _auto_status(db: Database) -> dict:
     return out
 
 
+def _user_can_settings(user: UserRow, db: Database) -> bool:
+    if user.role == "admin":
+        return True
+    return "view_settings" in db.get_user_permissions(user.id)
+
+
+def _build_agent_context(db: Database, user: UserRow) -> AgentContext:
+    can_settings = _user_can_settings(user, db)
+
+    async def run_auto_now() -> dict:
+        global _auto_run_task
+        if _auto_run_task is not None and not _auto_run_task.done():
+            return {"error": "Автозапуск уже выполняется — дождитесь завершения или остановите его"}
+        cfg = _get_auto_schedule(db)
+        hint = _auto_run_readiness(cfg, db, check_schedule=False)
+        if hint:
+            return {"error": hint}
+        _auto_run_task = asyncio.create_task(_run_auto_slot("manual", force=True))
+        return {"message": "Автозапуск запущен"}
+
+    async def stop_auto() -> dict:
+        cancelled = await _cancel_auto_run_if_busy()
+        _disable_auto_schedule(db)
+        return {"message": "Автозапуск остановлен", "stopped": cancelled, "enabled": False}
+
+    return AgentContext(
+        db=db,
+        username=user.username,
+        user_id=user.id,
+        get_auto_status=lambda: _auto_status(db),
+        run_auto_now=run_auto_now if can_settings else None,
+        stop_auto=stop_auto if can_settings else None,
+    )
+
+
+def _first_admin_user(db: Database) -> Optional[UserRow]:
+    for u in db.list_users():
+        if u.role == "admin":
+            return u
+    return None
+
+
+def _agent_context_for_telegram(db: Database) -> Optional[AgentContext]:
+    admin = _first_admin_user(db)
+    if not admin:
+        return None
+    return _build_agent_context(db, admin)
+
+
+configure_telegram_agent(get_db=get_db, context_factory=_agent_context_for_telegram)
+
+
 def _store_to_out(s: Store) -> StoreOut:
     return StoreOut(
         id=s.id,
@@ -1807,6 +1876,9 @@ def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(requir
         OZON_ALERTS_FROM_DATE,
         OZON_ALERTS_TEMPLATE,
         "ozon_alerts_telegram_chat_id",
+        "telegram_agent_enabled",
+        "telegram_agent_chat_id",
+        "telegram_agent_user_id",
         "theme",
         SETTING_REPLY_FROM,
         SETTING_AUTO_CHAT_MAX_AGE_DAYS,
@@ -1924,6 +1996,57 @@ async def api_auto_schedule_stop(db: Database = Depends(get_db), _: UserRow = De
     cancelled = await _cancel_auto_run_if_busy()
     _disable_auto_schedule(db)
     return {"ok": True, "stopped": cancelled, "enabled": False}
+
+
+# ---------- API: AI agent ----------
+@app.post("/api/agent/chat")
+async def api_agent_chat(
+    body: AgentChatBody,
+    user: UserRow = Depends(require_user),
+    db: Database = Depends(get_db),
+):
+    session = get_or_create_session(user_id=user.id, username=user.username, session_id=body.session_id)
+    msg = (body.message or "").strip()
+    if body.confirm is True:
+        msg = "да"
+    elif body.confirm is False:
+        msg = "отмена"
+    if not msg and body.confirm is None:
+        raise HTTPException(400, "Пустое сообщение")
+
+    ctx = _build_agent_context(db, user)
+    openai_key = (db.get_setting("openai_key") or "").strip()
+    out = await handle_agent_message(
+        session=session,
+        user_message=msg,
+        ctx=ctx,
+        openai_key=openai_key,
+        force_confirm=body.confirm is True,
+    )
+    sv = session_public_view(session)
+    return {
+        "reply": out.get("reply", ""),
+        "session_id": session.session_id,
+        "messages": sv["messages"],
+        "pending": sv.get("pending"),
+        "needs_confirm": bool(out.get("needs_confirm")),
+        "tool_used": out.get("tool_used"),
+    }
+
+
+@app.get("/api/agent/session/{session_id}")
+def api_agent_get_session(session_id: str, user: UserRow = Depends(require_user)):
+    session = get_session_if_owner(session_id, user_id=user.id)
+    if not session:
+        raise HTTPException(404, "Сессия не найдена")
+    return session_public_view(session)
+
+
+@app.delete("/api/agent/session/{session_id}")
+def api_agent_delete_session(session_id: str, user: UserRow = Depends(require_user)):
+    if not clear_session(session_id, user_id=user.id):
+        raise HTTPException(404, "Сессия не найдена")
+    return {"ok": True}
 
 
 # ---------- API: prompts ----------
@@ -3264,12 +3387,15 @@ async def _startup_scheduler():
     if _telegram_report_task is None or _telegram_report_task.done():
         _telegram_report_task = asyncio.create_task(_telegram_report_loop())
         log.info("Telegram report scheduler started (MSK)")
+    start_telegram_agent_task()
+    log.info("Telegram agent polling started")
     ensure_wb_rating_background_started()
 
 
 @app.on_event("shutdown")
 async def _shutdown_scheduler():
     global _scheduler_task, _telegram_report_task, _auto_run_task
+    await stop_telegram_agent_task()
     await web_tasks.cancel_all_running()
     if _auto_run_task and not _auto_run_task.done():
         _auto_run_task.cancel()

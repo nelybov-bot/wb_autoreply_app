@@ -97,6 +97,7 @@
       </div>
 
       <button type="button" class="nav-link" data-tab="auto">Автозапуск</button>
+      <button type="button" class="nav-link" data-tab="agent">AI</button>
 
       <div class="nav-menu nav-menu-settings" data-nav-group="settings">
         <button type="button" class="nav-trigger" aria-haspopup="true" aria-expanded="false">
@@ -774,6 +775,22 @@
             <input type="text" id="setting-ozon_alerts_telegram_chat_id" placeholder="необязательно">
           </div>
 
+          <h3 class="settings-subhead">AI-ассистент в Telegram</h3>
+          <p class="form-hint">Пишите боту в указанном чате — те же команды, что во вкладке AI: статистика, очередь, загрузка, генерация, автозапуск. Команды: /help, /new.</p>
+          <div class="form-group">
+            <label>Telegram user_id ассистента</label>
+            <input type="text" id="setting-telegram_agent_user_id" placeholder="например 123456789">
+            <div class="form-hint">Только этот пользователь может управлять ассистентом. Несколько ID через запятую. Узнать свой ID: команда /id боту. Если пусто — любой в разрешённом чате.</div>
+          </div>
+          <div class="form-group">
+            <label>Чат для команд ассистенту</label>
+            <input type="text" id="setting-telegram_agent_chat_id" placeholder="необязательно — иначе основной ID чата">
+            <div class="form-hint">Только этот chat_id может управлять. Несколько ID через запятую. Бот должен быть добавлен в чат.</div>
+          </div>
+          <div class="settings-toggle-list">
+            <label class="toggle-row"><span>Управление через Telegram <em class="toggle-hint">long polling</em></span><input type="checkbox" class="toggle-input" id="setting-telegram_agent_enabled"><span class="toggle-track" aria-hidden="true"></span></label>
+          </div>
+
           <h3 class="settings-subhead">Что отправлять</h3>
           <div class="settings-toggle-list">
             <label class="toggle-row"><span>Отзывы 1–3★ и упаковка <em class="toggle-hint">мгновенно</em></span><input type="checkbox" class="toggle-input" id="setting-telegram_enabled"><span class="toggle-track" aria-hidden="true"></span></label>
@@ -948,6 +965,42 @@
         <button type="button" class="btn btn-secondary" id="btn-refresh-card-errors">Обновить</button>
       </div>
       <div id="card-errors-wrap" class="ops-log-table-wrap"></div>
+    </section>
+
+    <!-- AI-ассистент -->
+    <section id="panel-agent" class="panel">
+      <header class="panel-head">
+        <div>
+          <h2 class="panel-title">AI-ассистент</h2>
+          <p class="panel-desc">Управление задачами MarketAI — статистика, очередь, загрузка, генерация, отправка, автозапуск</p>
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-agent-clear">Новый диалог</button>
+      </header>
+      <div class="agent-chat">
+        <div class="agent-suggestions" id="agent-suggestions">
+          <button type="button" class="agent-chip" data-agent-prompt="Покажи список магазинов">Магазины</button>
+          <button type="button" class="agent-chip" data-agent-prompt="Какая статистика очереди?">Статистика</button>
+          <button type="button" class="agent-chip" data-agent-prompt="Покажи новые отзывы без ответа">Новые отзывы</button>
+          <button type="button" class="agent-chip" data-agent-prompt="Статус автозапуска">Автозапуск</button>
+          <button type="button" class="agent-chip" data-agent-prompt="Показатели качества по магазинам">Качество</button>
+        </div>
+        <div class="agent-messages" id="agent-messages" aria-live="polite">
+          <div class="agent-welcome">
+            <p>Напишите, что нужно сделать. Для опасных действий (загрузка, генерация, отправка) ассистент запросит подтверждение.</p>
+          </div>
+        </div>
+        <div class="agent-pending" id="agent-pending" hidden>
+          <p class="agent-pending-text" id="agent-pending-text"></p>
+          <div class="agent-pending-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="btn-agent-confirm">Подтвердить</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-agent-cancel">Отмена</button>
+          </div>
+        </div>
+        <form class="agent-compose" id="agent-form">
+          <textarea id="agent-input" class="agent-input" rows="2" placeholder="Например: загрузи новые отзывы для всех магазинов"></textarea>
+          <button type="submit" class="btn btn-primary" id="btn-agent-send">Отправить</button>
+        </form>
+      </div>
     </section>
 
     <!-- Лог -->

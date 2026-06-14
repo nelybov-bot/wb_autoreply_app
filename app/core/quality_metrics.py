@@ -267,7 +267,7 @@ def _parse_ozon_summary(data: dict) -> list[dict]:
             f"{x.get('rating') or '?'}:{x.get('name') or '?'}"
             for x in all_items
         ]
-        log.info("quality ozon: cancellation not found, items=%s", slugs)
+        log.debug("quality ozon: cancellation not found, items=%s", slugs)
 
     # Фиксированный порядок: сначала отмены, потом просрочки
     return [by_key[k] for k in ("cancellation", "overdue") if k in by_key]
@@ -453,6 +453,12 @@ def schedule_wb_rating_refresh(wb_stores: list[Store]) -> None:
             continue
         _WB_RATING_BG_QUEUE.append((nk, api_key, store_ids))
         _WB_RATING_BG_QUEUED.add(nk)
+    if _WB_RATING_BG_QUEUE:
+        log.info(
+            "quality wb rating queue scheduled keys=%s stores=%s",
+            len(_WB_RATING_BG_QUEUE),
+            [sid for _, _, sids in _WB_RATING_BG_QUEUE for sid in sids],
+        )
     ensure_wb_rating_background_started()
 
 
@@ -483,8 +489,19 @@ async def _wb_rating_background_worker() -> None:
                     store_ids,
                 )
             elif result.get("error") == _WB_RATING_COOLDOWN_MSG:
+                log.info(
+                    "quality wb rating background 429 key=%s stores=%s (retry later)",
+                    _wb_key_log_hash(nk),
+                    store_ids,
+                )
                 _WB_RATING_BG_QUEUE.append((nk, api_key, store_ids))
                 _WB_RATING_BG_QUEUED.add(nk)
+            elif result.get("error") == _WB_TOKEN_MSG:
+                log.info(
+                    "quality wb rating background auth key=%s stores=%s",
+                    _wb_key_log_hash(nk),
+                    store_ids,
+                )
             wait = max(0.0, _WB_RATING_GLOBAL_NEXT_AT - time.time())
             if wait > 0:
                 await asyncio.sleep(wait)

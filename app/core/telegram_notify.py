@@ -23,12 +23,14 @@ _TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]{20,}$")
 SETTING_REPORT_CHAT_ID = "telegram_report_chat_id"
 SETTING_CARD_ERROR_CHAT_ID = "telegram_card_error_chat_id"
 SETTING_OZON_ALERTS_CHAT_ID = "ozon_alerts_telegram_chat_id"
+SETTING_AGENT_CHAT_ID = "telegram_agent_chat_id"
 
 _CHAT_ID_SETTING_KEYS = (
     "telegram_chat_id",
     SETTING_REPORT_CHAT_ID,
     SETTING_CARD_ERROR_CHAT_ID,
     SETTING_OZON_ALERTS_CHAT_ID,
+    SETTING_AGENT_CHAT_ID,
 )
 
 
@@ -254,6 +256,7 @@ async def send_telegram_message(
     text: str,
     *,
     parse_mode: Optional[str] = None,
+    reply_markup: Optional[dict] = None,
     db=None,
 ) -> Tuple[bool, str]:
     """
@@ -288,6 +291,8 @@ async def send_telegram_message(
                     }
                     if parse_mode:
                         payload["parse_mode"] = parse_mode
+                    if reply_markup:
+                        payload["reply_markup"] = reply_markup
                     async with session.post(
                         url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
                     ) as resp:
@@ -329,6 +334,75 @@ async def send_telegram_message(
     except Exception as e:
         log.exception("Telegram send_telegram_message: %s", e)
         return False, str(e)
+
+
+async def telegram_get_updates(
+    bot_token: str,
+    *,
+    offset: Optional[int] = None,
+    timeout: int = 25,
+    allowed_updates: Optional[list[str]] = None,
+) -> Tuple[bool, str, list[dict]]:
+    """Long polling getUpdates. Возвращает (ok, error, updates)."""
+    payload: dict = {"timeout": max(0, min(int(timeout), 50))}
+    if offset is not None:
+        payload["offset"] = int(offset)
+    if allowed_updates:
+        payload["allowed_updates"] = allowed_updates
+    ok, err, data, _ = await _telegram_api_call(bot_token, "getUpdates", json_payload=payload)
+    if not ok:
+        return False, err, []
+    result = data.get("result")
+    if not isinstance(result, list):
+        return False, "неверный ответ getUpdates", []
+    return True, "", [u for u in result if isinstance(u, dict)]
+
+
+async def telegram_answer_callback_query(
+    bot_token: str,
+    callback_query_id: str,
+    *,
+    text: str = "",
+    show_alert: bool = False,
+) -> Tuple[bool, str]:
+    payload: dict = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text[:200]
+    if show_alert:
+        payload["show_alert"] = True
+    ok, err, _, _ = await _telegram_api_call(bot_token, "answerCallbackQuery", json_payload=payload)
+    return ok, err
+
+
+async def telegram_send_chat_action(
+    bot_token: str,
+    chat_id: Union[str, int],
+    action: str = "typing",
+) -> None:
+    cid = normalize_telegram_chat_id(chat_id)
+    if not cid:
+        return
+    await _telegram_api_call(
+        bot_token,
+        "sendChatAction",
+        json_payload={"chat_id": cid, "action": action},
+    )
+
+
+async def telegram_edit_message_reply_markup(
+    bot_token: str,
+    chat_id: Union[str, int],
+    message_id: int,
+    *,
+    reply_markup: Optional[dict] = None,
+) -> None:
+    cid = normalize_telegram_chat_id(chat_id)
+    if not cid:
+        return
+    payload: dict = {"chat_id": cid, "message_id": int(message_id)}
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    await _telegram_api_call(bot_token, "editMessageReplyMarkup", json_payload=payload)
 
 
 def _ru_review_word(n: int) -> str:
