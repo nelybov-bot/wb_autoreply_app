@@ -27,6 +27,7 @@ class AgentSession:
     username: str
     messages: list[dict[str, str]] = field(default_factory=list)
     pending: Optional[PendingAction] = None
+    last_task_id: Optional[str] = None
     updated_at: float = field(default_factory=time.time)
 
 

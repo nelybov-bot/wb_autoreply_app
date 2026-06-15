@@ -350,3 +350,29 @@ async def cancel_all_running() -> None:
         ids = [tid for tid, st in _tasks.items() if st.get("status") == "running"]
     for tid in ids:
         await cancel_task(tid)
+
+
+async def list_tasks(*, status: Optional[str] = None, limit: int = 15) -> list[dict[str, Any]]:
+    """Список задач в памяти (load/generate/send)."""
+    await _prune_tasks()
+    safe_limit = max(1, min(int(limit), 30))
+    async with _tasks_lock:
+        rows = [(tid, dict(st)) for tid, st in _tasks.items()]
+    rows.sort(key=lambda x: float(x[1].get("finished_at") or 0), reverse=True)
+    out: list[dict[str, Any]] = []
+    for tid, st in rows:
+        st_status = str(st.get("status") or "")
+        if status and st_status != status:
+            continue
+        out.append({
+            "task_id": tid,
+            "status": st_status,
+            "action": st.get("action"),
+            "detail": st.get("detail"),
+            "progress": st.get("progress"),
+            "error": st.get("error"),
+            "result": st.get("result"),
+        })
+        if len(out) >= safe_limit:
+            break
+    return out

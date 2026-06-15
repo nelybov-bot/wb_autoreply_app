@@ -1553,6 +1553,19 @@ def _build_agent_context(db: Database, user: UserRow) -> AgentContext:
         _disable_auto_schedule(db)
         return {"message": "Автозапуск остановлен", "stopped": cancelled, "enabled": False}
 
+    async def send_report() -> dict:
+        interval = (db.get_setting(TELEGRAM_REPORT_INTERVAL) or "hour").strip()
+        now = dt.datetime.now(MSK_TZ)
+        period_sec = _telegram_report_period_seconds(interval)
+        since_dt = now - dt.timedelta(seconds=period_sec)
+        try:
+            await _send_telegram_report(db, since_dt=since_dt, until_dt=now, interval=interval, manual=True)
+            return {"message": "Отчёт отправлен"}
+        except HTTPException as e:
+            return {"error": str(e.detail)}
+        except Exception as e:
+            return {"error": str(e)}
+
     return AgentContext(
         db=db,
         username=user.username,
@@ -1560,6 +1573,7 @@ def _build_agent_context(db: Database, user: UserRow) -> AgentContext:
         get_auto_status=lambda: _auto_status(db),
         run_auto_now=run_auto_now if can_settings else None,
         stop_auto=stop_auto if can_settings else None,
+        send_telegram_report=send_report if can_settings else None,
     )
 
 

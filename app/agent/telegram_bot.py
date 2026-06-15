@@ -5,6 +5,7 @@ import asyncio
 import logging
 from typing import Callable, Optional
 
+from app.agent.formatting import plain_to_telegram_html, strip_leaked_json
 from app.agent.orchestrator import handle_agent_message
 from app.agent.session import AgentSession, clear_session, get_or_create_session
 from app.agent.tools import AgentContext
@@ -40,7 +41,9 @@ _HELP_TEXT = """🤖 <b>MarketAI</b> — управление через Telegra
 /help — эта справка
 /id — ваш Telegram user_id
 
-Опасные действия (загрузка, генерация, отправка) требуют подтверждения кнопкой или словом «да»."""
+Что умею: магазины, статистика, очередь отзывов/вопросов, загрузка, генерация, отправка, автозапуск, качество, задачи, журнал, рассылка в Telegram-чаты MarketAI.
+
+Опасные действия требуют подтверждения кнопкой или «да»."""
 
 _CONFIRM_KEYBOARD = {
     "inline_keyboard": [
@@ -163,18 +166,28 @@ async def _reply_agent(
     needs_confirm: bool = False,
     db: Database,
 ) -> None:
-    body = (text or "").strip() or "—"
+    body = strip_leaked_json((text or "").strip()) or "—"
+    html_body = plain_to_telegram_html(body)
     markup = _CONFIRM_KEYBOARD if needs_confirm else None
     ok, err = await send_telegram_message(
         token,
         chat_id,
-        body,
-        parse_mode=None,
+        html_body,
+        parse_mode="HTML",
         reply_markup=markup,
         db=db,
     )
     if not ok:
-        log.warning("agent telegram reply failed chat_id=%s: %s", chat_id, err[:200])
+        ok2, err2 = await send_telegram_message(
+            token,
+            chat_id,
+            body,
+            parse_mode=None,
+            reply_markup=markup,
+            db=db,
+        )
+        if not ok2:
+            log.warning("agent telegram reply failed chat_id=%s: %s", chat_id, (err2 or err)[:200])
 
 
 async def _process_agent_input(
