@@ -3388,18 +3388,20 @@ async def api_card_links_wb_catalog(
 async def api_card_links_ozon_catalog(
     store_id: int,
     articles: Optional[str] = Query(None, description="offer_id через запятую или с новой строки"),
-    max_pages: int = Query(15, ge=1, le=50),
+    max_pages: int = Query(30, ge=1, le=50),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):
     s = _require_ozon_store_for_chats(db, store_id)
     offer_ids = parse_articles_csv(articles)
+    catalog_meta: dict = {}
     try:
         rows = await fetch_ozon_catalog(
             s.client_id or "",
             s.api_key,
             offer_ids=offer_ids or None,
             max_pages=max_pages,
+            meta_out=catalog_meta,
         )
     except HttpStatusError as e:
         raise _card_links_http_error("ozon", e) from e
@@ -3422,6 +3424,7 @@ async def api_card_links_ozon_catalog(
         "attach_suggestions": attach,
         "review_suggestions": review,
         "combine_suggestions": combine,
+        "catalog_meta": catalog_meta,
     }
 
 
@@ -3476,7 +3479,7 @@ async def api_card_links_ozon_link(
     if not offer_ids:
         raise HTTPException(400, "offer_ids пуст")
     if not model_name:
-        raise HTTPException(400, "model_name пуст (название модели, атрибут 9048)")
+        raise HTTPException(400, "model_name пуст — укажите название модели")
     try:
         result = await ozon_link_by_model(
             s.client_id or "",

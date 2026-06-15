@@ -699,7 +699,7 @@ async def link_product_cards(
 
         model = (model_name or "").strip()
         if not model:
-            return {"error": "Укажите model_name (название модели Ozon, атрибут 9048)"}
+            return {"error": "Укажите model_name (название модели Ozon)"}
         result = await ozon_link_by_model(
             store.client_id or "",
             store.api_key,

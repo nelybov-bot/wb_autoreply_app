@@ -837,7 +837,7 @@ TOOL_SPECS: list[ToolSpec] = [
         name="link_product_cards",
         description=(
             "Привязать существующие карточки в одну связку. WB: moveNm (target_imt + nm_ids по артикулам). "
-            "Ozon: одинаковый атрибут 9048 «Название модели» (model_name + offer_id). Опасная операция."
+            "Ozon: одинаковое «Название модели» (model_name + offer_id). Опасная операция."
         ),
         risk="write",
         parameters={
@@ -854,7 +854,7 @@ TOOL_SPECS: list[ToolSpec] = [
         name="unlink_product_cards",
         description=(
             "Разъединить карточки. WB: moveNm без targetIMT (по nmID или артикулам). "
-            "Ozon: уникальное «Название модели» (9048) для каждого offer_id. Опасная операция."
+            "Ozon: уникальное «Название модели» для каждого offer_id. Опасная операция."
         ),
         risk="write",
         parameters={

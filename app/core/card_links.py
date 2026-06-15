@@ -114,15 +114,28 @@ def _ozon_primary_image(item: dict) -> str:
 
 def _attr_value(attrs: List[dict], attr_id: int) -> str:
     for a in attrs or []:
-        try:
-            aid = int(a.get("id") or 0)
-        except (TypeError, ValueError):
+        if not isinstance(a, dict):
             continue
+        aid = 0
+        for key in ("id", "attribute_id", "attributeId"):
+            try:
+                val = int(a.get(key) or 0)
+            except (TypeError, ValueError):
+                val = 0
+            if val:
+                aid = val
+                break
         if aid != attr_id:
             continue
         vals = a.get("values") or []
-        if vals and isinstance(vals[0], dict):
-            return str(vals[0].get("value") or "").strip()
+        if isinstance(vals, list) and vals:
+            first = vals[0]
+            if isinstance(first, dict):
+                return str(first.get("value") or first.get("dictionary_value") or "").strip()
+            return str(first).strip()
+        raw = a.get("value")
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
     return ""
 
 
@@ -465,7 +478,7 @@ def group_wb_rows(rows: List[dict]) -> List[dict]:
 
 
 def group_ozon_rows(rows: List[dict]) -> List[dict]:
-    """Группы по model_name (9048) или кластеру related_sku."""
+    """Группы по «Название модели» или кластеру related_sku."""
     by_model: Dict[str, List[dict]] = {}
     orphan: List[dict] = []
     for r in rows:
@@ -536,9 +549,108 @@ def group_ozon_rows(rows: List[dict]) -> List[dict]:
     return groups
 
 
+def _cluster_items_by_title(items: List[dict]) -> List[List[dict]]:
+    """Группирует товары с похожими названиями (для Ozon и мягкой эвристики)."""
+    if len(items) < 2:
+        return []
+    n = len(items)
+    parent = list(range(n))
+
+    def _find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a: int, b: int) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    bases: List[str] = []
+    for it in items:
+        base = _title_base_key(it.get("title") or "")
+        bases.append(base)
+
+    for i in range(n):
+        if not bases[i]:
+            continue
+        for j in range(i + 1, n):
+            if not bases[j]:
+                continue
+            if _titles_related_enough(bases[i], bases[j]):
+                _union(i, j)
+
+    clusters: Dict[int, List[dict]] = {}
+    for i in range(n):
+        clusters.setdefault(_find(i), []).append(items[i])
+    return [grp for grp in clusters.values() if len(grp) >= 2]
+
+
+def _parse_ozon_attributes_by_offer(page: dict) -> Dict[str, List[dict]]:
+    """Разбор ответа /v4/product/info/attributes → offer_id → attributes."""
+    out: Dict[str, List[dict]] = {}
+    if not isinstance(page, dict):
+        return out
+    items: Optional[List[dict]] = None
+    res = page.get("result")
+    if isinstance(res, dict):
+        raw = res.get("items")
+        if isinstance(raw, list):
+            items = [x for x in raw if isinstance(x, dict)]
+    elif isinstance(res, list):
+        items = [x for x in res if isinstance(x, dict)]
+    if items is None:
+        raw = page.get("items")
+        if isinstance(raw, list):
+            items = [x for x in raw if isinstance(x, dict)]
+    for it in items or []:
+        oid = str(it.get("offer_id") or it.get("offerId") or "").strip()
+        if not oid:
+            continue
+        attrs = it.get("attributes") or it.get("attribute") or []
+        out[oid] = attrs if isinstance(attrs, list) else []
+    return out
+
+
 def suggest_link_candidates(rows: List[dict], *, marketplace: str) -> List[dict]:
     """Новые связки: похожие несвязанные карточки в одной категории."""
     pool = [r for r in rows if not r.get("linked")]
+    out: List[dict] = []
+    seq = 0
+
+    if marketplace == "ozon":
+        by_cat: Dict[str, List[dict]] = {}
+        for r in pool:
+            base = _title_base_key(r.get("title") or "")
+            if not base:
+                continue
+            cat = str(r.get("category_key") or "0:0")
+            by_cat.setdefault(cat, []).append(r)
+        for cat_items in by_cat.values():
+            for items in _cluster_items_by_title(cat_items):
+                models = {(x.get("model_name") or "").strip() for x in items}
+                if len(models) == 1 and list(models)[0]:
+                    continue
+                seq += 1
+                cat_label = _candidate_label(items, marketplace=marketplace)
+                sug_model = _suggested_model_name(items)
+                out.append(
+                    {
+                        "candidate_id": f"new-{marketplace}-{seq}",
+                        "kind": "new_link",
+                        "marketplace": marketplace,
+                        "category_label": cat_label,
+                        "category_key": items[0].get("category_key"),
+                        "count": len(items),
+                        "suggested_model_name": sug_model,
+                        "hint": f"Похожие названия · {cat_label}",
+                        "items": items,
+                    }
+                )
+        out.sort(key=lambda x: -x["count"])
+        return out[:80]
+
     buckets: Dict[str, List[dict]] = {}
     for r in pool:
         brand = (r.get("brand") or "").lower().strip()
@@ -631,7 +743,7 @@ def suggest_attach_to_groups(
             u_base = _title_base_key(u.get("title") or "")
             if not u_base:
                 continue
-            if u_base != ref_base and not (u_base in ref_base or ref_base in u_base):
+            if not _titles_related_enough(u_base, ref_base):
                 continue
             dedupe = f"{uid}:{g.get('group_id')}"
             if dedupe in seen:
@@ -960,7 +1072,7 @@ async def ai_suggest_card_links(
     if mp == "wb":
         system = (
             "Ты помощник по связкам карточек Wildberries (WB). "
-            "Это ТОЛЬКО WB: не упоминай Ozon, offer_id, атрибут 9048, «название модели». "
+            "Это ТОЛЬКО WB: не упоминай Ozon, offer_id, «название модели». "
             "Связка на WB — общий imtID (целое число). "
             "Верни ТОЛЬКО JSON-массив без markdown. Каждый элемент: "
             '{"cluster_id":"c1","kind":"new_link"|"attach","article_ids":["артикул продавца"],'
@@ -973,10 +1085,10 @@ async def ai_suggest_card_links(
     else:
         system = (
             "Ты помощник по связкам карточек Ozon. "
-            "Это ТОЛЬКО Ozon: связка — одинаковый атрибут 9048 «Название модели». "
+            "Это ТОЛЬКО Ozon: связка — одинаковое «Название модели». "
             "Верни ТОЛЬКО JSON-массив без markdown. Каждый элемент: "
             '{"cluster_id":"c1","kind":"new_link"|"attach","article_ids":["offer_id"],'
-            '"target_group_id":null|"имя модели","suggested_model_name":"строка для 9048",'
+            '"target_group_id":null|"имя модели","suggested_model_name":"название модели",'
             '"reason":"кратко по-русски"}. '
             "Для attach: target_group_id или suggested_model_name из existing_linked_groups. "
             "Для new_link: предложи общее suggested_model_name. Одна категория на кластер."
@@ -1333,10 +1445,16 @@ async def fetch_ozon_catalog(
     api_key: str,
     *,
     offer_ids: Optional[List[str]] = None,
-    max_pages: int = 15,
+    max_pages: int = 30,
+    meta_out: Optional[dict] = None,
 ) -> List[dict]:
     client = OzonClient(client_id, api_key, timeout_s=60.0)
-    listed = await client.list_products_all(max_pages=max_pages, offer_ids=offer_ids)
+    list_meta: dict = {}
+    listed = await client.list_products_all(
+        max_pages=max_pages,
+        offer_ids=offer_ids,
+        meta_out=list_meta,
+    )
     if offer_ids:
         oids = [str(x).strip() for x in offer_ids if str(x).strip()]
     else:
@@ -1358,13 +1476,7 @@ async def fetch_ozon_catalog(
     for i in range(0, len(oids), 100):
         batch = oids[i : i + 100]
         page = await client.product_info_attributes(offer_ids=batch, limit=1000)
-        block = page.get("result") if isinstance(page.get("result"), dict) else page
-        for it in block.get("items") or []:
-            if not isinstance(it, dict):
-                continue
-            oid = str(it.get("offer_id") or "").strip()
-            if oid:
-                attrs_by_offer[oid] = it.get("attributes") or []
+        attrs_by_offer.update(_parse_ozon_attributes_by_offer(page))
 
     skus: List[int] = []
     for it in info_rows:
@@ -1408,6 +1520,9 @@ async def fetch_ozon_catalog(
                 related_skus=related_by_sku.get(sku),
             )
         )
+    if meta_out is not None:
+        meta_out.update(list_meta)
+        meta_out["count"] = len(rows)
     return rows
 
 
@@ -1477,7 +1592,7 @@ async def ozon_unlink_cards(
     offer_ids: List[str],
     titles_by_offer: Optional[Dict[str, str]] = None,
 ) -> dict:
-    """Разъединить на Ozon: у каждого offer_id своё значение атрибута 9048."""
+    """Разъединить на Ozon: у каждого offer_id своё «Название модели»."""
     oids = [str(x).strip() for x in offer_ids if str(x).strip()]
     if not oids:
         raise ValueError("offer_ids пуст")

@@ -2288,10 +2288,50 @@
   const cardLinksSelectedCandidates = new Set();
   const cardLinksSelectedReview = new Set();
 
+  const CARD_LINKS_MAX_PAGES_OPTS = {
+    wb: [
+      { v: 30, label: '3 000' },
+      { v: 60, label: '6 000' },
+      { v: 100, label: '10 000 (рекомендуется)' },
+      { v: 150, label: '15 000 (макс.)' },
+    ],
+    ozon: [
+      { v: 10, label: '1 000' },
+      { v: 30, label: '3 000 (рекомендуется)' },
+      { v: 50, label: '5 000 (макс.)' },
+    ],
+  };
+  let _cardLinksMaxPagesByMp = { wb: 100, ozon: 30 };
+
   function cardLinksMaxPages() {
+    const mp = cardLinksMarketplace();
     const el = document.getElementById('card-links-max-pages');
-    const n = Number(el?.value || 100);
-    return Number.isFinite(n) && n > 0 ? n : 100;
+    if (el && el.value) {
+      const v = Number(el.value);
+      if (Number.isFinite(v) && v > 0) {
+        _cardLinksMaxPagesByMp[mp] = v;
+        return v;
+      }
+    }
+    return _cardLinksMaxPagesByMp[mp] || (mp === 'ozon' ? 30 : 100);
+  }
+
+  function syncCardLinksMaxPagesSelect() {
+    const mp = cardLinksMarketplace();
+    const sel = document.getElementById('card-links-max-pages');
+    const cap = document.getElementById('card-links-max-pages-caption');
+    if (!sel) return;
+    const opts = CARD_LINKS_MAX_PAGES_OPTS[mp] || CARD_LINKS_MAX_PAGES_OPTS.wb;
+    const prev = _cardLinksMaxPagesByMp[mp] || opts.find((o) => /рекомендуется/.test(o.label))?.v || opts[0].v;
+    sel.innerHTML = opts.map((o) => `<option value="${o.v}">${escapeHtml(o.label)}</option>`).join('');
+    const has = opts.some((o) => o.v === prev);
+    sel.value = String(has ? prev : opts[0].v);
+    _cardLinksMaxPagesByMp[mp] = Number(sel.value);
+    if (cap) {
+      cap.textContent = mp === 'ozon'
+        ? 'Страниц каталога Ozon (×100 карточек)'
+        : 'Страниц каталога WB (×100 карточек)';
+    }
   }
 
   function cardLinksCooldownLeftMs() {
@@ -2340,6 +2380,7 @@
     const ozOnly = document.querySelectorAll('.card-links-ozon-only');
     wbOnly.forEach(el => { el.hidden = mp !== 'wb'; });
     ozOnly.forEach(el => { el.hidden = mp !== 'ozon'; });
+    syncCardLinksMaxPagesSelect();
   }
 
   function syncCardLinksStoreSelect() {
@@ -3175,10 +3216,10 @@
     const articles = (document.getElementById('card-links-articles')?.value || '').trim();
     const qs = new URLSearchParams();
     if (articles) qs.set('articles', articles);
-    if (mp === 'wb') qs.set('max_pages', String(cardLinksMaxPages()));
+    qs.set('max_pages', String(cardLinksMaxPages()));
     const loadingText = mp === 'wb'
       ? `Запрос к WB Content API… (до ${cardLinksMaxPages()} стр., может занять несколько минут)`
-      : 'Запрос к Ozon…';
+      : `Запрос к Ozon… (до ${cardLinksMaxPages()} стр.)`;
     if (!opts.quiet) setPanelLoading('card-links-loading', true, loadingText);
     if (!opts.quiet) setCardLinksStatus('');
     try {
@@ -3446,7 +3487,7 @@
       ).trim();
     }
     if (!modelName) {
-      return fail(kind === 'relocate' ? 'Выберите целевую модель' : 'Введите название модели (атрибут 9048)');
+      return fail(kind === 'relocate' ? 'Выберите целевую модель' : 'Введите название модели');
     }
     const ozTargetSize = cardLinksTargetGroupSize(null, modelName);
     const ozSizeErr = cardLinksValidateLinkSize(articles.length, ozTargetSize);

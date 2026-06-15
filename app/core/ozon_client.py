@@ -489,17 +489,27 @@ class OzonClient:
         max_pages: int = 30,
         offer_ids: Optional[List[str]] = None,
         visibility: str = "ALL",
+        meta_out: Optional[dict] = None,
     ) -> List[dict]:
         """Пагинация /v3/product/list."""
         if offer_ids:
             data = await self.list_products(limit=1000, offer_ids=offer_ids, visibility=visibility)
             block = self._list_block(data)
             items = block.get("items") or []
-            return [x for x in items if isinstance(x, dict)]
+            out = [x for x in items if isinstance(x, dict)]
+            if meta_out is not None:
+                meta_out["pages_fetched"] = 1
+                meta_out["max_pages"] = max_pages
+                meta_out["page_size"] = 1000
+                meta_out["truncated"] = False
+            return out
 
         rows: List[dict] = []
         last_id = ""
+        pages = 0
+        truncated = False
         for _ in range(max(1, max_pages)):
+            pages += 1
             data = await self.list_products(limit=100, last_id=last_id, visibility=visibility)
             block = self._list_block(data)
             batch = block.get("items") or []
@@ -509,8 +519,17 @@ class OzonClient:
                 if isinstance(it, dict):
                     rows.append(it)
             last_id = str(block.get("last_id") or "").strip()
-            if not last_id or not block.get("has_next"):
+            has_next = bool(block.get("has_next"))
+            if not last_id or not has_next:
                 break
+            if pages >= max_pages:
+                truncated = True
+                break
+        if meta_out is not None:
+            meta_out["pages_fetched"] = pages
+            meta_out["max_pages"] = max_pages
+            meta_out["page_size"] = 100
+            meta_out["truncated"] = truncated
         return rows
 
     async def product_info_list(
@@ -544,7 +563,7 @@ class OzonClient:
         limit: int = 100,
         last_id: str = "",
     ) -> dict:
-        """POST /v4/product/info/attributes — атрибуты (в т.ч. 9048 «Название модели»)."""
+        """POST /v4/product/info/attributes — атрибуты (в т.ч. «Название модели»)."""
         filt: Dict[str, Any] = {"visibility": "ALL"}
         if offer_ids:
             filt["offer_id"] = [str(x).strip() for x in offer_ids if str(x).strip()]
@@ -574,7 +593,7 @@ class OzonClient:
         return []
 
     async def update_product_attributes(self, items: List[dict]) -> dict:
-        """POST /v1/product/attributes/update — обновить атрибуты (склейка через 9048)."""
+        """POST /v1/product/attributes/update — обновить атрибуты (склейка через «Название модели»)."""
         if not items:
             return {}
         data = await self._request(

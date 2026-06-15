@@ -603,16 +603,12 @@
         <details class="card-links-more">
           <summary>Фильтр по артикулам и глубина загрузки</summary>
           <textarea id="card-links-articles" class="card-links-articles-input" rows="2" placeholder="ART-001, ART-002 или по одному в строке"></textarea>
-          <label class="card-links-max-pages-label card-links-wb-only" for="card-links-max-pages">
-            Страниц каталога WB (×100 карточек)
-            <select id="card-links-max-pages" class="select-md">
-              <option value="30">3 000</option>
-              <option value="60">6 000</option>
-              <option value="100" selected>10 000 (рекомендуется)</option>
-              <option value="150">15 000 (макс.)</option>
-            </select>
+          <label class="card-links-max-pages-label" for="card-links-max-pages">
+            <span id="card-links-max-pages-caption">Страниц каталога (×100 карточек)</span>
+            <select id="card-links-max-pages" class="select-md"></select>
           </label>
           <p class="form-hint card-links-wb-only">Большой каталог грузится 2–3 минуты. Не нажимайте «Связать» подряд — между действиями пауза ~3 с.</p>
+          <p class="form-hint card-links-ozon-only">Ozon: ~1 запрос/с — полный каталог может грузиться несколько минут.</p>
         </details>
         <div id="card-links-status" class="form-hint card-links-status" role="status">Выберите магазин и нажмите «Загрузить».</div>
         <div class="progress-wrap" id="card-links-loading" aria-live="polite" hidden>
