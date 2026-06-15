@@ -645,7 +645,8 @@ def suggest_attach_to_groups(
                 "marketplace": marketplace,
                 "category_label": cat_label,
                 "count": 1,
-                "hint": f"Добавить в «{g.get('group_label')}»",
+                "target_group_count": len(ref_items),
+                "hint": f"Добавить в «{g.get('group_label')}» ({len(ref_items)} шт.)",
                 "target_group_id": g.get("group_id"),
                 "target_group_label": g.get("group_label"),
                 "items": [u],
@@ -698,6 +699,65 @@ def _groups_same_category(g1: dict, g2: dict, *, marketplace: str) -> bool:
     return True
 
 
+def _groups_titles_related(g1: dict, g2: dict) -> bool:
+    """Похожи ли названия товаров в двух связках."""
+    for it1 in (g1.get("items") or [])[:10]:
+        b1 = _title_base_key(it1.get("title") or "")
+        if not b1:
+            continue
+        for it2 in (g2.get("items") or [])[:10]:
+            b2 = _title_base_key(it2.get("title") or "")
+            if b2 and _titles_related_enough(b1, b2):
+                return True
+    return False
+
+
+def _item_matches_group(item: dict, group: dict) -> bool:
+    u_base = _title_base_key(item.get("title") or "")
+    if not u_base:
+        return False
+    for it in group.get("items") or []:
+        b = _title_base_key(it.get("title") or "")
+        if b and _titles_related_enough(u_base, b):
+            return True
+    return False
+
+
+def _best_larger_target_group(
+    item: dict,
+    source_g: dict,
+    groups: List[dict],
+    *,
+    marketplace: str,
+) -> Optional[dict]:
+    """Связка побольше, куда логичнее перенести товар (чем больше — тем лучше)."""
+    src_n = len(source_g.get("items") or [])
+    src_id = str(source_g.get("group_id") or "")
+    best: Optional[dict] = None
+    best_n = 0
+    for h in groups:
+        hid = str(h.get("group_id") or "")
+        if not hid or hid == src_id:
+            continue
+        if not _groups_same_category(source_g, h, marketplace=marketplace):
+            continue
+        h_n = len(h.get("items") or [])
+        if h_n <= src_n or h_n >= MAX_LINK_ITEMS:
+            continue
+        if marketplace == "wb":
+            if int(item.get("imt_id") or 0) == int(h.get("group_id") or 0):
+                continue
+        else:
+            if str(item.get("model_name") or "").strip() == str(h.get("group_label") or "").strip():
+                continue
+        if not _item_matches_group(item, h):
+            continue
+        if h_n > best_n:
+            best = h
+            best_n = h_n
+    return best
+
+
 def suggest_review_linked_groups(
     groups: List[dict],
     *,
@@ -715,9 +775,7 @@ def suggest_review_linked_groups(
 
     for i, g1 in enumerate(multi):
         items1 = g1.get("items") or []
-        ref1 = items1[0] if items1 else {}
-        base1 = _title_base_key(ref1.get("title") or "")
-        if not base1:
+        if not items1:
             continue
         for g2 in multi[i + 1 :]:
             if not _groups_same_category(g1, g2, marketplace=marketplace):
@@ -730,9 +788,7 @@ def suggest_review_linked_groups(
             if pair_key in seen_merge:
                 continue
             items2 = g2.get("items") or []
-            ref2 = items2[0] if items2 else {}
-            base2 = _title_base_key(ref2.get("title") or "")
-            if not _titles_similar(base1, base2):
+            if not _groups_titles_related(g1, g2):
                 continue
             if len(items1) >= len(items2):
                 target_g, source_g = g1, g2
@@ -775,16 +831,19 @@ def suggest_review_linked_groups(
                 "source_group_label": source_g.get("group_label"),
                 "target_group_id": target_g.get("group_id"),
                 "target_group_label": target_g.get("group_label"),
+                "source_group_count": len(source_items),
+                "target_group_count": len(target_items),
                 "items": to_move,
                 "sample_items": target_items[:5],
             }
+            ref0 = items1[0] if items1 else {}
             if marketplace == "wb":
                 entry["suggested_target_imt"] = int(target_g.get("group_id") or 0)
-                entry["subject_id"] = target_g.get("subject_id") or ref1.get("subject_id")
+                entry["subject_id"] = target_g.get("subject_id") or ref0.get("subject_id")
             else:
                 entry["suggested_model_name"] = str(target_g.get("group_label") or "").strip()
                 entry["category_key"] = (
-                    target_g.get("category_key") or ref1.get("category_key")
+                    target_g.get("category_key") or ref0.get("category_key")
                 )
             out.append(entry)
 
@@ -792,76 +851,61 @@ def suggest_review_linked_groups(
         items = g.get("items") or []
         if not items:
             continue
-        ref = items[0]
-        g_base = _title_base_key(ref.get("title") or "")
         gid = str(g.get("group_id") or "")
+        src_n = len(items)
         for it in items:
-            u_base = _title_base_key(it.get("title") or "")
-            if not u_base:
+            best_h = _best_larger_target_group(it, g, multi, marketplace=marketplace)
+            if not best_h:
                 continue
-            if _titles_similar(u_base, g_base):
+            h_items = best_h.get("items") or []
+            hgid = str(best_h.get("group_id") or "")
+            if marketplace == "wb":
+                uid = str(it.get("nm_id") or it.get("vendor_code") or "")
+            else:
+                uid = str(it.get("offer_id") or "")
+            dedupe = f"{uid}:{hgid}"
+            if dedupe in seen_relocate:
                 continue
-            for h in multi:
-                hgid = str(h.get("group_id") or "")
-                if not hgid or hgid == gid:
-                    continue
-                if not _groups_same_category(g, h, marketplace=marketplace):
-                    continue
-                h_items = h.get("items") or []
-                h_ref = h_items[0] if h_items else {}
-                h_base = _title_base_key(h_ref.get("title") or "")
-                if not _titles_similar(u_base, h_base):
-                    continue
-                if marketplace == "wb":
-                    uid = str(it.get("nm_id") or it.get("vendor_code") or "")
-                    target_id = int(h.get("group_id") or 0)
-                    if int(it.get("imt_id") or 0) == target_id:
-                        continue
-                else:
-                    uid = str(it.get("offer_id") or "")
-                    target_model = str(h.get("group_label") or "").strip()
-                    if str(it.get("model_name") or "").strip() == target_model:
-                        continue
-                dedupe = f"{uid}:{hgid}"
-                if dedupe in seen_relocate:
-                    continue
-                if len(h_items) >= MAX_LINK_ITEMS:
-                    continue
-                seen_relocate.add(dedupe)
-                seq += 1
-                cat_label = _candidate_label([it], marketplace=marketplace)
-                entry = {
-                    "candidate_id": f"relocate-{marketplace}-{seq}",
-                    "kind": "relocate",
-                    "marketplace": marketplace,
-                    "category_label": cat_label,
-                    "count": 1,
-                    "hint": (
-                        f"Переместить из «{g.get('group_label')}» в «{h.get('group_label')}»"
-                    ),
-                    "source_group_id": g.get("group_id"),
-                    "source_group_label": g.get("group_label"),
-                    "target_group_id": h.get("group_id"),
-                    "target_group_label": h.get("group_label"),
-                    "items": [it],
-                    "sample_items": h_items[:3],
-                }
-                if marketplace == "wb":
-                    entry["suggested_target_imt"] = int(h.get("group_id") or 0)
-                    entry["subject_id"] = it.get("subject_id")
-                else:
-                    entry["suggested_model_name"] = str(h.get("group_label") or "").strip()
-                    entry["category_key"] = it.get("category_key")
-                out.append(entry)
+            seen_relocate.add(dedupe)
+            seq += 1
+            h_n = len(h_items)
+            cat_label = _candidate_label([it], marketplace=marketplace)
+            entry = {
+                "candidate_id": f"relocate-{marketplace}-{seq}",
+                "kind": "relocate",
+                "marketplace": marketplace,
+                "category_label": cat_label,
+                "count": 1,
+                "source_group_count": src_n,
+                "target_group_count": h_n,
+                "hint": (
+                    f"В более крупную связку: из «{g.get('group_label')}» ({src_n} шт.) "
+                    f"→ «{best_h.get('group_label')}» ({h_n} шт.)"
+                ),
+                "source_group_id": g.get("group_id"),
+                "source_group_label": g.get("group_label"),
+                "target_group_id": best_h.get("group_id"),
+                "target_group_label": best_h.get("group_label"),
+                "items": [it],
+                "sample_items": h_items[:5],
+            }
+            if marketplace == "wb":
+                entry["suggested_target_imt"] = int(best_h.get("group_id") or 0)
+                entry["subject_id"] = it.get("subject_id")
+            else:
+                entry["suggested_model_name"] = str(best_h.get("group_label") or "").strip()
+                entry["category_key"] = it.get("category_key")
+            out.append(entry)
 
     out.sort(
         key=lambda x: (
             0 if x.get("kind") == "merge_groups" else 1,
-            -(x.get("count") or 0),
+            -(x.get("target_group_count") or x.get("count") or 0),
+            x.get("source_group_count") or 0,
             x.get("hint") or "",
         )
     )
-    return out[:80]
+    return out[:120]
 
 
 async def ai_suggest_card_links(

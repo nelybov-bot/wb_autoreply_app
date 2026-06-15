@@ -3813,7 +3813,23 @@ body.theme-dark .card-links-cand-header td {
   background: rgba(255, 255, 255, 0.04);
 }
 
-.card-links-cand-source--target {
+.card-links-tab-badge {
+  display: inline-block;
+  min-width: 1.25rem;
+  margin-left: 0.25rem;
+  padding: 0.05rem 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  border-radius: 999px;
+  background: #c2410c;
+  color: #fff;
+  vertical-align: middle;
+}
+
+.card-links-cand-source--target,
+.card-links-cand-source--relocate-target {
   margin-top: 0.5rem;
   padding-top: 0.5rem;
   border-top: 1px dashed var(--border, #e5e7eb);
