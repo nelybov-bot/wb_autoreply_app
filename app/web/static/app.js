@@ -490,23 +490,6 @@
   }
 
   let _qualityLoading = false;
-  let _qualityPollTimer = null;
-
-  function syncQualityPoll(wbRows) {
-    const pending = (wbRows || []).some((r) => {
-      const err = r.error || '';
-      return err.includes('загружается') || err.includes('обновлены позже');
-    });
-    if (pending && !_qualityPollTimer) {
-      _qualityPollTimer = setInterval(() => {
-        if (_qualityLoading) return;
-        void loadQualityMetrics(false);
-      }, 65000);
-    } else if (!pending && _qualityPollTimer) {
-      clearInterval(_qualityPollTimer);
-      _qualityPollTimer = null;
-    }
-  }
 
   function formatPercentValue(v) {
     const n = Number(v);
@@ -539,9 +522,6 @@
     return String(v);
   }
 
-  const QUALITY_WB_COLUMNS = [
-    { key: 'review_rating', label: 'Рейтинг', title: 'Рейтинг по отзывам WB' },
-  ];
   const QUALITY_OZON_COLUMNS = [
     { key: 'cancellation', label: 'Отмены', title: 'Рейтинг · % отмен (риск блокировки ~2%)' },
     { key: 'overdue', label: 'Просрочки', title: 'Рейтинг · % просрочек отгрузки (~5%)' },
@@ -611,26 +591,6 @@
     try {
       const q = refresh ? '?refresh=1' : '';
       const data = await api('/quality-metrics' + q, { timeoutMs: 120000 });
-      const wbRows = data.wb || [];
-      renderQualityTable('quality-wb-stores', wbRows, QUALITY_WB_COLUMNS, 'Нет активных магазинов WB');
-      syncQualityPoll(wbRows);
-      const wbKeyWarn = document.getElementById('quality-wb-key-warning');
-      if (wbKeyWarn) {
-        const isAdmin = currentUser && currentUser.role === 'admin';
-        const groups = Array.isArray(data.wb_key_groups) ? data.wb_key_groups : [];
-        if (isAdmin && groups.length) {
-          const lines = groups.map((g) => {
-            const n = Number(g.count) || 0;
-            const ids = (g.store_ids || []).join(', ');
-            return `Обнаружено ${n} магазинов с одним WB API ключом (ID: ${ids}). Рейтинг продавца будет общий.`;
-          });
-          wbKeyWarn.textContent = lines.join(' ');
-          wbKeyWarn.hidden = false;
-        } else {
-          wbKeyWarn.textContent = '';
-          wbKeyWarn.hidden = true;
-        }
-      }
       renderQualityTable(
         'quality-ozon-stores',
         data.ozon || [],
@@ -2361,6 +2321,87 @@
     return `<img class="card-link-thumb" src="${escapeHtml(u)}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
   }
 
+  function cardLinksLinkedGroups(subjectId) {
+    const mp = cardLinksMarketplace();
+    return (cardLinksData.groups || []).filter((g) => {
+      if (!g.linked || (g.count || 0) < 2) return false;
+      if (String(g.group_id) === '__unlinked__') return false;
+      if (mp === 'wb' && subjectId) {
+        return String(g.subject_id || '') === String(subjectId);
+      }
+      return true;
+    });
+  }
+
+  function cardLinkGroupOptionLabel(g, mp) {
+    const items = g.items || [];
+    const t = ((items[0] && items[0].title) || '').slice(0, 45);
+    const n = g.count || items.length;
+    if (mp === 'wb') return `imtID ${g.group_id} · ${t} (${n} шт.)`;
+    return `${g.group_label} · ${t} (${n} шт.)`;
+  }
+
+  function fillCardLinksTargetSelects(subjectId) {
+    const mp = cardLinksMarketplace();
+    const wbSel = document.getElementById('card-links-target-group');
+    const ozSel = document.getElementById('card-links-target-model-group');
+    const groups = cardLinksLinkedGroups(subjectId);
+    if (wbSel) {
+      const prev = wbSel.value;
+      wbSel.innerHTML = '<option value="">— новая связка / imtID из первой карточки —</option>'
+        + groups.map((g) => `<option value="${escapeHtml(String(g.group_id))}">${escapeHtml(cardLinkGroupOptionLabel(g, 'wb'))}</option>`).join('');
+      if (prev && groups.some((g) => String(g.group_id) === prev)) wbSel.value = prev;
+    }
+    if (ozSel) {
+      const prev = ozSel.value;
+      ozSel.innerHTML = '<option value="">— выберите существующую модель —</option>'
+        + groups.map((g) => `<option value="${escapeHtml(String(g.group_label || ''))}">${escapeHtml(cardLinkGroupOptionLabel(g, 'ozon'))}</option>`).join('');
+      if (prev && groups.some((g) => String(g.group_label) === prev)) ozSel.value = prev;
+    }
+  }
+
+  function cardLinkCandidateMeta(c, mp) {
+    const kind = c.kind || 'new_link';
+    if (kind === 'attach') {
+      if (mp === 'wb') {
+        const imt = c.suggested_target_imt || c.target_group_id || '—';
+        return `Добавить в связку WB imtID ${imt}`;
+      }
+      const m = c.suggested_model_name || c.target_group_label || '—';
+      return `Добавить в модель Ozon «${m}»`;
+    }
+    if (mp === 'wb') {
+      return `Новая связка WB · ${c.count || 0} карточек · один предмет (subjectID)`;
+    }
+    const m = c.suggested_model_name || '—';
+    return `Новая модель Ozon «${m}» · ${c.count || 0} карточек`;
+  }
+
+  function cardLinkCandidateTargetSelectHtml(c, mp) {
+    const subj = c.items && c.items[0] ? c.items[0].subject_id : null;
+    const groups = cardLinksLinkedGroups(subj);
+    if (!groups.length) return '';
+    const cid = escapeHtml(String(c.candidate_id || ''));
+    const selected = mp === 'wb'
+      ? String(c.suggested_target_imt || c.target_group_id || '')
+      : String(c.suggested_model_name || c.target_group_label || '');
+    const opts = groups.map((g) => {
+      const val = mp === 'wb' ? String(g.group_id) : String(g.group_label || '');
+      const sel = val === selected ? ' selected' : '';
+      return `<option value="${escapeHtml(val)}"${sel}>${escapeHtml(cardLinkGroupOptionLabel(g, mp))}</option>`;
+    }).join('');
+    const label = mp === 'wb' ? 'Целевая связка (imtID)' : 'Целевая модель Ozon';
+    return `<label class="card-links-cand-target-label">${label}
+      <select class="select-md card-links-cand-target" data-candidate-id="${cid}">${opts}</select>
+    </label>`;
+  }
+
+  function refreshCardLinksTargetSelectFromSelection() {
+    const checked = getSelectedCardLinkRows();
+    const sid = checked.length ? checked[0].getAttribute('data-subject-id') : null;
+    fillCardLinksTargetSelects(sid);
+  }
+
   function cardLinkCandidateKindLabel(kind) {
     if (kind === 'attach') return 'В существующую связку';
     if (kind === 'new_link') return 'Новая связка';
@@ -2400,7 +2441,7 @@
     const rowKey = mp === 'wb' ? `nm:${r.nm_id || idx}` : `off:${r.offer_id || idx}`;
     const cand = meta.candidate || {};
     const sugImt = cand.suggested_target_imt != null ? cand.suggested_target_imt : (r.imt_id || '');
-    const sugModel = cand.suggested_model_name || '';
+    const sugModel = mp === 'ozon' ? (cand.suggested_model_name || '') : '';
     return `<tr>
       <td class="col-check"><input type="checkbox" class="card-links-check"
         data-row-key="${escapeHtml(rowKey)}"
@@ -2408,6 +2449,7 @@
         data-nm-id="${escapeHtml(String(r.nm_id || ''))}"
         data-imt-id="${escapeHtml(String(r.imt_id || ''))}"
         data-subject-id="${escapeHtml(String(r.subject_id || ''))}"
+        data-parent-id="${escapeHtml(String(r.parent_id || ''))}"
         data-category-key="${escapeHtml(String(r.category_key || ''))}"
         data-candidate-id="${escapeHtml(String(cand.candidate_id || ''))}"
         data-candidate-kind="${escapeHtml(String(cand.kind || ''))}"
@@ -2457,25 +2499,32 @@
           const kindLabel = cardLinkCandidateKindLabel(kind);
           const cat = c.category_label || '—';
           const hint = c.hint || '';
-          const target = c.target_group_label ? ` → ${c.target_group_label}` : '';
-          const modelHint = c.suggested_model_name ? ` · модель: ${c.suggested_model_name}` : '';
-          const imtHint = c.suggested_target_imt ? ` · imtID: ${c.suggested_target_imt}` : '';
+          const targetSelect = c.kind === 'attach' ? cardLinkCandidateTargetSelectHtml(c, mp) : '';
           html += `<tr class="card-links-cand-header"><td colspan="6">
-            <div class="card-links-cand-head-inner">
-              <span class="card-links-cand-kind">${escapeHtml(kindLabel)}</span>
-              <span>${escapeHtml(cat)} · ${c.count || 0} шт.${escapeHtml(target)}${escapeHtml(modelHint)}${escapeHtml(imtHint)}</span>
-              <span class="form-hint">${escapeHtml(hint)}</span>
-              <button type="button" class="btn btn-secondary btn-sm card-links-select-group" data-candidate-id="${escapeHtml(String(c.candidate_id || ''))}">Выбрать группу</button>
+            <div class="card-links-cand-card">
+              <div class="card-links-cand-top">
+                <span class="card-links-cand-kind">${escapeHtml(kindLabel)}</span>
+                ${c.ai ? '<span class="card-links-cand-ai">ИИ</span>' : ''}
+                <span class="card-links-cand-cat">${escapeHtml(cat)}</span>
+                <span class="card-links-cand-count">${c.count || 0} шт.</span>
+              </div>
+              <div class="card-links-cand-action">${escapeHtml(cardLinkCandidateMeta(c, mp))}</div>
+              ${hint ? `<div class="card-links-cand-hint">${escapeHtml(hint)}</div>` : ''}
+              <div class="card-links-cand-actions">
+                ${targetSelect}
+                <button type="button" class="btn btn-secondary btn-sm card-links-select-group" data-candidate-id="${escapeHtml(String(c.candidate_id || ''))}">Выбрать товары</button>
+              </div>
             </div>
           </td></tr>`;
           for (const it of c.items || []) {
-            html += cardLinkRowHtml(it, mp, 0, { candidate: c, groupLabel: c.target_group_label || c.hint });
+            html += cardLinkRowHtml(it, mp, 0, { candidate: c, groupLabel: c.target_group_label || '' });
           }
         }
         tbody.innerHTML = html;
       }
     }
 
+    fillCardLinksTargetSelects(null);
     const mergeBar = document.getElementById('card-links-merge-bar');
     if (mergeBar) mergeBar.hidden = false;
   }
@@ -2493,7 +2542,9 @@
     const mp = cardLinksMarketplace();
     if (mp === 'wb') {
       const sids = new Set(checked.map(el => el.getAttribute('data-subject-id')).filter(x => x && x !== '0'));
-      if (sids.size > 1) return 'Разные категории WB — связывайте товары одного предмета';
+      if (sids.size > 1) return 'Разные предметы WB (subjectID) — связывайте только одну группу кандидатов';
+      const parents = new Set(checked.map(el => el.getAttribute('data-parent-id')).filter(x => x && x !== '0'));
+      if (parents.size > 1) return 'Разные родительские категории WB — выберите «Выбрать группу» у одного предложения';
     } else {
       const cats = new Set(checked.map(el => el.getAttribute('data-category-key')).filter(Boolean));
       if (cats.size > 1) return 'Разные категории Ozon — связывайте товары одной категории';
@@ -2506,10 +2557,14 @@
     if (!first) return;
     const sugImt = Number(first.getAttribute('data-suggested-imt') || 0);
     const sugModel = (first.getAttribute('data-suggested-model') || '').trim();
-    const imtEl = document.getElementById('card-links-target-imt');
+    const wbSel = document.getElementById('card-links-target-group');
+    const ozSel = document.getElementById('card-links-target-model-group');
     const modelEl = document.getElementById('card-links-model-name');
-    if (sugImt && imtEl && !Number(imtEl.value)) imtEl.value = String(sugImt);
-    if (sugModel && modelEl && !(modelEl.value || '').trim()) modelEl.value = sugModel;
+    if (sugImt && wbSel && !wbSel.value) wbSel.value = String(sugImt);
+    if (sugModel) {
+      if (ozSel && !ozSel.value) ozSel.value = sugModel;
+      if (modelEl && !(modelEl.value || '').trim()) modelEl.value = sugModel;
+    }
   }
 
   function getSelectedCardLinkRows() {
@@ -2617,7 +2672,7 @@
     }
     const articles = checked.map(el => el.getAttribute('data-article')).filter(Boolean);
     if (mp === 'wb') {
-      let targetImt = Number(document.getElementById('card-links-target-imt')?.value || 0);
+      let targetImt = Number(document.getElementById('card-links-target-group')?.value || 0);
       if (!targetImt) {
         targetImt = Number(checked[0].getAttribute('data-suggested-imt') || checked[0].getAttribute('data-imt-id') || 0);
       }
@@ -2643,6 +2698,9 @@
       return;
     }
     let modelName = (document.getElementById('card-links-model-name')?.value || '').trim();
+    if (!modelName) {
+      modelName = (document.getElementById('card-links-target-model-group')?.value || '').trim();
+    }
     if (!modelName) {
       modelName = (checked[0].getAttribute('data-suggested-model') || '').trim();
     }
@@ -2728,11 +2786,30 @@
       const btn = e.target.closest('.card-links-select-group');
       if (!btn) return;
       const cid = btn.getAttribute('data-candidate-id');
-      document.querySelectorAll('.card-links-check').forEach(el => {
+      document.querySelectorAll('.card-links-check').forEach((el) => {
         el.checked = el.getAttribute('data-candidate-id') === cid;
       });
       const picked = getSelectedCardLinkRows();
       applySuggestedLinkFields(picked);
+      refreshCardLinksTargetSelectFromSelection();
+    });
+    document.getElementById('card-links-tbody')?.addEventListener('change', (e) => {
+      const sel = e.target.closest('.card-links-cand-target');
+      if (!sel) return;
+      const mp = cardLinksMarketplace();
+      if (mp === 'wb') {
+        const wbSel = document.getElementById('card-links-target-group');
+        if (wbSel) wbSel.value = sel.value;
+      } else {
+        const ozSel = document.getElementById('card-links-target-model-group');
+        const modelEl = document.getElementById('card-links-model-name');
+        if (ozSel) ozSel.value = sel.value;
+        if (modelEl) modelEl.value = sel.value;
+      }
+    });
+    document.getElementById('card-links-target-model-group')?.addEventListener('change', (e) => {
+      const modelEl = document.getElementById('card-links-model-name');
+      if (modelEl && e.target.value) modelEl.value = e.target.value;
     });
     document.getElementById('card-links-check-all')?.addEventListener('change', (e) => {
       if (cardLinksView === 'candidates') return;

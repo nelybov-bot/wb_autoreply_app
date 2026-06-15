@@ -141,16 +141,6 @@ def _tool_auto_status(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]
 async def _tool_quality_summary(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
     stores = ctx.db.list_stores()
     data = await fetch_all_quality(stores, use_cache=True)
-    wb = []
-    for row in data.get("wb") or []:
-        m = (row.get("metrics") or [{}])[0] if row.get("metrics") else {}
-        wb.append({
-            "store_id": row.get("store_id"),
-            "store_name": row.get("store_name"),
-            "ok": row.get("ok"),
-            "rating": m.get("value"),
-            "error": row.get("error") or "",
-        })
     ozon = []
     for row in data.get("ozon") or []:
         metrics = {m.get("key"): m.get("value") for m in (row.get("metrics") or [])}
@@ -161,7 +151,7 @@ async def _tool_quality_summary(ctx: AgentContext, args: dict[str, Any]) -> dict
             "metrics": metrics,
             "error": row.get("error") or "",
         })
-    return {"wb": wb, "ozon": ozon}
+    return {"ozon": ozon}
 
 
 async def _tool_load_new(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -642,7 +632,7 @@ TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         name="get_quality_summary",
-        description="Показатели качества WB (рейтинг) и Ozon (отмены, просрочки, индекс) по магазинам.",
+        description="Показатели качества Ozon (отмены, просрочки, индекс) по магазинам.",
         risk="read",
         parameters={},
         execute=_tool_quality_summary,
@@ -941,12 +931,7 @@ def format_tool_result(name: str, result: Any) -> str:
             body += f"\n• {hint}"
         return body
     if name == "get_quality_summary":
-        lines = ["📈 Качество:"]
-        for row in result.get("wb") or []:
-            if row.get("ok") and row.get("rating") is not None:
-                lines.append(f"• WB {row['store_name']}: {row['rating']} ★")
-            elif row.get("error"):
-                lines.append(f"• WB {row['store_name']}: ⚠️ {row['error'][:60]}")
+        lines = ["📈 Качество Ozon:"]
         for row in result.get("ozon") or []:
             m = row.get("metrics") or {}
             if row.get("ok"):

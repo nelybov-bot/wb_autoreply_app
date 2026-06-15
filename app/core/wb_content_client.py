@@ -53,6 +53,15 @@ class WbContentClient:
 
         return await retry(_do, retry_on_status=(429, 500, 502, 503, 504), retries=4)
 
+    async def list_subjects(self) -> List[dict]:
+        """GET /content/v2/object/all — предметы и родительские категории."""
+        data = await self._request("GET", "/content/v2/object/all")
+        if isinstance(data, dict):
+            rows = data.get("data")
+            if isinstance(rows, list):
+                return [x for x in rows if isinstance(x, dict)]
+        return []
+
     async def list_cards(
         self,
         *,

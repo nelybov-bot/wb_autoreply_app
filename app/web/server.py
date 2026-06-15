@@ -96,6 +96,7 @@ from app.core.card_links import (
     suggest_link_candidates,
     wb_disconnect_cards,
     wb_merge_cards,
+    wb_merge_error_message,
 )
 from app.core.chat_common import SETTING_AUTO_CHAT_MAX_AGE_DAYS, SETTING_REPLY_FROM, parse_api_error_detail
 from app.core.card_check import (
@@ -121,7 +122,7 @@ from app.core.ozon_alerts import (
     is_legacy_telegram_template,
 )
 from app.core.config_backup import export_config, import_config
-from app.core.quality_metrics import ensure_wb_rating_background_started, fetch_all_quality
+from app.core.quality_metrics import fetch_all_quality
 from app.core.workflows import (
     auto_process_ozon_buyer_chats,
     auto_process_ozon_important_alerts,
@@ -3324,6 +3325,8 @@ def _card_links_http_error(marketplace: str, e: HttpStatusError) -> HTTPExceptio
             else "Проверьте Client-Id и Api-Key Ozon."
         )
         return HTTPException(e.status, f"{mp}: доступ запрещён. {hint}")
+    if marketplace == "wb" and e.status == 400:
+        return HTTPException(400, wb_merge_error_message(e.body or ""))
     return HTTPException(e.status, f"{mp} API {e.status}: {body or 'ошибка'}")
 
 
@@ -3647,7 +3650,7 @@ async def api_quality_metrics(
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):
-    """Показатели качества по магазинам WB и Ozon (кэш ~30 мин)."""
+    """Показатели качества Ozon по магазинам (кэш ~30 мин)."""
     stores = db.list_stores()
     try:
         return await asyncio.wait_for(
@@ -3754,7 +3757,6 @@ async def _startup_scheduler():
         log.info("Telegram report scheduler started (MSK)")
     start_telegram_agent_task()
     log.info("Telegram agent polling started")
-    ensure_wb_rating_background_started()
 
 
 @app.on_event("shutdown")

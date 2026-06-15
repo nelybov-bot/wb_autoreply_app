@@ -68,6 +68,8 @@ def normalize_wb_card(card: dict) -> dict:
         "brand": brand,
         "subject_id": subject_id,
         "subject_name": subject_name,
+        "parent_id": 0,
+        "parent_name": "",
         "photo_url": _wb_photo_url(card),
         "linked": False,
         "link_group_id": imt if imt else None,
@@ -204,7 +206,11 @@ def _candidate_label(items: List[dict], *, marketplace: str) -> str:
     if marketplace == "wb":
         name = str(items[0].get("subject_name") or "").strip()
         sid = int(items[0].get("subject_id") or 0)
-        return name or (f"subjectID {sid}" if sid else "категория WB")
+        parent = str(items[0].get("parent_name") or "").strip()
+        base = name or (f"subjectID {sid}" if sid else "категория WB")
+        if parent:
+            return f"{parent} → {base}"
+        return base
     label = str(items[0].get("category_label") or items[0].get("category_key") or "").strip()
     return label or "категория Ozon"
 
@@ -456,11 +462,18 @@ async def ai_suggest_card_links(
     for g in groups:
         if not g.get("linked") or len(g.get("items") or []) < 2:
             continue
+        items = g.get("items") or []
+        sample = items[0] if items else {}
         linked_samples.append(
             {
-                "group": g.get("group_label"),
+                "group_id": g.get("group_id"),
+                "group_label": g.get("group_label"),
                 "category": g.get("subject_name") or g.get("category_label"),
-                "titles": [(x.get("title") or "")[:80] for x in (g.get("items") or [])[:4]],
+                "subject_id": g.get("subject_id") or sample.get("subject_id"),
+                "sample_title": (sample.get("title") or "")[:80],
+                "sample_article": sample.get("vendor_code") or sample.get("offer_id"),
+                "count": len(items),
+                "titles": [(x.get("title") or "")[:80] for x in items[:4]],
             }
         )
         if len(linked_samples) >= 15:
@@ -470,24 +483,40 @@ async def ai_suggest_card_links(
     for r in unlinked:
         compact.append(
             {
-                "id": r.get("vendor_code") or r.get("offer_id"),
+                "article": r.get("vendor_code") or r.get("offer_id"),
                 "mp_id": r.get("nm_id") or r.get("sku"),
                 "title": (r.get("title") or "")[:120],
                 "category": r.get("subject_name") or r.get("category_label") or r.get("category_key"),
+                "subject_id": r.get("subject_id"),
+                "current_imt_id": r.get("imt_id"),
             }
         )
 
-    system = (
-        "Ты помощник по связкам карточек на маркетплейсе. "
-        "Верни ТОЛЬКО JSON-массив без markdown. "
-        "Каждый элемент: "
-        '{"cluster_id":"c1","kind":"new_link"|"attach","article_ids":["..."],'
-        '"target_group_label":null|"имя существующей связки",'
-        '"suggested_model_name":"для Ozon",'
-        '"reason":"кратко"}. '
-        "Объединяй только товары одной категории и одной линейки (разные комплекты 1/2/3 шт — да, "
-        "разные товары — нет). Для attach укажи target_group_label из примеров существующих связок."
-    )
+    mp = (marketplace or "").strip().lower()
+    if mp == "wb":
+        system = (
+            "Ты помощник по связкам карточек Wildberries (WB). "
+            "Это ТОЛЬКО WB: не упоминай Ozon, offer_id, атрибут 9048, «название модели». "
+            "Связка на WB — общий imtID (целое число). "
+            "Верни ТОЛЬКО JSON-массив без markdown. Каждый элемент: "
+            '{"cluster_id":"c1","kind":"new_link"|"attach","article_ids":["артикул продавца"],'
+            '"target_group_id":null|123456789,"reason":"кратко по-русски"}. '
+            "article_ids — vendor_code из списка. "
+            "Для attach: target_group_id = imtID из existing_linked_groups.group_id. "
+            "Для new_link: target_group_id = null, объединяй 2+ похожих товара одного subject_id. "
+            "Разные родительские категории и subject_id не смешивать."
+        )
+    else:
+        system = (
+            "Ты помощник по связкам карточек Ozon. "
+            "Это ТОЛЬКО Ozon: связка — одинаковый атрибут 9048 «Название модели». "
+            "Верни ТОЛЬКО JSON-массив без markdown. Каждый элемент: "
+            '{"cluster_id":"c1","kind":"new_link"|"attach","article_ids":["offer_id"],'
+            '"target_group_id":null|"имя модели","suggested_model_name":"строка для 9048",'
+            '"reason":"кратко по-русски"}. '
+            "Для attach: target_group_id или suggested_model_name из existing_linked_groups. "
+            "Для new_link: предложи общее suggested_model_name. Одна категория на кластер."
+        )
     user = json.dumps(
         {
             "marketplace": marketplace,
@@ -514,6 +543,7 @@ async def ai_suggest_card_links(
         str(r.get("vendor_code") or r.get("offer_id") or ""): r
         for r in unlinked
     }
+    group_by_id = {str(g.get("group_id")): g for g in groups if g.get("group_id")}
     out: List[dict] = []
     for i, cl in enumerate(parsed):
         if not isinstance(cl, dict):
@@ -527,7 +557,7 @@ async def ai_suggest_card_links(
             continue
         if kind == "new_link" and len(items) < 2:
             continue
-        if marketplace == "wb":
+        if mp == "wb":
             sids = {int(x.get("subject_id") or 0) for x in items}
             if len(sids) > 1:
                 continue
@@ -537,29 +567,227 @@ async def ai_suggest_card_links(
                 continue
         seq = i + 1
         entry: Dict[str, Any] = {
-            "candidate_id": f"ai-{marketplace}-{seq}",
+            "candidate_id": f"ai-{mp}-{seq}",
             "kind": kind,
-            "marketplace": marketplace,
-            "category_label": _candidate_label(items, marketplace=marketplace),
+            "marketplace": mp,
+            "category_label": _candidate_label(items, marketplace=mp),
             "count": len(items),
             "hint": str(cl.get("reason") or "Подсказка ИИ")[:200],
             "items": items,
             "ai": True,
         }
-        if kind == "attach":
-            entry["target_group_label"] = cl.get("target_group_label")
-            entry["suggested_model_name"] = cl.get("suggested_model_name")
-            if marketplace == "wb":
-                for g in groups:
-                    if str(g.get("group_label")) == str(cl.get("target_group_label")):
-                        entry["suggested_target_imt"] = int(g.get("group_id") or 0)
-                        break
-        else:
-            entry["suggested_model_name"] = cl.get("suggested_model_name") or _suggested_model_name(items)
-            if marketplace == "wb":
+        if mp == "wb":
+            tgt_raw = cl.get("target_group_id") or cl.get("target_imt") or cl.get("target_group_label")
+            tgt_imt = 0
+            if tgt_raw is not None:
+                try:
+                    tgt_imt = int(tgt_raw)
+                except (TypeError, ValueError):
+                    for g in groups:
+                        if str(g.get("group_label")) == str(tgt_raw):
+                            tgt_imt = int(g.get("group_id") or 0)
+                            break
+            if kind == "attach" and tgt_imt:
+                gref = group_by_id.get(str(tgt_imt)) or {}
+                entry["target_group_id"] = str(tgt_imt)
+                entry["target_group_label"] = f"imtID {tgt_imt}"
+                entry["suggested_target_imt"] = tgt_imt
+                entry["sample_items"] = (gref.get("items") or [])[:3]
+            else:
                 entry["suggested_target_imt"] = _wb_target_imt(items)
+        else:
+            model = str(cl.get("suggested_model_name") or cl.get("target_group_id") or "").strip()
+            if kind == "attach":
+                entry["target_group_label"] = str(cl.get("target_group_id") or model)
+                entry["suggested_model_name"] = model or str(cl.get("target_group_id") or "")
+            else:
+                entry["suggested_model_name"] = model or _suggested_model_name(items)
         out.append(entry)
     return out[:40]
+
+
+def _enrich_wb_row(row: dict, subject_map: Dict[int, dict]) -> None:
+    sid = int(row.get("subject_id") or 0)
+    if sid and sid in subject_map:
+        meta = subject_map[sid]
+        row["parent_id"] = int(meta.get("parent_id") or 0)
+        row["parent_name"] = str(meta.get("parent_name") or "")
+        if not row.get("subject_name"):
+            row["subject_name"] = str(meta.get("subject_name") or "")
+
+
+async def _wb_subject_map(api_key: str) -> Dict[int, dict]:
+    client = WbContentClient(api_key)
+    try:
+        subjects = await client.list_subjects()
+    except Exception as e:
+        log.warning("WB subject map failed: %s", e)
+        return {}
+    out: Dict[int, dict] = {}
+    for it in subjects:
+        try:
+            sid = int(it.get("subjectID") or it.get("subjectId") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not sid:
+            continue
+        try:
+            pid = int(it.get("parentID") or it.get("parentId") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        out[sid] = {
+            "parent_id": pid,
+            "parent_name": str(it.get("parentName") or "").strip(),
+            "subject_name": str(it.get("subjectName") or "").strip(),
+        }
+    return out
+
+
+def wb_merge_error_message(body: str) -> str:
+    """Человекочитаемая ошибка WB moveNm."""
+    text = (body or "").strip()
+    try:
+        data = json.loads(text)
+        err = str(data.get("errorText") or data.get("message") or "").strip()
+    except json.JSONDecodeError:
+        err = text
+    low = err.lower()
+    if "parent categor" in low:
+        return (
+            "WB не позволяет объединить товары из разных родительских категорий. "
+            "Выберите карточки с одним предметом (subjectID) — используйте «Выбрать группу» на вкладке «Кандидаты»."
+        )
+    if "subject" in low or "предмет" in low:
+        return f"WB: {err}"
+    if err:
+        return f"WB: {err}"
+    return f"WB API: {text[:300]}"
+
+
+async def _wb_rows_for_merge(
+    api_key: str,
+    *,
+    nm_ids: List[int],
+    target_imt: int,
+    rows: Optional[List[dict]] = None,
+) -> List[dict]:
+    """Подгружает карточки по nmID / imtID для проверки перед merge."""
+    by_nm: Dict[int, dict] = {}
+    for r in rows or []:
+        try:
+            nid = int(r.get("nm_id") or 0)
+        except (TypeError, ValueError):
+            nid = 0
+        if nid:
+            by_nm[nid] = r
+
+    need_nm = [int(x) for x in nm_ids if int(x) not in by_nm]
+    need_imt = int(target_imt or 0)
+    has_imt = any(int(r.get("imt_id") or 0) == need_imt for r in by_nm.values())
+
+    if not need_nm and (not need_imt or has_imt):
+        return list(by_nm.values())
+
+    client = WbContentClient(api_key)
+    subject_map = await _wb_subject_map(api_key)
+
+    for nid in need_nm:
+        try:
+            page = await client.list_cards(limit=20, nm_ids=[int(nid)])
+        except Exception:
+            continue
+        for card in page.get("cards") or []:
+            if not isinstance(card, dict):
+                continue
+            row = normalize_wb_card(card)
+            _enrich_wb_row(row, subject_map)
+            nm = int(row.get("nm_id") or 0)
+            if nm:
+                by_nm[nm] = row
+
+    if need_imt and not any(int(r.get("imt_id") or 0) == need_imt for r in by_nm.values()):
+        # Подгрузить одну карточку целевой связки по imt (через известный nm из запроса)
+        for nid in nm_ids:
+            row = by_nm.get(int(nid))
+            if row and int(row.get("imt_id") or 0) == need_imt:
+                break
+        else:
+            for row in list(by_nm.values()):
+                if int(row.get("imt_id") or 0) == need_imt:
+                    break
+
+    return list(by_nm.values())
+
+
+def validate_wb_merge_rows(
+    rows: List[dict],
+    *,
+    target_imt: int,
+    nm_ids: List[int],
+) -> None:
+    """Проверка до moveNm: один subjectID и одна родительская категория."""
+    by_nm: Dict[int, dict] = {}
+    for r in rows:
+        try:
+            nid = int(r.get("nm_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if nid:
+            by_nm[nid] = r
+
+    ids = [int(x) for x in nm_ids if x is not None]
+    if not ids:
+        raise ValueError("nm_ids пуст")
+
+    selected: List[dict] = []
+    for nid in ids:
+        row = by_nm.get(int(nid))
+        if not row:
+            raise ValueError(
+                f"Карточка nmID {nid} не найдена — обновите каталог и выберите товары одной группы"
+            )
+        selected.append(row)
+
+    subjects: Dict[int, str] = {}
+    parents: Dict[int, str] = {}
+    for row in selected:
+        sid = int(row.get("subject_id") or 0)
+        if not sid:
+            raise ValueError(
+                f"У карточки {row.get('vendor_code') or row.get('nm_id')} не определён предмет (subjectID)"
+            )
+        subjects[sid] = str(row.get("subject_name") or f"subjectID {sid}")
+        pid = int(row.get("parent_id") or 0)
+        if pid:
+            parents[pid] = str(row.get("parent_name") or f"parentID {pid}")
+
+    if len(subjects) > 1:
+        labels = ", ".join(subjects.values())
+        raise ValueError(
+            f"Разные предметы WB: {labels}. Объединяйте только карточки одного subjectID."
+        )
+    if len(parents) > 1:
+        labels = ", ".join(parents.values())
+        raise ValueError(
+            f"Разные родительские категории WB: {labels}. Выберите товары из одной категории."
+        )
+
+    want_subject = next(iter(subjects.keys()))
+    want_parent = next(iter(parents.keys())) if parents else 0
+
+    target_row = next((r for r in rows if int(r.get("imt_id") or 0) == int(target_imt)), None)
+    if target_row:
+        ts = int(target_row.get("subject_id") or 0)
+        if ts and ts != want_subject:
+            raise ValueError(
+                f"target imtID {target_imt} относится к предмету «{target_row.get('subject_name')}», "
+                f"а выбранные карточки — к «{subjects.get(want_subject)}»"
+            )
+        tp = int(target_row.get("parent_id") or 0)
+        if want_parent and tp and tp != want_parent:
+            raise ValueError(
+                f"target imtID {target_imt} в другой родительской категории («{target_row.get('parent_name')}»)"
+            )
 
 
 async def fetch_wb_catalog(
@@ -570,12 +798,20 @@ async def fetch_wb_catalog(
     max_pages: int = 20,
 ) -> List[dict]:
     client = WbContentClient(api_key)
+    subject_map = await _wb_subject_map(api_key)
     raw = await client.list_cards_all(
         max_pages=max_pages,
         text_search=text_search,
         vendor_codes=vendor_codes,
     )
-    return [normalize_wb_card(c) for c in raw if isinstance(c, dict)]
+    rows: List[dict] = []
+    for c in raw:
+        if not isinstance(c, dict):
+            continue
+        row = normalize_wb_card(c)
+        _enrich_wb_row(row, subject_map)
+        rows.append(row)
+    return rows
 
 
 async def fetch_ozon_catalog(
@@ -661,7 +897,20 @@ async def fetch_ozon_catalog(
     return rows
 
 
-async def wb_merge_cards(api_key: str, *, target_imt: int, nm_ids: List[int]) -> dict:
+async def wb_merge_cards(
+    api_key: str,
+    *,
+    target_imt: int,
+    nm_ids: List[int],
+    catalog_rows: Optional[List[dict]] = None,
+) -> dict:
+    rows = await _wb_rows_for_merge(
+        api_key,
+        nm_ids=nm_ids,
+        target_imt=int(target_imt),
+        rows=catalog_rows,
+    )
+    validate_wb_merge_rows(rows, target_imt=int(target_imt), nm_ids=nm_ids)
     client = WbContentClient(api_key)
     return await client.merge_cards(target_imt=int(target_imt), nm_ids=nm_ids)
 

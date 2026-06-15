@@ -135,7 +135,7 @@
       <header class="panel-head">
         <div>
           <h2 class="panel-title">Сводка</h2>
-          <p class="panel-desc">Показатели качества по магазинам WB и Ozon</p>
+          <p class="panel-desc">Показатели качества Ozon по магазинам</p>
         </div>
         <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-quality" title="Обновить показатели с маркетплейсов">Обновить показатели</button>
       </header>
@@ -144,24 +144,13 @@
           <h3 id="quality-section-title" class="quality-section-title">Показатели качества</h3>
           <p class="form-hint quality-section-hint" id="quality-updated-hint">Загрузка…</p>
         </div>
-        <div class="quality-mp-board" id="quality-mp-board">
-          <div class="quality-mp-col" data-mp="wb">
-            <header class="quality-mp-col-head">
-              <span class="mp-pill mp-wb">WB</span>
-              <span class="quality-mp-col-title">Wildberries</span>
-              <span class="quality-mp-col-note">рейтинг по отзывам · не чаще 1 раза в минуту на аккаунт</span>
-            </header>
-            <p class="quality-wb-key-warning" id="quality-wb-key-warning" hidden></p>
-            <div class="quality-panel-body" id="quality-wb-stores"></div>
-          </div>
-          <div class="quality-mp-col" data-mp="ozon">
-            <header class="quality-mp-col-head">
-              <span class="mp-pill mp-ozon">OZON</span>
-              <span class="quality-mp-col-title">Ozon</span>
-              <span class="quality-mp-col-note">рейтинг + индекс ошибок (14 дн.)</span>
-            </header>
-            <div class="quality-panel-body" id="quality-ozon-stores"></div>
-          </div>
+        <div class="quality-mp-col" data-mp="ozon">
+          <header class="quality-mp-col-head">
+            <span class="mp-pill mp-ozon">OZON</span>
+            <span class="quality-mp-col-title">Ozon</span>
+            <span class="quality-mp-col-note">рейтинг + индекс ошибок (14 дн.)</span>
+          </header>
+          <div class="quality-panel-body" id="quality-ozon-stores"></div>
         </div>
       </section>
       <section class="summary-ops-collapsible summary-ops-collapsible--footer" id="summary-ops-collapsible" aria-label="Очередь и операционка">
@@ -592,56 +581,72 @@
           <h2 class="panel-title">Связки карточек</h2>
           <p class="panel-desc">Выгрузка каталога, проверка существующих связок и привязка по артикулам (только существующие карточки)</p>
         </div>
-        <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-load">Загрузить каталог</button>
-        <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai" title="Нужен OpenAI ключ в настройках">AI-подсказки</button>
       </header>
       <div class="form-card form-card-wide">
-        <div class="form-row form-row-wrap">
-          <div class="form-group">
-            <label>Маркетплейс</label>
+        <div class="panel-toolbar">
+          <div class="toolbar-group">
+            <span class="toolbar-label">Маркетплейс</span>
             <select id="card-links-marketplace" class="select-md">
               <option value="wb">Wildberries</option>
               <option value="ozon">Ozon</option>
             </select>
           </div>
-          <div class="form-group">
-            <label>Магазин</label>
+          <div class="toolbar-group">
+            <span class="toolbar-label">Магазин</span>
             <select id="card-links-store" class="select-md"></select>
           </div>
-        </div>
-        <div class="form-group">
-          <label>Артикулы <span class="form-label-hint">(необязательно — по одному в строке или через запятую)</span></label>
-          <textarea id="card-links-articles" rows="3" placeholder="ART-001&#10;ART-002"></textarea>
+          <div class="toolbar-group toolbar-group--grow">
+            <span class="toolbar-label">Артикулы <span class="form-label-hint">(необязательно)</span></span>
+            <textarea id="card-links-articles" class="card-links-articles-input" rows="2" placeholder="ART-001, ART-002 или по одному в строке"></textarea>
+          </div>
+          <div class="toolbar-divider" aria-hidden="true"></div>
+          <div class="toolbar-group toolbar-group--actions">
+            <button type="button" class="btn btn-primary" id="btn-card-links-load">Загрузить каталог</button>
+            <button type="button" class="btn btn-secondary" id="btn-card-links-ai" title="Нужен OpenAI ключ в настройках">AI-подсказки</button>
+          </div>
         </div>
         <div id="card-links-status" class="form-hint" role="status">Выберите магазин и нажмите «Загрузить каталог».</div>
         <div class="progress-wrap" id="card-links-loading" aria-live="polite" hidden>
           <div class="progress-bar indeterminate" role="progressbar"></div>
           <span class="progress-label" id="card-links-loading-text">Загрузка…</span>
         </div>
-        <div class="card-links-view-tabs" role="tablist">
-          <button type="button" class="btn btn-secondary btn-sm card-links-tab active" data-cl-view="catalog">Каталог</button>
-          <button type="button" class="btn btn-secondary btn-sm card-links-tab" data-cl-view="groups">Группы</button>
-          <button type="button" class="btn btn-secondary btn-sm card-links-tab" data-cl-view="candidates">Кандидаты</button>
-        </div>
-        <div class="card-links-cand-filters" id="card-links-cand-filters" hidden>
-          <button type="button" class="btn btn-secondary btn-sm card-links-cf active" data-cf="all">Все предложения</button>
-          <button type="button" class="btn btn-secondary btn-sm card-links-cf" data-cf="new">Новые связки</button>
-          <button type="button" class="btn btn-secondary btn-sm card-links-cf" data-cf="attach">В существующую</button>
-          <button type="button" class="btn btn-secondary btn-sm card-links-cf" data-cf="ai">ИИ</button>
-        </div>
-        <div id="card-links-merge-bar" class="card-links-merge-bar" hidden>
-          <div class="form-row form-row-wrap card-links-merge-fields">
-            <div class="form-group card-links-wb-only" id="card-links-target-imt-wrap">
-              <label>target imtID (WB)</label>
-              <input type="number" id="card-links-target-imt" placeholder="из первой выбранной карточки">
-            </div>
-            <div class="form-group card-links-ozon-only" id="card-links-model-wrap" hidden>
-              <label>Название модели (Ozon, 9048)</label>
-              <input type="text" id="card-links-model-name" placeholder="Balea крем увлажняющий">
-            </div>
-            <button type="button" class="btn btn-primary" id="btn-card-links-merge">Связать выбранные</button>
-            <button type="button" class="btn btn-secondary" id="btn-card-links-disconnect">Разъединить выбранные</button>
+        <div class="card-links-nav">
+          <div class="segmented card-links-view-tabs" role="tablist" aria-label="Вид таблицы">
+            <button type="button" class="card-links-tab active" data-cl-view="catalog" role="tab">Каталог</button>
+            <button type="button" class="card-links-tab" data-cl-view="groups" role="tab">Группы</button>
+            <button type="button" class="card-links-tab" data-cl-view="candidates" role="tab">Кандидаты</button>
           </div>
+          <div class="segmented card-links-cand-filters" id="card-links-cand-filters" role="tablist" aria-label="Фильтр кандидатов" hidden>
+            <button type="button" class="card-links-cf active" data-cf="all" role="tab">Все</button>
+            <button type="button" class="card-links-cf" data-cf="new" role="tab">Новые</button>
+            <button type="button" class="card-links-cf" data-cf="attach" role="tab">В связку</button>
+            <button type="button" class="card-links-cf" data-cf="ai" role="tab">ИИ</button>
+          </div>
+        </div>
+        <div id="card-links-merge-bar" class="card-links-merge-wrap" hidden>
+          <div class="panel-toolbar panel-toolbar--muted card-links-merge-bar">
+            <div class="toolbar-group toolbar-group--grow card-links-wb-only" id="card-links-target-imt-wrap">
+              <span class="toolbar-label">Связка WB (imtID)</span>
+              <select id="card-links-target-group" class="select-lg input-grow">
+                <option value="">— существующая связка —</option>
+              </select>
+            </div>
+            <div class="toolbar-group toolbar-group--grow card-links-ozon-only" id="card-links-model-wrap" hidden>
+              <span class="toolbar-label">Модель Ozon (9048)</span>
+              <div class="card-links-ozon-target-row">
+                <select id="card-links-target-model-group" class="select-md input-grow">
+                  <option value="">— существующая —</option>
+                </select>
+                <input type="text" id="card-links-model-name" class="input-grow" placeholder="или новое название">
+              </div>
+            </div>
+            <div class="toolbar-divider" aria-hidden="true"></div>
+            <div class="toolbar-group toolbar-group--actions">
+              <button type="button" class="btn btn-primary" id="btn-card-links-merge">Связать</button>
+              <button type="button" class="btn btn-secondary" id="btn-card-links-disconnect">Разъединить</button>
+            </div>
+          </div>
+          <p class="form-hint card-links-target-hint card-links-wb-only">Для «в связку» выберите imtID. Для новой связки оставьте пустым — возьмётся imtID первой карточки.</p>
         </div>
         <div class="table-scroll">
           <table class="items-table card-links-table" id="card-links-table">
@@ -1064,7 +1069,7 @@
           <button type="button" class="agent-chip" data-agent-prompt="Проверь чаты покупателей по всем магазинам">Чаты</button>
           <button type="button" class="agent-chip" data-agent-prompt="Ответь в чатах WB и Ozon">Ответить в чатах</button>
           <button type="button" class="agent-chip" data-agent-prompt="Проверь автоакции Ozon по всем магазинам">Акции Ozon</button>
-          <button type="button" class="agent-chip" data-agent-prompt="Показатели качества по магазинам">Качество</button>
+          <button type="button" class="agent-chip" data-agent-prompt="Показатели качества Ozon по магазинам">Качество Ozon</button>
         </div>
         <div class="agent-messages" id="agent-messages" aria-live="polite">
           <div class="agent-welcome">
