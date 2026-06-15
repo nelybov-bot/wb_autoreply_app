@@ -9,15 +9,14 @@ _JSON_PLAN_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _INLINE_MD_RE = re.compile(
-    r"\*\*(.+?)\*\*|__(.+?)__|`([^`]+)`|«([^»]+)»",
+    r"\*\*(.+?)\*\*|__(.+?)__|\*([^*\n]+?)\*|_([^_\n]+?)_|`([^`]+)`|«([^»]+)»",
 )
-_SECTION_EMOJI_RE = re.compile(
-    r"^[\U0001F300-\U0001FAFF\u2600-\u27BF]",
-)
+_SECTION_EMOJI_RE = re.compile(r"^[\U0001F300-\U0001FAFF\u2600-\u27BF]")
 _STORE_LINE_RE = re.compile(r"^(WB|OZON|ЯМ|Ozon|Wildberries)\s+.+", re.IGNORECASE)
 _STATUS_PREFIXES = ("✅", "❌", "⚠️", "🔄", "⏳", "⏸", "⏹")
 _DONE_LABELS = frozenset({"✅ Готово", "✅ Готово."})
 _CONFIRM_FOOTER_RE = re.compile(r"^Подтвердите:\s*.+$", re.IGNORECASE | re.DOTALL)
+_MARKETPLACE_RE = re.compile(r"\b(WB|OZON|Ozon|ЯМ|Wildberries)\b", re.IGNORECASE)
 
 
 def strip_leaked_json(text: str) -> str:
@@ -34,26 +33,68 @@ def strip_leaked_json(text: str) -> str:
 
 
 def escape_tg(text: str) -> str:
-    return html_lib.escape((text or "").strip() or "—")
+    if text is None:
+        return "—"
+    return html_lib.escape(text)
 
 
-def _highlight_tokens(s: str) -> str:
-    """Экранирование фрагмента + подсветка id и #номеров."""
+def display_or_dash(text: str) -> str:
+    s = (text or "").strip()
+    return escape_tg(s) if s else "—"
+
+
+def _section_title(text: str) -> str:
+    return f"<b><u>{escape_tg(text.strip())}</u></b>"
+
+
+def _bold_if_number(text: str) -> str:
+    v = (text or "").strip()
+    if re.fullmatch(r"[\d.,]+", v) or re.fullmatch(r"\d+/\d+", v):
+        return f"<b>{escape_tg(v)}</b>"
+    return _enrich_inline(v)
+
+
+def _enrich_inline(s: str) -> str:
+    """Жирные числа, маркетплейсы, курсив в скобках и [статусах]."""
     if not s:
         return ""
     out: list[str] = []
     pos = 0
-    for m in re.finditer(
-        r"\b(id[=:]\s*)([A-Za-z0-9_-]{4,})\b|#(\d+)\b",
-        s,
-        flags=re.IGNORECASE,
-    ):
+    pattern = re.compile(
+        r"\b(id[=:]\s*)([A-Za-z0-9_-]{4,})\b"
+        r"|#(\d+)\b"
+        r"|\[([^\]]+)\]"
+        r"|⭐(\d+(?:[.,]\d+)?)"
+        r"|\b(WB|OZON|Ozon|ЯМ|Wildberries)\b"
+        r"|(\d+/\d+)"
+        r"|\(([^)]+)\)"
+        r"|(\b\d+\b)",
+        re.IGNORECASE,
+    )
+    for m in pattern.finditer(s):
         if m.start() > pos:
-            out.append(escape_tg(s[pos : m.start()]))
+            chunk = s[pos : m.start()]
+            out.append(escape_tg(chunk))
         if m.group(2):
             out.append(f"{escape_tg(m.group(1))}<code>{escape_tg(m.group(2))}</code>")
         elif m.group(3):
             out.append(f"<code>#{m.group(3)}</code>")
+        elif m.group(4):
+            out.append(f"<i>[{escape_tg(m.group(4))}]</i>")
+        elif m.group(5):
+            out.append(f"⭐<b>{escape_tg(m.group(5))}</b>")
+        elif m.group(6):
+            out.append(f"<b>{escape_tg(m.group(6).upper() if m.group(6).upper() in ('WB', 'OZON', 'ЯМ') else m.group(6))}</b>")
+        elif m.group(7):
+            out.append(f"<b>{escape_tg(m.group(7))}</b>")
+        elif m.group(8):
+            inner = m.group(8).strip()
+            if re.fullmatch(r"\d+", inner):
+                out.append(f"({escape_tg(inner)})")
+            else:
+                out.append(f"<i>({escape_tg(inner)})</i>")
+        elif m.group(9):
+            out.append(f"<b>{escape_tg(m.group(9))}</b>")
         pos = m.end()
     if pos < len(s):
         out.append(escape_tg(s[pos:]))
@@ -61,7 +102,7 @@ def _highlight_tokens(s: str) -> str:
 
 
 def _inline_format(text: str) -> str:
-    """**жирный**, `код`, «курсив» внутри строки."""
+    """**жирный**, *курсив*, `код`, «курсив»."""
     s = text or ""
     if not s.strip():
         return "—"
@@ -69,23 +110,57 @@ def _inline_format(text: str) -> str:
     pos = 0
     for m in _INLINE_MD_RE.finditer(s):
         if m.start() > pos:
-            out.append(_highlight_tokens(s[pos : m.start()]))
+            out.append(_enrich_inline(s[pos : m.start()]))
         if m.group(1) or m.group(2):
             out.append(f"<b>{escape_tg(m.group(1) or m.group(2))}</b>")
-        elif m.group(3):
-            out.append(f"<code>{escape_tg(m.group(3))}</code>")
-        elif m.group(4):
-            out.append(f"<i>{escape_tg(m.group(4))}</i>")
+        elif m.group(3) or m.group(4):
+            out.append(f"<i>{escape_tg(m.group(3) or m.group(4))}</i>")
+        elif m.group(5):
+            out.append(f"<code>{escape_tg(m.group(5))}</code>")
+        elif m.group(6):
+            out.append(f"<i>«{escape_tg(m.group(6))}»</i>")
         pos = m.end()
     if pos < len(s):
-        out.append(_highlight_tokens(s[pos:]))
+        out.append(_enrich_inline(s[pos:]))
     return "".join(out) or "—"
 
 
-def _format_bullet_body(body: str) -> str:
-    m = re.match(r"^([^:]{2,42}):\s*(.+)$", body.strip())
+def _format_metric_value(val: str) -> str:
+    val = (val or "").strip()
+    if not val:
+        return "—"
+    if "|" in val:
+        return " | ".join(_format_metric_value(p.strip()) for p in val.split("|"))
+    m = re.match(r"^([^:]{1,28}):\s*(.+)$", val)
     if m and not m.group(1).startswith("http"):
-        return f"<b>{escape_tg(m.group(1))}:</b> {_inline_format(m.group(2))}"
+        return f"<i>{escape_tg(m.group(1).strip())}:</i> {_bold_if_number(m.group(2).strip())}"
+    m2 = re.match(r"^(\d+)\s+(.+?)\s+из\s+(\d+)$", val)
+    if m2:
+        return (
+            f"<b>{escape_tg(m2.group(1))}</b> "
+            f"<i>{escape_tg(m2.group(2))}</i> "
+            f"из <b>{escape_tg(m2.group(3))}</b>"
+        )
+    return _enrich_inline(val) if not re.search(r"[*_`«]", val) else _inline_format(val)
+
+
+def _format_bullet_body(body: str) -> str:
+    body = body.strip()
+    m = re.match(r"^([^:]{2,42}):\s*(.+)$", body)
+    if m and not m.group(1).startswith("http"):
+        return f"<b>{escape_tg(m.group(1))}:</b> {_format_metric_value(m.group(2))}"
+    m2 = re.match(r"^(.+?)\s+—\s+(.+)$", body)
+    if m2:
+        return f"<b>{escape_tg(m2.group(1).strip())}</b> — {_format_metric_value(m2.group(2))}"
+    return _inline_format(body)
+
+
+def _format_sub_line(body: str) -> str:
+    if " — " in body:
+        title, tail = body.split(" — ", 1)
+        return f"<i>{_inline_format(title.strip())}</i> — {_format_metric_value(tail)}"
+    if body.startswith("«") or ":" in body[:50]:
+        return f"<i>{_inline_format(body)}</i>"
     return _inline_format(body)
 
 
@@ -103,6 +178,16 @@ def _is_section_header(stripped: str) -> bool:
     return False
 
 
+def _format_status_line(prefix: str, rest: str) -> str:
+    if prefix in ("✅", "❌", "⚠️"):
+        return f"{prefix} <b>{_inline_format(rest)}</b>"
+    if prefix == "🔄" and rest.lower().startswith("задача"):
+        m = re.match(r"(?i)задача\s+(.+)", rest)
+        if m:
+            return f"🔄 <b>Задача</b> <code>{escape_tg(m.group(1).strip())}</code>"
+    return f"{prefix} {_inline_format(rest)}"
+
+
 def _format_line(raw: str) -> str:
     if not raw.strip():
         return ""
@@ -113,10 +198,10 @@ def _format_line(raw: str) -> str:
         return f"<i>{escape_tg(stripped)}</i>"
 
     if stripped in _DONE_LABELS:
-        return f"<b>{escape_tg(stripped)}</b>"
+        return _section_title(stripped)
 
     if stripped.startswith("Итого:"):
-        return f"<b>{_inline_format(stripped)}</b>"
+        return _section_title(stripped)
 
     if stripped.startswith("Ошибка:"):
         return f"<b>❌ {_inline_format(stripped[8:].strip())}</b>"
@@ -124,14 +209,20 @@ def _format_line(raw: str) -> str:
     for prefix in _STATUS_PREFIXES:
         if stripped.startswith(prefix):
             rest = stripped[len(prefix) :].strip()
-            if rest and prefix in ("✅", "❌", "⚠️"):
-                return f"{prefix} <b>{_inline_format(rest)}</b>"
             if rest:
-                return f"{prefix} {_inline_format(rest)}"
+                return _format_status_line(prefix, rest)
             return escape_tg(stripped)
 
     if stripped.startswith("…"):
         return f"<i>{escape_tg(stripped)}</i>"
+
+    if indent >= 2:
+        body = stripped
+        if body.startswith("• "):
+            body = body[2:].strip()
+        elif body.startswith("◦ "):
+            body = body[2:].strip()
+        return f"  ◦ {_format_sub_line(body)}"
 
     bullet = ""
     body = stripped
@@ -143,12 +234,14 @@ def _format_line(raw: str) -> str:
         bullet, body = "◦", stripped[2:].strip()
 
     if bullet:
-        prefix = "  " if indent >= 2 else ""
-        mark = "◦" if indent >= 2 else bullet
-        return f"{prefix}{mark} {_format_bullet_body(body)}"
+        return f"{bullet} {_format_bullet_body(body)}"
 
     if _is_section_header(stripped):
-        return f"<b>{_inline_format(stripped)}</b>"
+        return _section_title(stripped)
+
+    if _STORE_LINE_RE.match(stripped) and ":" in stripped:
+        mp, _, tail = stripped.partition(":")
+        return f"<b>{escape_tg(mp.strip())}:</b> {_format_metric_value(tail)}"
 
     return _inline_format(stripped)
 
@@ -187,7 +280,7 @@ def format_agent_telegram_reply(text: str, *, needs_confirm: bool = False) -> st
 
     parts: list[str] = []
     if needs_confirm:
-        parts.append("⚠️ <b>Требуется подтверждение</b>")
+        parts.append("⚠️ <b><u>Требуется подтверждение</u></b>")
 
     main = plain_to_telegram_html(body)
     if main and main != "—":

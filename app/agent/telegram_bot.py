@@ -30,25 +30,25 @@ SETTING_AGENT_CHAT_ID = "telegram_agent_chat_id"
 SETTING_AGENT_USER_ID = "telegram_agent_user_id"
 SETTING_AGENT_UPDATE_OFFSET = "telegram_agent_update_offset"
 
-_HELP_TEXT = """🤖 <b>MarketAI</b>
+_HELP_TEXT = """🤖 <b><u>MarketAI</u></b>
 <i>Управление маркетплейсами через Telegram</i>
 
 <b>Примеры запросов</b>
-<blockquote>• Покажи магазины
+<blockquote><i>• Покажи магазины
 • Статистика очереди
 • Новые отзывы без ответа
 • Ответь на отзывы (полный цикл)
 • Проверь чаты покупателей
-• Проверь автоакции Ozon</blockquote>
+• Проверь автоакции Ozon</i></blockquote>
 
 <b>Команды</b>
-• /new — новый диалог
-• /help — эта справка
-• /id — ваш Telegram user_id
+• <code>/new</code> — <i>новый диалог</i>
+• <code>/help</code> — <i>эта справка</i>
+• <code>/id</code> — <i>ваш Telegram user_id</i>
 
-Опасные действия — подтверждение кнопкой или «да».
+<b>Опасные действия</b> — подтверждение кнопкой или «да».
 
-<b>Групповой чат:</b> @упоминание бота, ответ на его сообщение или /help."""
+<b>Групповой чат:</b> <i>@упоминание бота, ответ на его сообщение или</i> <code>/help</code>."""
 
 _CONFIRM_KEYBOARD = {
     "inline_keyboard": [
