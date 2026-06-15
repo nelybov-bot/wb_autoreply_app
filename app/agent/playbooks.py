@@ -10,6 +10,7 @@ from app.core.ozon_actions import normalize_action_row, remove_products_from_act
 from app.core.ozon_buyer_chat import ozon_feature_unavailable_user_message, ozon_http_skip_reason
 from app.core.ozon_client import OzonClient
 from app.core.card_links import (
+    apply_link_status,
     fetch_ozon_catalog,
     fetch_wb_catalog,
     group_ozon_rows,
@@ -17,6 +18,7 @@ from app.core.card_links import (
     ozon_link_by_model,
     parse_articles_csv,
     suggest_link_candidates,
+    suggest_attach_to_groups,
     ozon_unlink_cards,
     wb_disconnect_cards,
     wb_merge_cards,
@@ -608,6 +610,9 @@ async def list_product_cards_catalog(
                 max_pages=max_pages,
             )
             groups = group_ozon_rows(rows)
+        apply_link_status(rows, groups)
+        candidates = suggest_link_candidates(rows, marketplace=mp)
+        attach = suggest_attach_to_groups(rows, groups, marketplace=mp)
     except HttpStatusError as e:
         return {"error": f"API {e.status}: {(e.body or '')[:300]}"}
 
@@ -633,8 +638,9 @@ async def list_product_cards_catalog(
         "count": len(rows),
         "linked_groups": linked_groups,
         "preview": preview,
-        "candidates_count": len(suggest_link_candidates(rows, marketplace=mp)),
-        "message": f"{store.name}: загружено {len(rows)} карточек, связок {linked_groups}.",
+        "candidates_count": len(candidates) + len(attach),
+        "attach_count": len(attach),
+        "message": f"{store.name}: загружено {len(rows)} карточек, связок {linked_groups}, кандидатов {len(candidates)}, в связку {len(attach)}.",
     }
 
 

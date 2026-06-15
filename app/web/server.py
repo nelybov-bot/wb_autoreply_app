@@ -83,14 +83,17 @@ from app.core.ozon_actions import (
 )
 from app.core.ozon_client import OzonClient
 from app.core.card_links import (
+    ai_suggest_card_links,
+    apply_link_status,
     fetch_ozon_catalog,
     fetch_wb_catalog,
     group_ozon_rows,
     group_wb_rows,
     ozon_link_by_model,
-    parse_articles_csv,
-    suggest_link_candidates,
     ozon_unlink_cards,
+    parse_articles_csv,
+    suggest_attach_to_groups,
+    suggest_link_candidates,
     wb_disconnect_cards,
     wb_merge_cards,
 )
@@ -3345,6 +3348,9 @@ async def api_card_links_wb_catalog(
     except HttpStatusError as e:
         raise _card_links_http_error("wb", e) from e
     groups = group_wb_rows(rows)
+    apply_link_status(rows, groups)
+    candidates = suggest_link_candidates(rows, marketplace="wb")
+    attach = suggest_attach_to_groups(rows, groups, marketplace="wb")
     linked_groups = sum(1 for g in groups if g.get("linked"))
     return {
         "store_id": store_id,
@@ -3353,7 +3359,8 @@ async def api_card_links_wb_catalog(
         "linked_groups": linked_groups,
         "items": rows,
         "groups": groups,
-        "candidates": suggest_link_candidates(rows, marketplace="wb"),
+        "candidates": candidates,
+        "attach_suggestions": attach,
     }
 
 
@@ -3377,6 +3384,9 @@ async def api_card_links_ozon_catalog(
     except HttpStatusError as e:
         raise _card_links_http_error("ozon", e) from e
     groups = group_ozon_rows(rows)
+    apply_link_status(rows, groups)
+    candidates = suggest_link_candidates(rows, marketplace="ozon")
+    attach = suggest_attach_to_groups(rows, groups, marketplace="ozon")
     linked_groups = sum(1 for g in groups if g.get("linked") and g.get("group_id") != "__unlinked__")
     return {
         "store_id": store_id,
@@ -3385,7 +3395,8 @@ async def api_card_links_ozon_catalog(
         "linked_groups": linked_groups,
         "items": rows,
         "groups": groups,
-        "candidates": suggest_link_candidates(rows, marketplace="ozon"),
+        "candidates": candidates,
+        "attach_suggestions": attach,
     }
 
 
@@ -3559,6 +3570,63 @@ async def api_card_links_ozon_unlink(
         "result": result,
         "message": "У каждого товара задано уникальное «Название модели». Разъединение на Ozon может занять до 24 часов.",
     }
+
+
+@app.post("/api/card-links/wb/{store_id}/ai-suggest")
+async def api_card_links_wb_ai_suggest(
+    store_id: int,
+    articles: Optional[str] = Query(None),
+    max_pages: int = Query(20, ge=1, le=100),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    s = _require_wb_store_for_chats(db, store_id)
+    key = (db.get_setting("openai_key") or "").strip()
+    if not key:
+        raise HTTPException(400, "Не задан OpenAI ключ в настройках")
+    vendor_codes = parse_articles_csv(articles)
+    try:
+        rows = await fetch_wb_catalog(s.api_key, vendor_codes=vendor_codes or None, max_pages=max_pages)
+    except HttpStatusError as e:
+        raise _card_links_http_error("wb", e) from e
+    groups = group_wb_rows(rows)
+    apply_link_status(rows, groups)
+    try:
+        ai_rows = await ai_suggest_card_links(rows, groups, marketplace="wb", openai_key=key)
+    except HttpStatusError as e:
+        raise HTTPException(e.status, str(e.body or e)[:400]) from e
+    return {"ai_suggestions": ai_rows, "count": len(ai_rows)}
+
+
+@app.post("/api/card-links/ozon/{store_id}/ai-suggest")
+async def api_card_links_ozon_ai_suggest(
+    store_id: int,
+    articles: Optional[str] = Query(None),
+    max_pages: int = Query(15, ge=1, le=50),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    s = _require_ozon_store_for_chats(db, store_id)
+    key = (db.get_setting("openai_key") or "").strip()
+    if not key:
+        raise HTTPException(400, "Не задан OpenAI ключ в настройках")
+    offer_ids = parse_articles_csv(articles)
+    try:
+        rows = await fetch_ozon_catalog(
+            s.client_id or "",
+            s.api_key,
+            offer_ids=offer_ids or None,
+            max_pages=max_pages,
+        )
+    except HttpStatusError as e:
+        raise _card_links_http_error("ozon", e) from e
+    groups = group_ozon_rows(rows)
+    apply_link_status(rows, groups)
+    try:
+        ai_rows = await ai_suggest_card_links(rows, groups, marketplace="ozon", openai_key=key)
+    except HttpStatusError as e:
+        raise HTTPException(e.status, str(e.body or e)[:400]) from e
+    return {"ai_suggestions": ai_rows, "count": len(ai_rows)}
 
 
 # ---------- API: stats ----------

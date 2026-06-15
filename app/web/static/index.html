@@ -593,6 +593,7 @@
           <p class="panel-desc">Выгрузка каталога, проверка существующих связок и привязка по артикулам (только существующие карточки)</p>
         </div>
         <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-load">Загрузить каталог</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai" title="Нужен OpenAI ключ в настройках">AI-подсказки</button>
       </header>
       <div class="form-card form-card-wide">
         <div class="form-row form-row-wrap">
@@ -621,6 +622,12 @@
           <button type="button" class="btn btn-secondary btn-sm card-links-tab active" data-cl-view="catalog">Каталог</button>
           <button type="button" class="btn btn-secondary btn-sm card-links-tab" data-cl-view="groups">Группы</button>
           <button type="button" class="btn btn-secondary btn-sm card-links-tab" data-cl-view="candidates">Кандидаты</button>
+        </div>
+        <div class="card-links-cand-filters" id="card-links-cand-filters" hidden>
+          <button type="button" class="btn btn-secondary btn-sm card-links-cf active" data-cf="all">Все предложения</button>
+          <button type="button" class="btn btn-secondary btn-sm card-links-cf" data-cf="new">Новые связки</button>
+          <button type="button" class="btn btn-secondary btn-sm card-links-cf" data-cf="attach">В существующую</button>
+          <button type="button" class="btn btn-secondary btn-sm card-links-cf" data-cf="ai">ИИ</button>
         </div>
         <div id="card-links-merge-bar" class="card-links-merge-bar" hidden>
           <div class="form-row form-row-wrap card-links-merge-fields">
