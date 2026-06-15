@@ -3547,7 +3547,7 @@
     }
     if (_cardLinksActionBusy) return;
     if (!dryRun && !cardLinksEnsureCooldown()) return;
-    if (!dryRun && !confirm('Связать все строки таблицы (1/2/3 шт) через «Название модели»?')) return;
+    if (!dryRun && !confirm('Связать все строки? Будет одно «Название модели» и кол-во в упаковке 1 / 2 / 3 по колонкам.')) return;
 
     _cardLinksActionBusy = true;
     const loadMsg = dryRun ? 'Проверяю таблицу TMS…' : 'Связка по таблице TMS…';

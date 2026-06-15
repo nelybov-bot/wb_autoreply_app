@@ -170,6 +170,7 @@ async def link_ozon_tms_qty_groups(
         entry = {
             "row": row_no,
             "offer_ids": oids,
+            "pack_qty": [{"offer_id": oid, "qty": i + 1} for i, oid in enumerate(oids)],
             "model_name": model_name,
             "missing_on_ozon": missing,
             "titles": [(r.get("title") or "")[:80] for r in rows],

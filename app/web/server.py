@@ -3561,7 +3561,7 @@ async def api_card_links_ozon_link_qty_table(
             "ok": True,
             "dry_run": True,
             **result,
-            "message": f"Проверка: {result.get('group_count', 0)} строк, готовы к связке: {sum(1 for p in result.get('preview') or [] if p.get('ok'))}.",
+            "message": f"Проверка: {result.get('group_count', 0)} строк, готовы к связке: {sum(1 for p in result.get('preview') or [] if p.get('ok'))}. При связке кол-во в упаковке: 1 / 2 / 3 по колонкам.",
         }
     return {
         "ok": True,
