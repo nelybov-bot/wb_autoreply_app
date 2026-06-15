@@ -2286,6 +2286,7 @@
   let _cardLinksCooldownUntil = 0;
   let _cardLinksReloadTimer = null;
   const cardLinksSelectedCandidates = new Set();
+  const cardLinksSelectedReview = new Set();
 
   function cardLinksMaxPages() {
     const el = document.getElementById('card-links-max-pages');
@@ -2469,6 +2470,99 @@
       suggested_model_name: mp === 'ozon' ? (cands[0]?.suggested_model_name || '') : '',
       items,
     };
+  }
+
+  function cardLinksCanBulkReview(c) {
+    const kind = c?.kind || '';
+    return kind === 'merge_groups' || kind === 'relocate';
+  }
+
+  function syncCardLinksReviewBar() {
+    const bar = document.getElementById('card-links-review-bar');
+    const label = document.getElementById('card-links-review-label');
+    if (!bar || !label) return;
+    const ids = [...cardLinksSelectedReview];
+    if (cardLinksView !== 'review' || !ids.length) {
+      bar.hidden = true;
+      return;
+    }
+    const cands = ids.map((id) => findCardLinksCandidate(id)).filter((c) => c && cardLinksCanBulkReview(c));
+    const mergeN = cands.filter((c) => c.kind === 'merge_groups').length;
+    const relocN = cands.filter((c) => c.kind === 'relocate').length;
+    const parts = [];
+    if (mergeN) parts.push(`${mergeN} объединений`);
+    if (relocN) parts.push(`${relocN} перепривязок`);
+    label.textContent = `Выбрано ${cands.length}: ${parts.join(', ') || 'операции'}`;
+    const btn = document.getElementById('btn-card-links-review-apply');
+    if (btn) btn.disabled = cands.length < 1;
+    bar.hidden = false;
+  }
+
+  function cardLinksSelectAllReview() {
+    cardLinksSelectedReview.clear();
+    for (const c of cardLinksReviewGroups()) {
+      if (cardLinksCanBulkReview(c)) {
+        cardLinksSelectedReview.add(String(c.candidate_id || ''));
+      }
+    }
+    renderCardLinksTable();
+  }
+
+  async function runBulkReviewActions() {
+    if (_cardLinksActionBusy) return;
+    const cands = [...cardLinksSelectedReview]
+      .map((id) => findCardLinksCandidate(id))
+      .filter((c) => c && cardLinksCanBulkReview(c));
+    cands.sort((a, b) => {
+      const pa = a.kind === 'merge_groups' ? 0 : 1;
+      const pb = b.kind === 'merge_groups' ? 0 : 1;
+      return pa - pb || (b.target_group_count || 0) - (a.target_group_count || 0);
+    });
+    if (!cands.length) {
+      toast('Выберите объединения или перепривязки', 'error');
+      return;
+    }
+    const pauseSec = Math.ceil(CARD_LINKS_ACTION_COOLDOWN_MS / 1000);
+    if (!confirm(`Применить ${cands.length} операций?\nМежду запросами пауза ~${pauseSec} с (защита от лимита WB).`)) return;
+    _cardLinksActionBusy = true;
+    let ok = 0;
+    let fail = 0;
+    let stopped = false;
+    for (let i = 0; i < cands.length; i++) {
+      if (stopped) break;
+      setPanelLoading('card-links-loading', true, `Перепроверка: ${i + 1} из ${cands.length}…`);
+      const res = await mergeSelectedCardLinks({
+        candidate: cands[i],
+        bulk: true,
+        skipConfirm: true,
+        skipReload: true,
+        skipToast: true,
+        returnResult: true,
+      });
+      if (res?.ok) {
+        ok += 1;
+      } else {
+        fail += 1;
+        if (res?.rateLimited) stopped = true;
+      }
+      if (i < cands.length - 1 && !stopped) {
+        await new Promise((r) => setTimeout(r, CARD_LINKS_ACTION_COOLDOWN_MS));
+      }
+    }
+    cardLinksSelectedReview.clear();
+    setPanelLoading('card-links-loading', false);
+    _cardLinksActionBusy = false;
+    if (ok > 0) {
+      cardLinksStartCooldown();
+      cardLinksScheduleCatalogReload();
+    }
+    toast(
+      stopped && fail
+        ? `Применено ${ok} из ${cands.length}, остановлено (лимит WB). Подождите и обновите каталог.`
+        : `Применено ${ok} из ${cands.length}${fail ? `, ошибок: ${fail}` : ''}`,
+      ok > 0 ? 'success' : 'error',
+    );
+    renderCardLinksTable();
   }
 
   function syncCardLinksCombineBar() {
@@ -2954,7 +3048,9 @@
           const addCount = cardLinksCandidateAddCount(c);
           const compatGroups = cardLinksCompatibleGroups(refItem, addCount);
           const canCombine = cardLinksCanCombineCandidate(c);
+          const canBulkReview = cardLinksCanBulkReview(c);
           const candChecked = cardLinksSelectedCandidates.has(String(c.candidate_id || ''));
+          const reviewChecked = cardLinksSelectedReview.has(String(c.candidate_id || ''));
           const needsPicker = kind === 'attach' || kind === 'relocate' || kind === 'merge_groups';
           const defaultTarget = needsPicker
             ? String(c.suggested_target_imt || c.target_group_id || c.suggested_model_name || c.target_group_label || '')
@@ -2988,15 +3084,20 @@
             const overLimit = itemN > MAX_LINK_ITEMS;
             actionBtn = `<button type="button" class="btn btn-primary btn-sm card-links-merge-group" data-candidate-id="${cid}"${overLimit ? ' disabled title="Более 30 товаров"' : ''}>Связать</button>`;
           }
-          const combineCheck = canCombine
+          const combineCheck = (cardLinksView === 'candidates' && canCombine)
             ? `<label class="card-links-cand-check-wrap" title="Выбрать для объединения с другим предложением">
                 <input type="checkbox" class="card-links-cand-check" data-candidate-id="${cid}"${candChecked ? ' checked' : ''}>
+              </label>`
+            : '';
+          const reviewCheck = (cardLinksView === 'review' && canBulkReview)
+            ? `<label class="card-links-cand-check-wrap" title="Выбрать для пакетного применения">
+                <input type="checkbox" class="card-links-review-check" data-candidate-id="${cid}"${reviewChecked ? ' checked' : ''}>
               </label>`
             : '';
           html += `<tr class="card-links-cand-header"><td colspan="6">
             <div class="card-links-cand-block">
               <div class="card-links-cand-row">
-                ${combineCheck}
+                ${reviewCheck || combineCheck}
                 <span class="card-links-cand-badge card-links-cand-badge--${badge.cls}">${escapeHtml(badge.text)}</span>
                 <span class="card-links-cand-title">${escapeHtml(title)}</span>
                 ${needsPicker ? pickerHtml : ''}
@@ -3014,6 +3115,7 @@
     syncCardLinksTableMode();
     syncCardLinksCombineBar();
     syncCardLinksReviewBadge();
+    syncCardLinksReviewBar();
   }
 
   function validateCardLinkSelection(checked) {
@@ -3082,6 +3184,7 @@
     try {
       const data = await api(`/card-links/${mp}/${storeId}/catalog?${qs.toString()}`);
       cardLinksSelectedCandidates.clear();
+      cardLinksSelectedReview.clear();
       cardLinksData = {
         items: data.items || [],
         groups: data.groups || [],
@@ -3193,8 +3296,20 @@
   }
 
   async function mergeSelectedCardLinks(opts = {}) {
-    if (_cardLinksActionBusy) return;
-    if (!cardLinksEnsureCooldown()) return;
+    const bulk = !!opts.bulk;
+    const returnResult = !!opts.returnResult;
+    const finish = (result) => (returnResult ? result : undefined);
+
+    if (!bulk) {
+      if (_cardLinksActionBusy) return finish({ ok: false, skipped: true });
+      if (!cardLinksEnsureCooldown()) return finish({ ok: false, skipped: true });
+    }
+
+    const fail = (msg, extra = {}) => {
+      if (!opts.skipToast) toast(msg, 'error');
+      return finish({ ok: false, error: msg, ...extra });
+    };
+
     const mp = cardLinksMarketplace();
     const storeId = Number(document.getElementById('card-links-store')?.value || 0);
     const candidate = opts.candidate || null;
@@ -3208,23 +3323,17 @@
     const kind = candidate?.kind || checked[0]?.getAttribute('data-candidate-kind') || '';
     if (!checked.length && candidate && (candidate.items || []).length) {
       if ((kind === 'attach' || kind === 'relocate') && candidate.items.length !== 1) {
-        toast(kind === 'relocate' ? '«Перепривязать» — ровно один товар' : '«В связку» — ровно один товар', 'error');
-        return;
+        return fail(kind === 'relocate' ? '«Перепривязать» — ровно один товар' : '«В связку» — ровно один товар');
       }
       if ((kind === 'new_link' || kind === 'combine_suggestions') && candidate.items.length < 2) {
-        toast('Новая связка — минимум 2 товара', 'error');
-        return;
+        return fail('Новая связка — минимум 2 товара');
       }
       if (kind === 'merge_groups' && candidate.items.length < 1) {
-        toast('Нет товаров для объединения', 'error');
-        return;
+        return fail('Нет товаров для объединения');
       }
     } else {
       const valErr = validateCardLinkSelection(checked);
-      if (valErr) {
-        toast(valErr, 'error');
-        return;
-      }
+      if (valErr) return fail(valErr);
     }
     if (checked.length) applySuggestedLinkFields(checked);
     const linkKind = kind === 'combine_suggestions' ? 'new_link' : kind;
@@ -3234,8 +3343,7 @@
       const msg = (kind === 'attach' || kind === 'relocate')
         ? 'Выберите один товар'
         : (kind === 'merge_groups' ? 'Нет товаров для объединения' : 'Выберите минимум 2 карточки');
-      toast(msg, 'error');
-      return;
+      return fail(msg);
     }
     const articles = checked.length
       ? checked.map(el => el.getAttribute('data-article')).filter(Boolean)
@@ -3265,30 +3373,14 @@
         if (first) targetImt = Number(first.imt_id || 0);
         else if (checked[0]) targetImt = Number(checked[0].getAttribute('data-imt-id') || 0);
       }
-      if (kind === 'attach' && !targetImt) {
-        toast('Выберите целевую связку', 'error');
-        return;
-      }
-      if (kind === 'relocate' && !targetImt) {
-        toast('Выберите связку для перепривязки', 'error');
-        return;
-      }
-      if (kind === 'merge_groups' && !targetImt) {
-        toast('Выберите целевую связку', 'error');
-        return;
-      }
+      if (kind === 'attach' && !targetImt) return fail('Выберите целевую связку');
+      if (kind === 'relocate' && !targetImt) return fail('Выберите связку для перепривязки');
+      if (kind === 'merge_groups' && !targetImt) return fail('Выберите целевую связку');
       if (kind !== 'attach' && kind !== 'relocate' && kind !== 'merge_groups' && nmIds.length < 2) {
-        toast('Новая связка — минимум 2 карточки', 'error');
-        return;
+        return fail('Новая связка — минимум 2 карточки');
       }
-      if ((kind === 'attach' || kind === 'relocate') && nmIds.length < 1) {
-        toast('Нет товара для связки', 'error');
-        return;
-      }
-      if (kind === 'merge_groups' && nmIds.length < 1) {
-        toast('Нет товаров для объединения', 'error');
-        return;
-      }
+      if ((kind === 'attach' || kind === 'relocate') && nmIds.length < 1) return fail('Нет товара для связки');
+      if (kind === 'merge_groups' && nmIds.length < 1) return fail('Нет товаров для объединения');
       const targetSize = cardLinksTargetGroupSize(targetImt, null);
       let sizeErr = '';
       if (linkKind === 'attach' || linkKind === 'relocate' || linkKind === 'merge_groups') {
@@ -3298,10 +3390,7 @@
           ? cardLinksValidateLinkSize(nmIds.length, targetSize)
           : cardLinksValidateLinkSize(nmIds.length, 0);
       }
-      if (sizeErr) {
-        toast(sizeErr, 'error');
-        return;
-      }
+      if (sizeErr) return fail(sizeErr);
       const confirmMsg = kind === 'relocate'
         ? `Переместить ${nmIds.length} карточку в imtID ${targetImt}?`
         : (kind === 'merge_groups'
@@ -3310,26 +3399,33 @@
       const catalogRows = checked.length
         ? buildMergeCatalogRows(checked, { candidate, targetImt })
         : buildMergeCatalogRows([], { candidate, targetImt });
-      if (!confirm(confirmMsg)) return;
-      _cardLinksActionBusy = true;
-      setPanelLoading('card-links-loading', true, 'Отправка в WB…');
+      if (!opts.skipConfirm && !confirm(confirmMsg)) return finish({ ok: false, cancelled: true });
+      if (!bulk) {
+        _cardLinksActionBusy = true;
+        setPanelLoading('card-links-loading', true, 'Отправка в WB…');
+      }
       try {
         await api(`/card-links/wb/${storeId}/merge`, {
           method: 'POST',
           body: JSON.stringify({ target_imt: targetImt, nm_ids: nmIds, catalog_rows: catalogRows }),
         });
-        toast('Запрос на объединение отправлен');
-        cardLinksStartCooldown();
-        cardLinksScheduleCatalogReload();
+        if (!opts.skipToast) toast('Запрос на объединение отправлен');
+        if (!bulk && !opts.skipReload) {
+          cardLinksStartCooldown();
+          cardLinksScheduleCatalogReload();
+        }
+        return finish({ ok: true });
       } catch (e) {
         const msg = (e && e.message) ? e.message : 'Ошибка';
-        toast(msg, 'error');
-        if (/429|too many requests|слишком много запросов/i.test(msg)) {
-          _cardLinksCooldownUntil = Date.now() + 60000;
-        }
+        const rateLimited = /429|too many requests|слишком много запросов/i.test(msg);
+        if (!opts.skipToast) toast(msg, 'error');
+        if (rateLimited) _cardLinksCooldownUntil = Date.now() + 60000;
+        return finish({ ok: false, error: msg, rateLimited });
       } finally {
-        setPanelLoading('card-links-loading', false);
-        _cardLinksActionBusy = false;
+        if (!bulk) {
+          setPanelLoading('card-links-loading', false);
+          _cardLinksActionBusy = false;
+        }
       }
       return;
     }
@@ -3350,43 +3446,44 @@
       ).trim();
     }
     if (!modelName) {
-      toast(kind === 'relocate' ? 'Выберите целевую модель' : 'Введите название модели (атрибут 9048)', 'error');
-      return;
+      return fail(kind === 'relocate' ? 'Выберите целевую модель' : 'Введите название модели (атрибут 9048)');
     }
     const ozTargetSize = cardLinksTargetGroupSize(null, modelName);
-    const ozSizeErr = (kind === 'attach' || kind === 'relocate' || kind === 'merge_groups')
-      ? cardLinksValidateLinkSize(articles.length, ozTargetSize)
-      : cardLinksValidateLinkSize(articles.length, ozTargetSize);
-    if (ozSizeErr) {
-      toast(ozSizeErr, 'error');
-      return;
-    }
+    const ozSizeErr = cardLinksValidateLinkSize(articles.length, ozTargetSize);
+    if (ozSizeErr) return fail(ozSizeErr);
     const ozCatalogRows = buildMergeCatalogRows(checked, { candidate, modelName });
     const ozConfirm = kind === 'relocate'
       ? `Переместить ${articles.length} товар в модель «${modelName}»?`
       : (kind === 'merge_groups'
         ? `Объединить ${articles.length} товаров с моделью «${modelName}»?`
         : `Связать ${articles.length} товаров Ozon с моделью «${modelName}»?`);
-    if (!confirm(ozConfirm)) return;
-    _cardLinksActionBusy = true;
-    setPanelLoading('card-links-loading', true, 'Обновление атрибута Ozon…');
+    if (!opts.skipConfirm && !confirm(ozConfirm)) return finish({ ok: false, cancelled: true });
+    if (!bulk) {
+      _cardLinksActionBusy = true;
+      setPanelLoading('card-links-loading', true, 'Обновление атрибута Ozon…');
+    }
     try {
       await api(`/card-links/ozon/${storeId}/link`, {
         method: 'POST',
         body: JSON.stringify({ offer_ids: articles, model_name: modelName, catalog_rows: ozCatalogRows }),
       });
-      toast('Атрибут модели обновлён');
-      cardLinksStartCooldown();
-      cardLinksScheduleCatalogReload();
+      if (!opts.skipToast) toast('Атрибут модели обновлён');
+      if (!bulk && !opts.skipReload) {
+        cardLinksStartCooldown();
+        cardLinksScheduleCatalogReload();
+      }
+      return finish({ ok: true });
     } catch (e) {
       const msg = (e && e.message) ? e.message : 'Ошибка';
-      toast(msg, 'error');
-      if (/429|too many requests|слишком много запросов/i.test(msg)) {
-        _cardLinksCooldownUntil = Date.now() + 60000;
-      }
+      const rateLimited = /429|too many requests|слишком много запросов/i.test(msg);
+      if (!opts.skipToast) toast(msg, 'error');
+      if (rateLimited) _cardLinksCooldownUntil = Date.now() + 60000;
+      return finish({ ok: false, error: msg, rateLimited });
     } finally {
-      setPanelLoading('card-links-loading', false);
-      _cardLinksActionBusy = false;
+      if (!bulk) {
+        setPanelLoading('card-links-loading', false);
+        _cardLinksActionBusy = false;
+      }
     }
   }
 
@@ -3505,7 +3602,21 @@
       cardLinksSelectedCandidates.clear();
       renderCardLinksTable();
     });
+    document.getElementById('btn-card-links-review-apply')?.addEventListener('click', () => { void runBulkReviewActions(); });
+    document.getElementById('btn-card-links-review-select-all')?.addEventListener('click', () => { cardLinksSelectAllReview(); });
+    document.getElementById('btn-card-links-review-clear')?.addEventListener('click', () => {
+      cardLinksSelectedReview.clear();
+      renderCardLinksTable();
+    });
     document.getElementById('card-links-tbody')?.addEventListener('change', (e) => {
+      if (e.target.matches('.card-links-review-check')) {
+        const id = e.target.getAttribute('data-candidate-id');
+        if (!id) return;
+        if (e.target.checked) cardLinksSelectedReview.add(id);
+        else cardLinksSelectedReview.delete(id);
+        syncCardLinksReviewBar();
+        return;
+      }
       if (e.target.matches('.card-links-cand-check')) {
         const id = e.target.getAttribute('data-candidate-id');
         if (!id) return;
