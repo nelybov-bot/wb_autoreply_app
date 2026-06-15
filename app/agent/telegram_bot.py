@@ -7,7 +7,7 @@ import re
 import time
 from typing import Callable, Optional
 
-from app.agent.formatting import plain_to_telegram_html, strip_leaked_json
+from app.agent.formatting import escape_tg, format_agent_telegram_reply, strip_leaked_json
 from app.agent.orchestrator import handle_agent_message
 from app.agent.session import AgentSession, clear_session, get_or_create_session
 from app.agent.tools import AgentContext
@@ -30,29 +30,25 @@ SETTING_AGENT_CHAT_ID = "telegram_agent_chat_id"
 SETTING_AGENT_USER_ID = "telegram_agent_user_id"
 SETTING_AGENT_UPDATE_OFFSET = "telegram_agent_update_offset"
 
-_HELP_TEXT = """🤖 <b>MarketAI</b> — управление через Telegram
+_HELP_TEXT = """🤖 <b>MarketAI</b>
+<i>Управление маркетплейсами через Telegram</i>
 
-<b>Примеры:</b>
-• Покажи магазины
+<b>Примеры запросов</b>
+<blockquote>• Покажи магазины
 • Статистика очереди
 • Новые отзывы без ответа
-• Статус автозапуска
-• Загрузи новые отзывы
 • Ответь на отзывы (полный цикл)
 • Проверь чаты покупателей
-• Ответь в чатах WB и Ozon
-• Проверь автоакции Ozon
+• Проверь автоакции Ozon</blockquote>
 
-<b>Команды:</b>
-/new — новый диалог
-/help — эта справка
-/id — ваш Telegram user_id
+<b>Команды</b>
+• /new — новый диалог
+• /help — эта справка
+• /id — ваш Telegram user_id
 
-Что умею: магазины, статистика, отзывы/вопросы (полный цикл), чаты WB/Ozon, автозапуск, акции Ozon, качество, задачи, журнал, Telegram.
+Опасные действия — подтверждение кнопкой или «да».
 
-Опасные действия требуют подтверждения кнопкой или «да».
-
-<b>В групповом чате</b> обращайтесь к боту: @упоминание, ответ на его сообщение или команда /help."""
+<b>Групповой чат:</b> @упоминание бота, ответ на его сообщение или /help."""
 
 _CONFIRM_KEYBOARD = {
     "inline_keyboard": [
@@ -270,10 +266,11 @@ async def _reply_agent(
     chat_id: object,
     text: str,
     needs_confirm: bool = False,
+    html: Optional[str] = None,
     db: Database,
 ) -> None:
     body = strip_leaked_json((text or "").strip()) or "—"
-    html_body = plain_to_telegram_html(body)
+    html_body = html if html is not None else format_agent_telegram_reply(body, needs_confirm=needs_confirm)
     markup = _CONFIRM_KEYBOARD if needs_confirm else None
     ok, err = await send_telegram_message(
         token,
@@ -373,7 +370,8 @@ async def _handle_message(db: Database, message: dict) -> None:
         await _reply_agent(
             token=token,
             chat_id=chat_id,
-            text=f"Ваш Telegram user_id: {uid}",
+            text="",
+            html=f"🆔 Ваш Telegram <b>user_id</b>: <code>{escape_tg(str(uid))}</code>",
             db=db,
         )
         return
@@ -406,7 +404,7 @@ async def _handle_message(db: Database, message: dict) -> None:
             session = _session_for_telegram(db, chat_id=chat_id, user_id=user_id)
             if session:
                 clear_session(session.session_id, user_id=admin.id)
-        await _reply_agent(token=token, chat_id=chat_id, text="Новый диалог. Чем помочь?", db=db)
+        await _reply_agent(token=token, chat_id=chat_id, text="✨ Новый диалог. Чем помочь?", db=db)
         return
 
     await _process_agent_input(db=db, chat_id=chat_id, user_id=user_id, text=text)
