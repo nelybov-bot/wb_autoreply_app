@@ -28,14 +28,11 @@ _OZON_SKIP_BASE_COMPARE_NAME_RE = re.compile(
     r"part\s*number|vendor\s*code|seller\s*code",
     re.I,
 )
-# При связке 1/2/3 шт отличаются кол-во, вес и габариты упаковки — не сравниваем.
+# Кол-во в упаковке — главный вариант для связки 1/2/3 шт.
 _OZON_QTY_PACK_NAME_RE = re.compile(
     r"количеств.*упаков|числ.*упаков|"
     r"кол\.?\s*в\s*уп|"
-    r"qty|pack\s*size|units?\s*per|"
-    r"вес.*упаков|weight.*pack|"
-    r"длин.*упаков|ширин.*упаков|высот.*упаков|"
-    r"габарит.*упаков|размер.*упаков|объ[её]м.*упаков",
+    r"qty|pack\s*size|units?\s*per",
     re.I,
 )
 
@@ -46,6 +43,29 @@ def _ozon_skip_base_compare_attr(name: str) -> bool:
 
 def _ozon_qty_pack_attr(name: str) -> bool:
     return bool(_OZON_QTY_PACK_NAME_RE.search(name or ""))
+
+
+def _validate_ozon_qty_pack_rows(
+    selected: List[dict],
+    fingerprints: List[dict],
+    all_ids: set,
+    attr_names: Dict[int, str],
+) -> None:
+    """TMS 1/2/3 шт: название, вес и артикулы могут отличаться — только кол-во в упаковке."""
+    qty_aids = [aid for aid in all_ids if _ozon_qty_pack_attr(attr_names.get(aid, ""))]
+    if not qty_aids:
+        return
+    for i in range(len(selected)):
+        for j in range(i + 1, len(selected)):
+            fp_a, fp_b = fingerprints[i], fingerprints[j]
+            if not any(
+                fp_a.get(aid) and fp_b.get(aid) and fp_a.get(aid) != fp_b.get(aid)
+                for aid in qty_aids
+            ):
+                raise ValueError(
+                    f"Артикулы {selected[i].get('offer_id')} и {selected[j].get('offer_id')}: "
+                    f"одинаковое «Количество в упаковке». В карточках Ozon должны быть 1, 2 и 3 шт."
+                )
 
 _PACK_RE = re.compile(
     r"\b(\d+)\s*(шт|штук|уп|упак|pack|pcs)\b|"
@@ -752,8 +772,9 @@ def validate_ozon_link_rows(
     """
     Правила Ozon перед объединением:
     - одна категория и один бренд;
-    - все НЕ-вариативные характеристики совпадают (кроме артикула/TMS у вариантов);
-    - вариативные (is_aspect: размер, цвет…) должны отличаться между SKU.
+    - qty_pack (TMS 1/2/3 шт): только категория, бренд и разное «Количество в упаковке»;
+    - иначе: все НЕ-вариативные характеристики совпадают (кроме артикула/TMS);
+    - вариативные (is_aspect) должны отличаться между SKU.
     """
     oid_set = {str(x).strip() for x in offer_ids if str(x).strip()}
     selected = [r for r in rows if str(r.get("offer_id") or "").strip() in oid_set]
@@ -787,12 +808,14 @@ def validate_ozon_link_rows(
             except (TypeError, ValueError):
                 pass
 
+    if qty_pack:
+        _validate_ozon_qty_pack_rows(selected, fingerprints, all_ids, attr_names)
+        return
+
     skip = set(aspect_attr_ids) | {OZON_MODEL_ATTR_ID}
     for aid in all_ids - skip:
         nm = attr_names.get(aid, f"характеристика {aid}")
         if _ozon_skip_base_compare_attr(nm):
-            continue
-        if qty_pack and _ozon_qty_pack_attr(nm):
             continue
         vals = {str(fp.get(aid) or "").strip() for fp in fingerprints}
         vals.discard("")
@@ -803,37 +826,13 @@ def validate_ozon_link_rows(
             )
 
     if not aspect_attr_ids:
-        if qty_pack:
-            for i in range(len(selected)):
-                for j in range(i + 1, len(selected)):
-                    fp_a, fp_b = fingerprints[i], fingerprints[j]
-                    qty_aids = [aid for aid in all_ids if _ozon_qty_pack_attr(attr_names.get(aid, ""))]
-                    if not qty_aids:
-                        continue
-                    if not any(
-                        fp_a.get(aid) and fp_b.get(aid) and fp_a.get(aid) != fp_b.get(aid)
-                        for aid in qty_aids
-                    ):
-                        raise ValueError(
-                            f"Артикулы {selected[i].get('offer_id')} и {selected[j].get('offer_id')}: "
-                            f"одинаковое «Количество в упаковке». В карточках Ozon должны быть 1, 2 и 3 шт."
-                        )
         return
 
     for i in range(len(selected)):
         for j in range(i + 1, len(selected)):
             a, b = selected[i], selected[j]
             fp_a, fp_b = fingerprints[i], fingerprints[j]
-            if qty_pack:
-                qty_aids = [aid for aid in all_ids if _ozon_qty_pack_attr(attr_names.get(aid, ""))]
-                if qty_aids and any(
-                    fp_a.get(aid) and fp_b.get(aid) and fp_a.get(aid) != fp_b.get(aid)
-                    for aid in qty_aids
-                ):
-                    continue
             filled = [aid for aid in aspect_attr_ids if fp_a.get(aid) and fp_b.get(aid)]
-            if qty_pack:
-                filled = [aid for aid in filled if not _ozon_qty_pack_attr(attr_names.get(aid, ""))]
             if filled and all(fp_a[aid] == fp_b[aid] for aid in filled):
                 names = [attr_names.get(aid, str(aid)) for aid in filled[:5]]
                 raise ValueError(
