@@ -93,7 +93,9 @@ from app.core.card_links import (
     ozon_unlink_cards,
     parse_articles_csv,
     suggest_attach_to_groups,
+    suggest_combine_candidates,
     suggest_link_candidates,
+    suggest_review_linked_groups,
     wb_disconnect_cards,
     wb_merge_cards,
     wb_merge_error_message,
@@ -3306,6 +3308,7 @@ class CardLinksWbMergeBody(BaseModel):
 class CardLinksOzonLinkBody(BaseModel):
     offer_ids: list[str]
     model_name: str
+    catalog_rows: Optional[list[dict]] = None
 
 
 class CardLinksWbDisconnectBody(BaseModel):
@@ -3328,6 +3331,13 @@ def _card_links_http_error(marketplace: str, e: HttpStatusError) -> HTTPExceptio
         return HTTPException(e.status, f"{mp}: доступ запрещён. {hint}")
     if marketplace == "wb" and e.status == 400:
         return HTTPException(400, wb_merge_error_message(e.body or ""))
+    if marketplace == "wb" and e.status == 429:
+        return HTTPException(429, wb_merge_error_message(e.body or ""))
+    if e.status == 429:
+        return HTTPException(
+            429,
+            f"{mp}: слишком много запросов (лимит API). Подождите 1–2 минуты и обновите каталог.",
+        )
     return HTTPException(e.status, f"{mp} API {e.status}: {body or 'ошибка'}")
 
 
@@ -3336,14 +3346,14 @@ async def api_card_links_wb_catalog(
     store_id: int,
     articles: Optional[str] = Query(None, description="Артикулы через запятую или с новой строки"),
     q: Optional[str] = Query(None, description="Поиск по названию/артикулу"),
-    max_pages: int = Query(20, ge=1, le=100),
+    max_pages: int = Query(100, ge=1, le=150),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):
     s = _require_wb_store_for_chats(db, store_id)
     vendor_codes = parse_articles_csv(articles)
     try:
-        rows = await fetch_wb_catalog(
+        rows, catalog_meta = await fetch_wb_catalog(
             s.api_key,
             vendor_codes=vendor_codes or None,
             text_search=(q or "").strip() or None,
@@ -3355,16 +3365,22 @@ async def api_card_links_wb_catalog(
     apply_link_status(rows, groups)
     candidates = suggest_link_candidates(rows, marketplace="wb")
     attach = suggest_attach_to_groups(rows, groups, marketplace="wb")
+    review = suggest_review_linked_groups(groups, marketplace="wb")
+    combine = suggest_combine_candidates(candidates, marketplace="wb")
     linked_groups = sum(1 for g in groups if g.get("linked"))
     return {
         "store_id": store_id,
         "marketplace": "wb",
         "count": len(rows),
         "linked_groups": linked_groups,
+        "max_link_items": 30,
         "items": rows,
         "groups": groups,
         "candidates": candidates,
         "attach_suggestions": attach,
+        "review_suggestions": review,
+        "combine_suggestions": combine,
+        "catalog_meta": catalog_meta,
     }
 
 
@@ -3391,16 +3407,21 @@ async def api_card_links_ozon_catalog(
     apply_link_status(rows, groups)
     candidates = suggest_link_candidates(rows, marketplace="ozon")
     attach = suggest_attach_to_groups(rows, groups, marketplace="ozon")
+    review = suggest_review_linked_groups(groups, marketplace="ozon")
+    combine = suggest_combine_candidates(candidates, marketplace="ozon")
     linked_groups = sum(1 for g in groups if g.get("linked") and g.get("group_id") != "__unlinked__")
     return {
         "store_id": store_id,
         "marketplace": "ozon",
         "count": len(rows),
         "linked_groups": linked_groups,
+        "max_link_items": 30,
         "items": rows,
         "groups": groups,
         "candidates": candidates,
         "attach_suggestions": attach,
+        "review_suggestions": review,
+        "combine_suggestions": combine,
     }
 
 
@@ -3415,8 +3436,8 @@ async def api_card_links_wb_merge(
     nm_ids = [int(x) for x in body.nm_ids if x is not None]
     if not nm_ids:
         raise HTTPException(400, "nm_ids пуст")
-    if len(nm_ids) > 30:
-        raise HTTPException(400, "WB: не более 30 nmID за один запрос")
+    if len(nm_ids) > 200:
+        raise HTTPException(400, "WB: не более 200 nmID за один запрос")
     try:
         result = await wb_merge_cards(
             s.api_key,
@@ -3462,6 +3483,7 @@ async def api_card_links_ozon_link(
             s.api_key,
             offer_ids=offer_ids,
             model_name=model_name,
+            catalog_rows=body.catalog_rows or None,
         )
     except HttpStatusError as e:
         raise _card_links_http_error("ozon", e) from e
@@ -3595,7 +3617,7 @@ async def api_card_links_wb_ai_suggest(
         raise HTTPException(400, "Не задан OpenAI ключ в настройках")
     vendor_codes = parse_articles_csv(articles)
     try:
-        rows = await fetch_wb_catalog(s.api_key, vendor_codes=vendor_codes or None, max_pages=max_pages)
+        rows, _catalog_meta = await fetch_wb_catalog(s.api_key, vendor_codes=vendor_codes or None, max_pages=max_pages)
     except HttpStatusError as e:
         raise _card_links_http_error("wb", e) from e
     groups = group_wb_rows(rows)

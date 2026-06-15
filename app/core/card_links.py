@@ -1,9 +1,11 @@
 """Связки карточек WB и Ozon: выгрузка каталога, проверка групп, привязка."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.ozon_client import OzonClient
@@ -19,6 +21,26 @@ _PACK_RE = re.compile(
     r"\bкомплект\b|"
     r"\bнабор\b",
     re.IGNORECASE,
+)
+
+MAX_LINK_ITEMS = 30
+
+_TITLE_STOP_WORDS = frozenset(
+    {
+        "для",
+        "и",
+        "в",
+        "на",
+        "с",
+        "по",
+        "из",
+        "от",
+        "до",
+        "the",
+        "for",
+        "with",
+        "and",
+    }
 )
 
 
@@ -222,6 +244,194 @@ def _title_base_key(title: str) -> str:
     return t[:120]
 
 
+def _title_tokens(title: str) -> set[str]:
+    t = re.sub(r"[^\w\s]+", " ", (title or "").lower(), flags=re.UNICODE)
+    return {w for w in t.split() if len(w) >= 3 and w not in _TITLE_STOP_WORDS}
+
+
+def _titles_related_enough(base_a: str, base_b: str) -> bool:
+    if _titles_similar(base_a, base_b):
+        return True
+    ta, tb = _title_tokens(base_a), _title_tokens(base_b)
+    if not ta or not tb:
+        return False
+    inter = ta & tb
+    if len(inter) < 2:
+        return False
+    smaller = min(len(ta), len(tb))
+    return len(inter) >= max(2, int(smaller * 0.35))
+
+
+def _candidate_category_key(c: dict, *, marketplace: str) -> str:
+    items = c.get("items") or []
+    first = items[0] if items else {}
+    if marketplace == "wb":
+        sid = int(c.get("subject_id") or first.get("subject_id") or 0)
+        pid = int(first.get("parent_id") or 0)
+        return f"wb:{sid}:{pid}"
+    return f"oz:{c.get('category_key') or first.get('category_key') or ''}"
+
+
+def _candidate_title_base(c: dict) -> str:
+    items = c.get("items") or []
+    sug = _suggested_model_name(items)
+    if sug:
+        return _title_base_key(sug)
+    if items:
+        return _title_base_key(items[0].get("title") or "")
+    return ""
+
+
+def _merge_candidate_items(candidates: List[dict], *, marketplace: str) -> List[dict]:
+    seen: set[str] = set()
+    out: List[dict] = []
+    for c in candidates:
+        for it in c.get("items") or []:
+            if marketplace == "wb":
+                key = str(it.get("nm_id") or it.get("vendor_code") or "")
+            else:
+                key = str(it.get("offer_id") or "")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(it)
+    return out
+
+
+def suggest_combine_candidates(
+    candidates: List[dict],
+    *,
+    marketplace: str,
+) -> List[dict]:
+    """Объединить несколько предложений new_link одной категории в одно."""
+    pool = [c for c in candidates if (c.get("kind") or "") == "new_link"]
+    if len(pool) < 2:
+        return []
+
+    by_cat: Dict[str, List[dict]] = {}
+    for c in pool:
+        by_cat.setdefault(_candidate_category_key(c, marketplace=marketplace), []).append(c)
+
+    out: List[dict] = []
+    seq = 0
+    consumed: set[str] = set()
+
+    for _cat, group in by_cat.items():
+        if len(group) < 2:
+            continue
+        n = len(group)
+        parent = list(range(n))
+
+        def _find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def _union(a: int, b: int) -> None:
+            ra, rb = _find(a), _find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        for i in range(n):
+            bi = _candidate_title_base(group[i])
+            if not bi:
+                continue
+            for j in range(i + 1, n):
+                bj = _candidate_title_base(group[j])
+                if bj and _titles_related_enough(bi, bj):
+                    _union(i, j)
+
+        clusters: Dict[int, List[dict]] = {}
+        for i in range(n):
+            clusters.setdefault(_find(i), []).append(group[i])
+
+        for cluster in clusters.values():
+            if len(cluster) < 2:
+                continue
+            ids = [str(c.get("candidate_id") or "") for c in cluster]
+            if not ids[0] or any(i in consumed for i in ids if i):
+                continue
+            merged = _merge_candidate_items(cluster, marketplace=marketplace)
+            if len(merged) < 2 or len(merged) > MAX_LINK_ITEMS:
+                continue
+            for i in ids:
+                if i:
+                    consumed.add(i)
+            seq += 1
+            cat_label = _candidate_label(merged, marketplace=marketplace)
+            sug_model = _suggested_model_name(merged)
+            labels = [str(c.get("hint") or c.get("category_label") or "")[:40] for c in cluster]
+            out.append(
+                {
+                    "candidate_id": f"combine-{marketplace}-{seq}",
+                    "kind": "combine_suggestions",
+                    "marketplace": marketplace,
+                    "category_label": cat_label,
+                    "subject_id": merged[0].get("subject_id") if marketplace == "wb" else None,
+                    "category_key": merged[0].get("category_key") if marketplace == "ozon" else None,
+                    "count": len(merged),
+                    "source_candidate_ids": ids,
+                    "source_count": len(cluster),
+                    "suggested_target_imt": _wb_target_imt(merged) if marketplace == "wb" else None,
+                    "suggested_model_name": sug_model,
+                    "hint": f"Соединить {len(cluster)} предложения · {cat_label}",
+                    "items": merged,
+                }
+            )
+
+    out.sort(key=lambda x: (-(x.get("count") or 0), x.get("hint") or ""))
+    return out[:40]
+
+
+def validate_wb_link_capacity(
+    rows: List[dict],
+    *,
+    target_imt: int,
+    nm_ids: List[int],
+) -> None:
+    """Не более MAX_LINK_ITEMS карточек в одной связке WB."""
+    target = int(target_imt)
+    existing: set[int] = set()
+    for r in rows:
+        if int(r.get("imt_id") or 0) != target:
+            continue
+        nid = int(r.get("nm_id") or 0)
+        if nid:
+            existing.add(nid)
+    adding = {int(x) for x in nm_ids if int(x) not in existing}
+    total = len(existing) + len(adding)
+    if total > MAX_LINK_ITEMS:
+        raise ValueError(
+            f"В связке WB не более {MAX_LINK_ITEMS} товаров "
+            f"(сейчас {len(existing)}, добавляете {len(adding)} — всего {total})"
+        )
+
+
+def validate_ozon_link_capacity(
+    rows: List[dict],
+    *,
+    model_name: str,
+    offer_ids: List[str],
+) -> None:
+    """Не более MAX_LINK_ITEMS товаров с одним названием модели на Ozon."""
+    model = (model_name or "").strip()
+    existing: set[str] = set()
+    for r in rows:
+        if str(r.get("model_name") or "").strip() != model:
+            continue
+        oid = str(r.get("offer_id") or "").strip()
+        if oid:
+            existing.add(oid)
+    adding = {str(x).strip() for x in offer_ids if str(x).strip() and str(x).strip() not in existing}
+    total = len(existing) + len(adding)
+    if total > MAX_LINK_ITEMS:
+        raise ValueError(
+            f"В связке Ozon не более {MAX_LINK_ITEMS} товаров "
+            f"(сейчас {len(existing)}, добавляете {len(adding)} — всего {total})"
+        )
+
+
 def group_wb_rows(rows: List[dict]) -> List[dict]:
     """Группы по imtID (существующие связки WB)."""
     buckets: Dict[int, List[dict]] = {}
@@ -397,6 +607,8 @@ def suggest_attach_to_groups(
         ref_items = g.get("items") or []
         if not ref_items:
             continue
+        if len(ref_items) >= MAX_LINK_ITEMS:
+            continue
         ref = ref_items[0]
         ref_base = _title_base_key(ref.get("title") or "")
         if not ref_base:
@@ -448,6 +660,208 @@ def suggest_attach_to_groups(
             out.append(entry)
     out.sort(key=lambda x: (x.get("target_group_label") or "", x.get("items", [{}])[0].get("title") or ""))
     return out[:120]
+
+
+def _titles_similar(base_a: str, base_b: str) -> bool:
+    if not base_a or not base_b:
+        return False
+    if base_a == base_b:
+        return True
+    return base_a in base_b or base_b in base_a
+
+
+def _linked_groups(groups: List[dict]) -> List[dict]:
+    return [
+        g
+        for g in groups
+        if g.get("linked")
+        and len(g.get("items") or []) >= 2
+        and str(g.get("group_id") or "") != "__unlinked__"
+    ]
+
+
+def _groups_same_category(g1: dict, g2: dict, *, marketplace: str) -> bool:
+    if marketplace == "wb":
+        s1 = int(g1.get("subject_id") or 0)
+        s2 = int(g2.get("subject_id") or 0)
+        if s1 and s2 and s1 != s2:
+            return False
+        p1 = int(g1.get("parent_id") or 0)
+        p2 = int(g2.get("parent_id") or 0)
+        if p1 and p2 and p1 != p2:
+            return False
+        return True
+    c1 = str(g1.get("category_key") or (g1.get("items") or [{}])[0].get("category_key") or "")
+    c2 = str(g2.get("category_key") or (g2.get("items") or [{}])[0].get("category_key") or "")
+    if c1 and c2 and c1 != c2:
+        return False
+    return True
+
+
+def suggest_review_linked_groups(
+    groups: List[dict],
+    *,
+    marketplace: str,
+) -> List[dict]:
+    """Перепроверка существующих связок: перепривязка и объединение двух групп."""
+    multi = _linked_groups(groups)
+    if len(multi) < 1:
+        return []
+
+    out: List[dict] = []
+    seq = 0
+    seen_merge: set[str] = set()
+    seen_relocate: set[str] = set()
+
+    for i, g1 in enumerate(multi):
+        items1 = g1.get("items") or []
+        ref1 = items1[0] if items1 else {}
+        base1 = _title_base_key(ref1.get("title") or "")
+        if not base1:
+            continue
+        for g2 in multi[i + 1 :]:
+            if not _groups_same_category(g1, g2, marketplace=marketplace):
+                continue
+            gid1 = str(g1.get("group_id") or "")
+            gid2 = str(g2.get("group_id") or "")
+            if not gid1 or gid1 == gid2:
+                continue
+            pair_key = "|".join(sorted([gid1, gid2]))
+            if pair_key in seen_merge:
+                continue
+            items2 = g2.get("items") or []
+            ref2 = items2[0] if items2 else {}
+            base2 = _title_base_key(ref2.get("title") or "")
+            if not _titles_similar(base1, base2):
+                continue
+            if len(items1) >= len(items2):
+                target_g, source_g = g1, g2
+            else:
+                target_g, source_g = g2, g1
+            source_items = list(source_g.get("items") or [])
+            target_items = list(target_g.get("items") or [])
+            if marketplace == "wb":
+                target_id = int(target_g.get("group_id") or 0)
+                to_move = [
+                    it
+                    for it in source_items
+                    if int(it.get("imt_id") or 0) != target_id
+                ]
+            else:
+                target_model = str(target_g.get("group_label") or "").strip()
+                to_move = [
+                    it
+                    for it in source_items
+                    if str(it.get("model_name") or "").strip() != target_model
+                ]
+            if not to_move:
+                continue
+            if len(target_items) + len(to_move) > MAX_LINK_ITEMS:
+                continue
+            seen_merge.add(pair_key)
+            seq += 1
+            cat_label = _candidate_label(to_move, marketplace=marketplace)
+            entry: Dict[str, Any] = {
+                "candidate_id": f"merge-grp-{marketplace}-{seq}",
+                "kind": "merge_groups",
+                "marketplace": marketplace,
+                "category_label": cat_label,
+                "count": len(to_move),
+                "hint": (
+                    f"Объединить «{source_g.get('group_label')}» ({len(source_items)}) "
+                    f"→ «{target_g.get('group_label')}» ({len(target_items)})"
+                ),
+                "source_group_id": source_g.get("group_id"),
+                "source_group_label": source_g.get("group_label"),
+                "target_group_id": target_g.get("group_id"),
+                "target_group_label": target_g.get("group_label"),
+                "items": to_move,
+                "sample_items": target_items[:5],
+            }
+            if marketplace == "wb":
+                entry["suggested_target_imt"] = int(target_g.get("group_id") or 0)
+                entry["subject_id"] = target_g.get("subject_id") or ref1.get("subject_id")
+            else:
+                entry["suggested_model_name"] = str(target_g.get("group_label") or "").strip()
+                entry["category_key"] = (
+                    target_g.get("category_key") or ref1.get("category_key")
+                )
+            out.append(entry)
+
+    for g in multi:
+        items = g.get("items") or []
+        if not items:
+            continue
+        ref = items[0]
+        g_base = _title_base_key(ref.get("title") or "")
+        gid = str(g.get("group_id") or "")
+        for it in items:
+            u_base = _title_base_key(it.get("title") or "")
+            if not u_base:
+                continue
+            if _titles_similar(u_base, g_base):
+                continue
+            for h in multi:
+                hgid = str(h.get("group_id") or "")
+                if not hgid or hgid == gid:
+                    continue
+                if not _groups_same_category(g, h, marketplace=marketplace):
+                    continue
+                h_items = h.get("items") or []
+                h_ref = h_items[0] if h_items else {}
+                h_base = _title_base_key(h_ref.get("title") or "")
+                if not _titles_similar(u_base, h_base):
+                    continue
+                if marketplace == "wb":
+                    uid = str(it.get("nm_id") or it.get("vendor_code") or "")
+                    target_id = int(h.get("group_id") or 0)
+                    if int(it.get("imt_id") or 0) == target_id:
+                        continue
+                else:
+                    uid = str(it.get("offer_id") or "")
+                    target_model = str(h.get("group_label") or "").strip()
+                    if str(it.get("model_name") or "").strip() == target_model:
+                        continue
+                dedupe = f"{uid}:{hgid}"
+                if dedupe in seen_relocate:
+                    continue
+                if len(h_items) >= MAX_LINK_ITEMS:
+                    continue
+                seen_relocate.add(dedupe)
+                seq += 1
+                cat_label = _candidate_label([it], marketplace=marketplace)
+                entry = {
+                    "candidate_id": f"relocate-{marketplace}-{seq}",
+                    "kind": "relocate",
+                    "marketplace": marketplace,
+                    "category_label": cat_label,
+                    "count": 1,
+                    "hint": (
+                        f"Переместить из «{g.get('group_label')}» в «{h.get('group_label')}»"
+                    ),
+                    "source_group_id": g.get("group_id"),
+                    "source_group_label": g.get("group_label"),
+                    "target_group_id": h.get("group_id"),
+                    "target_group_label": h.get("group_label"),
+                    "items": [it],
+                    "sample_items": h_items[:3],
+                }
+                if marketplace == "wb":
+                    entry["suggested_target_imt"] = int(h.get("group_id") or 0)
+                    entry["subject_id"] = it.get("subject_id")
+                else:
+                    entry["suggested_model_name"] = str(h.get("group_label") or "").strip()
+                    entry["category_key"] = it.get("category_key")
+                out.append(entry)
+
+    out.sort(
+        key=lambda x: (
+            0 if x.get("kind") == "merge_groups" else 1,
+            -(x.get("count") or 0),
+            x.get("hint") or "",
+        )
+    )
+    return out[:80]
 
 
 async def ai_suggest_card_links(
@@ -623,6 +1037,14 @@ def _enrich_wb_row(row: dict, subject_map: Dict[int, dict]) -> None:
 
 
 async def _wb_subject_map(api_key: str) -> Dict[int, dict]:
+    global _WB_SUBJECT_MAP_CACHE
+    key = (api_key or "").strip()
+    if not key:
+        return {}
+    now = time.time()
+    cached = _WB_SUBJECT_MAP_CACHE.get(key)
+    if cached and now - cached[0] < 600:
+        return cached[1]
     client = WbContentClient(api_key)
     try:
         subjects = await client.list_subjects()
@@ -646,18 +1068,35 @@ async def _wb_subject_map(api_key: str) -> Dict[int, dict]:
             "parent_name": str(it.get("parentName") or "").strip(),
             "subject_name": str(it.get("subjectName") or "").strip(),
         }
+    _WB_SUBJECT_MAP_CACHE[key] = (now, out)
     return out
+
+
+_WB_SUBJECT_MAP_CACHE: Dict[str, Tuple[float, Dict[int, dict]]] = {}
 
 
 def wb_merge_error_message(body: str) -> str:
     """Человекочитаемая ошибка WB moveNm."""
     text = (body or "").strip()
+    low = text.lower()
+    if "too many requests" in low or '"status": 429' in low or "limited by global limiter" in low:
+        return (
+            "Wildberries: слишком много запросов (лимит API). "
+            "Подождите 1–2 минуты, не нажимайте «Связать» подряд — затем обновите каталог."
+        )
     try:
         data = json.loads(text)
-        err = str(data.get("errorText") or data.get("message") or "").strip()
+        err = str(data.get("errorText") or data.get("message") or data.get("detail") or "").strip()
+        if not err and isinstance(data.get("title"), str):
+            err = str(data.get("title") or "").strip()
     except json.JSONDecodeError:
         err = text
     low = err.lower()
+    if "duplicate" in low:
+        return (
+            "WB отклонил повторный запрос. Подождите 1–2 минуты и обновите каталог — "
+            "склейка могла уже уйти в обработку."
+        )
     if "parent categor" in low:
         return (
             "WB не позволяет объединить товары из разных родительских категорий. "
@@ -823,14 +1262,16 @@ async def fetch_wb_catalog(
     *,
     vendor_codes: Optional[List[str]] = None,
     text_search: Optional[str] = None,
-    max_pages: int = 20,
-) -> List[dict]:
+    max_pages: int = 100,
+) -> Tuple[List[dict], dict]:
     client = WbContentClient(api_key)
     subject_map = await _wb_subject_map(api_key)
+    catalog_meta: dict = {}
     raw = await client.list_cards_all(
         max_pages=max_pages,
         text_search=text_search,
         vendor_codes=vendor_codes,
+        meta_out=catalog_meta,
     )
     rows: List[dict] = []
     for c in raw:
@@ -839,7 +1280,8 @@ async def fetch_wb_catalog(
         row = normalize_wb_card(c)
         _enrich_wb_row(row, subject_map)
         rows.append(row)
-    return rows
+    catalog_meta["count"] = len(rows)
+    return rows, catalog_meta
 
 
 async def fetch_ozon_catalog(
@@ -932,15 +1374,39 @@ async def wb_merge_cards(
     nm_ids: List[int],
     catalog_rows: Optional[List[dict]] = None,
 ) -> dict:
+    target = int(target_imt)
+    uniq: List[int] = []
+    seen: set[int] = set()
+    for x in nm_ids:
+        nid = int(x)
+        if nid in seen:
+            continue
+        seen.add(nid)
+        uniq.append(nid)
+    if not uniq:
+        raise ValueError("nm_ids пуст")
+
     rows = await _wb_rows_for_merge(
         api_key,
-        nm_ids=nm_ids,
-        target_imt=int(target_imt),
+        nm_ids=uniq,
+        target_imt=target,
         rows=catalog_rows,
     )
-    validate_wb_merge_rows(rows, target_imt=int(target_imt), nm_ids=nm_ids)
+    by_nm = {int(r.get("nm_id") or 0): r for r in rows if int(r.get("nm_id") or 0)}
+    to_move = [nid for nid in uniq if int(by_nm.get(nid, {}).get("imt_id") or 0) != target]
+    if not to_move:
+        raise ValueError("Выбранные карточки уже в этой связке (imtID) — обновите каталог")
+
+    validate_wb_merge_rows(rows, target_imt=target, nm_ids=to_move)
+    validate_wb_link_capacity(rows, target_imt=target, nm_ids=to_move)
     client = WbContentClient(api_key)
-    return await client.merge_cards(target_imt=int(target_imt), nm_ids=nm_ids)
+    last: Optional[dict] = None
+    for i in range(0, len(to_move), 30):
+        batch = to_move[i : i + 30]
+        last = await client.merge_cards(target_imt=target, nm_ids=batch)
+        if i + 30 < len(to_move):
+            await asyncio.sleep(2.0)
+    return last or {}
 
 
 async def wb_disconnect_cards(api_key: str, *, nm_ids: List[int]) -> dict:
@@ -1007,6 +1473,7 @@ async def ozon_link_by_model(
     *,
     offer_ids: List[str],
     model_name: str,
+    catalog_rows: Optional[List[dict]] = None,
 ) -> dict:
     model = (model_name or "").strip()
     if not model:
@@ -1014,6 +1481,8 @@ async def ozon_link_by_model(
     oids = [str(x).strip() for x in offer_ids if str(x).strip()]
     if not oids:
         raise ValueError("offer_ids пуст")
+    if catalog_rows:
+        validate_ozon_link_capacity(catalog_rows, model_name=model, offer_ids=oids)
     client = OzonClient(client_id, api_key, timeout_s=60.0)
     items = [
         {

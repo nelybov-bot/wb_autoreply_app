@@ -594,7 +594,7 @@ async def list_product_cards_catalog(
         if mp == "wb":
             if not (store.api_key or "").strip():
                 return {"error": "Не задан API-ключ WB"}
-            rows = await fetch_wb_catalog(
+            rows, _meta = await fetch_wb_catalog(
                 store.api_key,
                 vendor_codes=vendor_codes or None,
                 max_pages=max_pages,
@@ -671,7 +671,7 @@ async def link_product_cards(
 
     try:
         if mp == "wb":
-            rows = await fetch_wb_catalog(store.api_key, vendor_codes=arts, max_pages=5)
+            rows, _meta = await fetch_wb_catalog(store.api_key, vendor_codes=arts, max_pages=5)
             by_vendor = {str(r.get("vendor_code") or "").strip(): r for r in rows}
             nm_ids = []
             for a in arts:
@@ -745,7 +745,7 @@ async def unlink_product_cards(
             ids = [int(x) for x in (nm_ids or []) if x is not None]
             arts = [str(x).strip() for x in (articles or []) if str(x).strip()]
             if not ids and arts:
-                rows = await fetch_wb_catalog(store.api_key, vendor_codes=arts, max_pages=5)
+                rows, _meta = await fetch_wb_catalog(store.api_key, vendor_codes=arts, max_pages=5)
                 by_vendor = {str(r.get("vendor_code") or "").strip(): r for r in rows}
                 for a in arts:
                     row = by_vendor.get(a)
