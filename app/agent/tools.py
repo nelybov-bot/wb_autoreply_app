@@ -5,6 +5,11 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
+from app.agent.playbooks import (
+    check_ozon_promotions,
+    pipeline_answer_items,
+    remove_ozon_promotions,
+)
 from app.core.quality_metrics import fetch_all_quality
 from app.core.telegram_notify import (
     normalize_telegram_bot_token,
@@ -390,6 +395,68 @@ def _tool_apply_template(ctx: AgentContext, args: dict[str, Any]) -> dict[str, A
     return {"message": f"Шаблон применён к {applied} отзывам, пропущено {skipped}.", "applied": applied, "skipped": skipped}
 
 
+async def _tool_pipeline_reviews(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    store_ids = args.get("store_ids")
+    if store_ids is not None:
+        store_ids = [int(x) for x in store_ids]
+    key = (ctx.db.get_setting("openai_key") or "").strip()
+    if not key:
+        return {"error": "Не задан OpenAI ключ"}
+    return await pipeline_answer_items(ctx.db, item_type="review", store_ids=store_ids, openai_key=key)
+
+
+async def _tool_pipeline_questions(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    store_ids = args.get("store_ids")
+    if store_ids is not None:
+        store_ids = [int(x) for x in store_ids]
+    key = (ctx.db.get_setting("openai_key") or "").strip()
+    if not key:
+        return {"error": "Не задан OpenAI ключ"}
+    return await pipeline_answer_items(ctx.db, item_type="question", store_ids=store_ids, openai_key=key)
+
+
+async def _tool_check_ozon_promotions(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    sid, err = _resolve_store_id(
+        ctx.db,
+        store_id=args.get("store_id"),
+        store_name=args.get("store_name"),
+    )
+    if sid is None and (args.get("store_id") is not None or args.get("store_name")):
+        return {"error": err}
+    only_auto = args.get("only_auto_add")
+    if only_auto is not None:
+        only_auto = bool(only_auto)
+    session_ctx = ctx.session.context if ctx.session else None
+    return await check_ozon_promotions(
+        ctx.db,
+        store_id=sid,
+        only_auto_add=only_auto,
+        session_context=session_ctx,
+    )
+
+
+async def _tool_remove_ozon_promotions(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    sid, err = _resolve_store_id(
+        ctx.db,
+        store_id=args.get("store_id"),
+        store_name=args.get("store_name"),
+    )
+    if sid is None and (args.get("store_id") is not None or args.get("store_name")):
+        return {"error": err}
+    action_ids = args.get("action_ids")
+    if action_ids is not None:
+        action_ids = [int(x) for x in action_ids]
+    session_ctx = ctx.session.context if ctx.session else None
+    return await remove_ozon_promotions(
+        ctx.db,
+        store_id=sid,
+        action_ids=action_ids,
+        only_auto_add=bool(args.get("only_auto_add", True)),
+        session_context=session_ctx,
+        use_last_check=bool(args.get("use_last_check", False)),
+    )
+
+
 async def _execute_tool(ctx: AgentContext, name: str, args: dict[str, Any]) -> Any:
     spec = TOOL_BY_NAME.get(name)
     if not spec:
@@ -552,6 +619,56 @@ TOOL_SPECS: list[ToolSpec] = [
         parameters={},
         execute=_tool_telegram_report,
     ),
+    ToolSpec(
+        name="pipeline_answer_reviews",
+        description=(
+            "Полный цикл по отзывам: загрузить с маркетплейсов → сгенерировать ответы ИИ → отправить. "
+            "Используй при «ответить на отзывы», «обработать отзывы», «отзывы в работу»."
+        ),
+        risk="write",
+        parameters={"store_ids": "list[int] или null = все магазины"},
+        execute=_tool_pipeline_reviews,
+    ),
+    ToolSpec(
+        name="pipeline_answer_questions",
+        description=(
+            "Полный цикл по вопросам: загрузить → сгенерировать → отправить. "
+            "Используй при «ответить на вопросы», «обработать вопросы»."
+        ),
+        risk="write",
+        parameters={"store_ids": "list[int] или null = все магазины"},
+        execute=_tool_pipeline_questions,
+    ),
+    ToolSpec(
+        name="check_ozon_promotions",
+        description=(
+            "Проверить акции Ozon по магазинам: название, id, сколько товаров участвует, автоакция ли. "
+            "Используй при «проверь автоакции», «какие акции на Ozon», «сколько товаров в акциях»."
+        ),
+        risk="read",
+        parameters={
+            "store_id": "int, optional",
+            "store_name": "str, optional",
+            "only_auto_add": "bool — только автоакции, optional",
+        },
+        execute=_tool_check_ozon_promotions,
+    ),
+    ToolSpec(
+        name="remove_ozon_promotions",
+        description=(
+            "Удалить товары из акций Ozon. После check_ozon_promotions можно use_last_check=true. "
+            "Или укажи action_ids. Используй при «удали товары из акций», «сними с акций»."
+        ),
+        risk="write",
+        parameters={
+            "store_id": "int, optional",
+            "store_name": "str, optional",
+            "action_ids": "list[int], optional",
+            "only_auto_add": "bool, default true — если action_ids не указаны",
+            "use_last_check": "bool — удалить из акций последней проверки",
+        },
+        execute=_tool_remove_ozon_promotions,
+    ),
 ]
 
 TOOL_BY_NAME: dict[str, ToolSpec] = {t.name: t for t in TOOL_SPECS}
@@ -680,6 +797,40 @@ def format_tool_result(name: str, result: Any) -> str:
             return "Важных уведомлений Ozon нет."
         lines = [f"• {a['store']}: {a['summary']}" for a in alerts]
         return f"🔔 Ozon ({len(alerts)}):\n" + "\n".join(lines)
+    if name in ("pipeline_answer_reviews", "pipeline_answer_questions"):
+        steps = result.get("steps") or []
+        body = result.get("message") or ""
+        if steps:
+            body = body + "\n\n" + "\n".join(f"• {s}" for s in steps) if body else "\n".join(f"• {s}" for s in steps)
+        return body or "Цикл выполнен."
+    if name == "check_ozon_promotions":
+        lines = ["🏷 Акции Ozon:"]
+        for block in result.get("stores") or []:
+            if block.get("error"):
+                lines.append(f"\n📦 {block.get('store_name', '?')}: ⚠️ {block['error']}")
+                continue
+            lines.append(f"\n📦 {block.get('store_name', '?')} ({block.get('actions_count', 0)} акций):")
+            for a in (block.get("actions") or [])[:15]:
+                auto = " 🤖авто" if a.get("is_auto_add") else ""
+                lines.append(
+                    f"  • id={a.get('id')} — {a.get('title', '')[:45]}: "
+                    f"{a.get('participating_products_count', 0)} тов.{auto}"
+                )
+            rest = len(block.get("actions") or []) - 15
+            if rest > 0:
+                lines.append(f"  … ещё {rest} акций")
+        lines.append(f"\nИтого: {result.get('total_actions', 0)} акций, {result.get('total_products', 0)} товаров")
+        return "\n".join(lines)
+    if name == "remove_ozon_promotions":
+        if result.get("message"):
+            lines = [f"✅ {result['message']}"]
+            for row in result.get("per_store") or []:
+                if row.get("products_removed"):
+                    lines.append(
+                        f"• {row.get('store_name')}: снято {row.get('products_removed')} "
+                        f"из {row.get('actions_processed')} акций"
+                    )
+            return "\n".join(lines)
     if result.get("message"):
         return str(result["message"])
     if result.get("task_id"):

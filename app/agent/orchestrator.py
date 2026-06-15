@@ -20,7 +20,7 @@ from app.core.net import HttpStatusError
 
 log = logging.getLogger("agent")
 
-_MAX_READ_TOOL_ROUNDS = 3
+_MAX_READ_TOOL_ROUNDS = 5
 
 _CONFIRM_WORDS = frozenset({
     "да", "yes", "ok", "ок", "подтверждаю", "подтвердить", "выполни", "выполнить",
@@ -32,27 +32,34 @@ _DENY_WORDS = frozenset({
 
 _SYSTEM = """Ты оператор MarketAI — помощник по управлению маркетплейсами Wildberries, Ozon и Яндекс.Маркет.
 
-Ты НЕ ChatGPT и НЕ Telegram-бот общего назначения. Ты управляешь только MarketAI через инструменты ниже.
+Ты НЕ ChatGPT. Ты управляешь MarketAI только через инструменты.
 
-Строгие правила:
-1. Любые факты (магазины, статистика, очередь, задачи) — только через инструменты. Не выдумывай.
-2. Опасные действия (risk=write) — вызывай tool; система сама запросит подтверждение.
-3. Перед generate_answers / send_answers / apply_template — сначала list_queue_items для item_ids.
-4. «Как успехи?» / статус загрузки — get_task_status или list_active_tasks.
-5. «Весь лог переписки» / «история диалога» — export_dialog (НЕ отказывай и не говори про «контекст» или «экспорт чата»).
-6. «Отправить во все чаты» / «разослать в Telegram» — send_telegram_broadcast (это уведомления в настроенные Telegram-чаты MarketAI, не чаты покупателей WB/Ozon).
-7. Чаты покупателей WB/Ozon — отдельные разделы MarketAI; прямой массовой рассылки туда через агента нет — предложи автозапуск чатов или веб-интерфейс.
-8. Отвечай по-русски, коротко, дружелюбно, по делу. Без канцелярита и технического жаргона.
-9. Никогда не показывай пользователю JSON, type/tool/args и внутренние детали.
+## Сценарии (цепочки — один инструмент, НЕ разбивай на шаги вручную)
+- «ответить на отзывы», «обработать отзывы» → pipeline_answer_reviews
+- «ответить на вопросы» → pipeline_answer_questions
+- «проверь автоакции», «акции озон» → check_ozon_promotions
+- «удали из акций», «сними товары» (после проверки) → remove_ozon_promotions (use_last_check=true)
+- «как успехи?» → get_task_status
+
+pipeline_* сам: загрузка → генерация → отправка. Одно подтверждение на весь цикл.
+
+## Правила
+1. Факты — только через инструменты.
+2. write — один вызов; система запросит подтверждение.
+3. Точечно: load_new_items, generate_answers, send_answers — по отдельности.
+4. export_dialog — история диалога.
+5. send_telegram_broadcast — Telegram-чаты MarketAI.
+6. После check_ozon_promotions для удаления — remove_ozon_promotions.
+7. Русский, кратко, без JSON и жаргона.
 
 Инструменты:
 {tools}
 
-Формат ответа — ТОЛЬКО один JSON-объект, без markdown:
+Формат — ТОЛЬКО один JSON:
 {{
   "type": "message" | "tool" | "clarify",
-  "text": "текст для пользователя (пустой если только tool)",
-  "tool": "имя_инструмента или null",
+  "text": "текст",
+  "tool": "имя или null",
   "args": {{}}
 }}
 """
@@ -215,7 +222,14 @@ async def handle_agent_message(
             return {"reply": reply, "session": session.session_id}
 
         if spec.risk == "write" and not force_confirm:
-            summary = text or f"Выполнить «{spec.name}»?"
+            default_summaries = {
+                "pipeline_answer_reviews": "Запустить полный цикл по отзывам: загрузка → генерация ответов → отправка на маркетплейсы.",
+                "pipeline_answer_questions": "Запустить полный цикл по вопросам: загрузка → генерация → отправка.",
+                "remove_ozon_promotions": "Удалить товары из акций Ozon.",
+                "load_new_items": "Загрузить новые отзывы и вопросы с маркетплейсов.",
+                "send_telegram_broadcast": "Разослать сообщение во все настроенные Telegram-чаты.",
+            }
+            summary = text or default_summaries.get(spec.name) or f"Выполнить «{spec.name}»?"
             session.pending = PendingAction(tool=spec.name, args=args, summary=summary)
             reply = f"{summary}\n\nПодтвердите: «да» или «отмена»."
             append_message(session, "assistant", reply)

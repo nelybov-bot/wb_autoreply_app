@@ -35,6 +35,8 @@ _HELP_TEXT = """🤖 <b>MarketAI</b> — управление через Telegra
 • Новые отзывы без ответа
 • Статус автозапуска
 • Загрузи новые отзывы
+• Ответь на отзывы (полный цикл)
+• Проверь автоакции Ozon
 
 <b>Команды:</b>
 /new — новый диалог
@@ -215,6 +217,16 @@ async def _process_agent_input(
         return
     openai_key = (db.get_setting("openai_key") or "").strip()
     token = normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or "")
+    if force_confirm and session.pending and (
+        session.pending.tool.startswith("pipeline_")
+        or session.pending.tool == "remove_ozon_promotions"
+    ):
+        await _reply_agent(
+            token=token,
+            chat_id=chat_id,
+            text="⏳ Выполняю… Это может занять несколько минут.",
+            db=db,
+        )
     await telegram_send_chat_action(token, chat_id, "typing")
     out = await handle_agent_message(
         session=session,
