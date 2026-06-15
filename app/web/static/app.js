@@ -327,6 +327,7 @@
         setTimeout(() => scrollToOzonActionsSection(ozonActionsSection), 80);
       }
     }
+    if (tabId === 'card-links') loadCardLinksPanel();
     if (tabId === 'auto') loadAutoSchedulePanel();
     if (tabId === 'agent') loadAgentPanel();
     if (tabId === 'settings') {
@@ -1083,6 +1084,7 @@
       }
       setTimeout(() => { ozonActionsSuppressSelectChange = false; }, 0);
     }
+    syncCardLinksStoreSelect();
   }
 
   function renderAutoStoreList(selectedIds) {
@@ -2311,6 +2313,274 @@
     document.getElementById('ozon-actions-check-all')?.addEventListener('change', (e) => {
       const checked = !!e.target.checked;
       document.querySelectorAll('.ozon-action-check:not(:disabled)').forEach(el => { el.checked = checked; });
+    });
+  }
+
+  // ---- Card links (WB / Ozon) ----
+  let cardLinksData = { items: [], groups: [], candidates: [] };
+  let cardLinksView = 'catalog';
+
+  function cardLinksMarketplace() {
+    return String(document.getElementById('card-links-marketplace')?.value || 'wb').trim();
+  }
+
+  function syncCardLinksMarketplaceUI() {
+    const mp = cardLinksMarketplace();
+    const wbOnly = document.querySelectorAll('.card-links-wb-only');
+    const ozOnly = document.querySelectorAll('.card-links-ozon-only');
+    wbOnly.forEach(el => { el.hidden = mp !== 'wb'; });
+    ozOnly.forEach(el => { el.hidden = mp !== 'ozon'; });
+  }
+
+  function syncCardLinksStoreSelect() {
+    const sel = document.getElementById('card-links-store');
+    if (!sel) return;
+    const mp = cardLinksMarketplace();
+    const list = storesForMarketplace(mp);
+    const prev = String(sel.value || '').trim();
+    sel.innerHTML = list.length
+      ? list.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')
+      : `<option value="">Нет магазинов ${mp === 'wb' ? 'WB' : 'Ozon'}</option>`;
+    if (list.length) {
+      const ids = new Set(list.map(s => String(s.id)));
+      if (prev && ids.has(prev)) sel.value = prev;
+      else selectFirstStoreOption(sel);
+    }
+    syncCardLinksMarketplaceUI();
+  }
+
+  function setCardLinksStatus(msg) {
+    const el = document.getElementById('card-links-status');
+    if (el) el.textContent = msg || '';
+  }
+
+  function cardLinkPhotoCell(url) {
+    const u = (url || '').trim();
+    if (!u) return '<span class="card-link-thumb--empty">нет</span>';
+    return `<img class="card-link-thumb" src="${escapeHtml(u)}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
+  }
+
+  function renderCardLinksTable() {
+    const tbody = document.getElementById('card-links-tbody');
+    if (!tbody) return;
+    const mp = cardLinksMarketplace();
+    let rows = [];
+    if (cardLinksView === 'catalog') {
+      rows = (cardLinksData.items || []).map(it => ({ ...it, _kind: 'item' }));
+    } else if (cardLinksView === 'groups') {
+      for (const g of cardLinksData.groups || []) {
+        for (const it of g.items || []) {
+          rows.push({ ...it, _kind: 'item', _group: g });
+        }
+      }
+    } else {
+      for (const c of cardLinksData.candidates || []) {
+        for (const it of c.items || []) {
+          rows.push({ ...it, _kind: 'candidate', _candidate: c });
+        }
+      }
+    }
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-cell">Нет данных — загрузите каталог или уточните артикулы.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map((r, idx) => {
+      const article = mp === 'wb' ? (r.vendor_code || '—') : (r.offer_id || '—');
+      const mpId = mp === 'wb' ? (r.nm_id || '—') : (r.sku || '—');
+      const group = r.link_group_label || (r._group && r._group.group_label) || '—';
+      const linkedCls = r.linked ? ' linked' : '';
+      const rowKey = mp === 'wb'
+        ? `nm:${r.nm_id || idx}`
+        : `off:${r.offer_id || idx}`;
+      return `<tr>
+        <td class="col-check"><input type="checkbox" class="card-links-check" data-row-key="${escapeHtml(rowKey)}" data-article="${escapeHtml(article)}" data-nm-id="${escapeHtml(String(r.nm_id || ''))}" data-imt-id="${escapeHtml(String(r.imt_id || ''))}"></td>
+        <td>${cardLinkPhotoCell(r.photo_url)}</td>
+        <td>${escapeHtml(article)}</td>
+        <td>${escapeHtml(String(mpId))}</td>
+        <td>${escapeHtml((r.title || '').slice(0, 120))}</td>
+        <td><span class="card-links-group-badge${linkedCls}">${escapeHtml(group)}</span></td>
+      </tr>`;
+    }).join('');
+    const mergeBar = document.getElementById('card-links-merge-bar');
+    if (mergeBar) mergeBar.hidden = cardLinksView === 'candidates';
+  }
+
+  function getSelectedCardLinkRows() {
+    return Array.from(document.querySelectorAll('.card-links-check:checked'));
+  }
+
+  async function loadCardLinksCatalog() {
+    const mp = cardLinksMarketplace();
+    const storeId = Number(document.getElementById('card-links-store')?.value || 0);
+    if (!storeId) {
+      setCardLinksStatus('Выберите магазин.');
+      return;
+    }
+    const articles = (document.getElementById('card-links-articles')?.value || '').trim();
+    const qs = new URLSearchParams();
+    if (articles) qs.set('articles', articles);
+    setPanelLoading('card-links-loading', true, mp === 'wb' ? 'Запрос к WB Content API…' : 'Запрос к Ozon…');
+    setCardLinksStatus('');
+    try {
+      const data = await api(`/card-links/${mp}/${storeId}/catalog?${qs.toString()}`);
+      cardLinksData = {
+        items: data.items || [],
+        groups: data.groups || [],
+        candidates: data.candidates || [],
+      };
+      const linked = data.linked_groups != null ? data.linked_groups : 0;
+      setCardLinksStatus(`Загружено ${data.count || 0} карточек. Связок: ${linked}. Кандидатов на склейку: ${(data.candidates || []).length}.`);
+      renderCardLinksTable();
+    } catch (e) {
+      setCardLinksStatus((e && e.message) ? e.message : 'Ошибка загрузки');
+      cardLinksData = { items: [], groups: [], candidates: [] };
+      renderCardLinksTable();
+    } finally {
+      setPanelLoading('card-links-loading', false);
+    }
+  }
+
+  async function disconnectSelectedCardLinks() {
+    const mp = cardLinksMarketplace();
+    const storeId = Number(document.getElementById('card-links-store')?.value || 0);
+    const checked = getSelectedCardLinkRows();
+    if (!storeId || !checked.length) {
+      toast('Выберите хотя бы одну карточку', 'error');
+      return;
+    }
+    if (mp === 'wb') {
+      const nmIds = checked.map(el => Number(el.getAttribute('data-nm-id') || 0)).filter(x => x > 0);
+      if (!nmIds.length) {
+        toast('nmID не найдены', 'error');
+        return;
+      }
+      if (!confirm(`Разъединить ${nmIds.length} карточек WB?`)) return;
+      setPanelLoading('card-links-loading', true, 'Разъединение в WB…');
+      try {
+        await api(`/card-links/wb/${storeId}/disconnect`, {
+          method: 'POST',
+          body: JSON.stringify({ nm_ids: nmIds }),
+        });
+        toast('Запрос на разъединение отправлен');
+        await loadCardLinksCatalog();
+      } catch (e) {
+        toast((e && e.message) ? e.message : 'Ошибка', 'error');
+      } finally {
+        setPanelLoading('card-links-loading', false);
+      }
+      return;
+    }
+    const articles = checked.map(el => el.getAttribute('data-article')).filter(Boolean);
+    if (!confirm(`Разъединить ${articles.length} товаров Ozon (уникальное название модели у каждого)?`)) return;
+    setPanelLoading('card-links-loading', true, 'Разъединение на Ozon…');
+    try {
+      await api(`/card-links/ozon/${storeId}/unlink`, {
+        method: 'POST',
+        body: JSON.stringify({ offer_ids: articles }),
+      });
+      toast('Уникальные названия модели заданы');
+      await loadCardLinksCatalog();
+    } catch (e) {
+      toast((e && e.message) ? e.message : 'Ошибка', 'error');
+    } finally {
+      setPanelLoading('card-links-loading', false);
+    }
+  }
+
+  async function mergeSelectedCardLinks() {
+    const mp = cardLinksMarketplace();
+    const storeId = Number(document.getElementById('card-links-store')?.value || 0);
+    const checked = getSelectedCardLinkRows();
+    if (!storeId || checked.length < 2) {
+      toast('Выберите минимум 2 карточки', 'error');
+      return;
+    }
+    const articles = checked.map(el => el.getAttribute('data-article')).filter(Boolean);
+    if (mp === 'wb') {
+      let targetImt = Number(document.getElementById('card-links-target-imt')?.value || 0);
+      if (!targetImt) {
+        targetImt = Number(checked[0].getAttribute('data-imt-id') || 0);
+      }
+      const nmIds = checked.map(el => Number(el.getAttribute('data-nm-id') || 0)).filter(x => x > 0);
+      if (!targetImt || nmIds.length < 2) {
+        toast('Укажите target imtID или выберите карточки с imtID', 'error');
+        return;
+      }
+      if (!confirm(`Объединить ${nmIds.length} карточек WB в imtID ${targetImt}?`)) return;
+      setPanelLoading('card-links-loading', true, 'Отправка в WB…');
+      try {
+        await api(`/card-links/wb/${storeId}/merge`, {
+          method: 'POST',
+          body: JSON.stringify({ target_imt: targetImt, nm_ids: nmIds }),
+        });
+        toast('Запрос на объединение отправлен');
+        await loadCardLinksCatalog();
+      } catch (e) {
+        toast((e && e.message) ? e.message : 'Ошибка', 'error');
+      } finally {
+        setPanelLoading('card-links-loading', false);
+      }
+      return;
+    }
+    const modelName = (document.getElementById('card-links-model-name')?.value || '').trim();
+    if (!modelName) {
+      toast('Введите название модели (атрибут 9048)', 'error');
+      return;
+    }
+    if (!confirm(`Связать ${articles.length} товаров Ozon с моделью «${modelName}»?`)) return;
+    setPanelLoading('card-links-loading', true, 'Обновление атрибута Ozon…');
+    try {
+      await api(`/card-links/ozon/${storeId}/link`, {
+        method: 'POST',
+        body: JSON.stringify({ offer_ids: articles, model_name: modelName }),
+      });
+      toast('Атрибут модели обновлён');
+      await loadCardLinksCatalog();
+    } catch (e) {
+      toast((e && e.message) ? e.message : 'Ошибка', 'error');
+    } finally {
+      setPanelLoading('card-links-loading', false);
+    }
+  }
+
+  function loadCardLinksPanel() {
+    ensureStoresLoaded().then(() => {
+      fillStoreSelects();
+      syncCardLinksStoreSelect();
+      if (!cardLinksData.items.length) {
+        setCardLinksStatus('Выберите магазин и нажмите «Загрузить каталог».');
+      }
+      renderCardLinksTable();
+    }).catch(err => setCardLinksStatus(err.message || 'Ошибка'));
+  }
+
+  function wireCardLinksPanel() {
+    if (wireCardLinksPanel._done) return;
+    wireCardLinksPanel._done = true;
+    document.getElementById('card-links-marketplace')?.addEventListener('change', () => {
+      cardLinksData = { items: [], groups: [], candidates: [] };
+      syncCardLinksStoreSelect();
+      renderCardLinksTable();
+      setCardLinksStatus('Маркетплейс сменён — загрузите каталог.');
+    });
+    document.getElementById('card-links-store')?.addEventListener('change', () => {
+      cardLinksData = { items: [], groups: [], candidates: [] };
+      renderCardLinksTable();
+      setCardLinksStatus('Магазин сменён — загрузите каталог.');
+    });
+    document.getElementById('btn-card-links-load')?.addEventListener('click', () => { void loadCardLinksCatalog(); });
+    document.getElementById('btn-card-links-merge')?.addEventListener('click', () => { void mergeSelectedCardLinks(); });
+    document.getElementById('btn-card-links-disconnect')?.addEventListener('click', () => { void disconnectSelectedCardLinks(); });
+    document.getElementById('card-links-check-all')?.addEventListener('change', (e) => {
+      const on = !!e.target.checked;
+      document.querySelectorAll('.card-links-check').forEach(el => { el.checked = on; });
+    });
+    document.querySelectorAll('.card-links-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        cardLinksView = btn.getAttribute('data-cl-view') || 'catalog';
+        document.querySelectorAll('.card-links-tab').forEach(b => b.classList.toggle('active', b === btn));
+        renderCardLinksTable();
+      });
     });
   }
 
@@ -4064,6 +4334,7 @@
     wireWbChatsPanel();
     wireOzonChatsPanel();
     wireOzonActionsPanel();
+    wireCardLinksPanel();
     wireAgentPanel();
     ensureStoresLoaded().then(() => {
       fillStoreSelects();

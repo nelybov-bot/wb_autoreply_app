@@ -9,6 +9,18 @@ from typing import Any, Optional
 from app.core.ozon_actions import normalize_action_row, remove_products_from_actions
 from app.core.ozon_buyer_chat import ozon_feature_unavailable_user_message, ozon_http_skip_reason
 from app.core.ozon_client import OzonClient
+from app.core.card_links import (
+    fetch_ozon_catalog,
+    fetch_wb_catalog,
+    group_ozon_rows,
+    group_wb_rows,
+    ozon_link_by_model,
+    parse_articles_csv,
+    suggest_link_candidates,
+    ozon_unlink_cards,
+    wb_disconnect_cards,
+    wb_merge_cards,
+)
 from app.core.net import HttpStatusError
 from app.db import Database
 from app.web import tasks as web_tasks
@@ -544,3 +556,243 @@ async def pipeline_buyer_chats(
         "per_store": per_store,
         "message": f"Чаты обработаны. Всего отправлено ответов: {total_sent}.",
     }
+
+
+async def list_product_cards_catalog(
+    db: Database,
+    *,
+    marketplace: str,
+    store_id: Optional[int] = None,
+    articles: Optional[str] = None,
+    max_pages: int = 15,
+) -> dict[str, Any]:
+    mp = (marketplace or "").strip().lower()
+    if mp not in ("wb", "ozon"):
+        return {"error": "marketplace: wb или ozon"}
+    if store_id is None:
+        stores = _wb_stores(db) if mp == "wb" else _ozon_stores(db)
+        if not stores:
+            return {"error": f"Нет магазинов {mp.upper()}"}
+        if len(stores) > 1:
+            return {
+                "error": "Укажите store_id или store_name",
+                "stores": [{"id": s.id, "name": s.name} for s in stores],
+            }
+        store = stores[0]
+    else:
+        stores = [s for s in db.list_stores() if int(s.id) == int(store_id)]
+        if not stores:
+            return {"error": "Магазин не найден"}
+        store = stores[0]
+        if store.marketplace != mp:
+            return {"error": f"Магазин не {mp.upper()}"}
+
+    vendor_codes = parse_articles_csv(articles)
+    try:
+        if mp == "wb":
+            if not (store.api_key or "").strip():
+                return {"error": "Не задан API-ключ WB"}
+            rows = await fetch_wb_catalog(
+                store.api_key,
+                vendor_codes=vendor_codes or None,
+                max_pages=max_pages,
+            )
+            groups = group_wb_rows(rows)
+        else:
+            if not (store.client_id or "").strip() or not (store.api_key or "").strip():
+                return {"error": "Не заданы Client-Id и Api-Key Ozon"}
+            rows = await fetch_ozon_catalog(
+                store.client_id or "",
+                store.api_key,
+                offer_ids=vendor_codes or None,
+                max_pages=max_pages,
+            )
+            groups = group_ozon_rows(rows)
+    except HttpStatusError as e:
+        return {"error": f"API {e.status}: {(e.body or '')[:300]}"}
+
+    preview = []
+    for r in rows[:25]:
+        preview.append(
+            {
+                "article": r.get("vendor_code") or r.get("offer_id"),
+                "mp_id": r.get("nm_id") or r.get("sku"),
+                "title": (r.get("title") or "")[:120],
+                "photo_url": r.get("photo_url"),
+                "linked": r.get("linked"),
+                "group": r.get("link_group_label"),
+            }
+        )
+    linked_groups = sum(
+        1 for g in groups if g.get("linked") and g.get("group_id") != "__unlinked__"
+    )
+    return {
+        "store_id": store.id,
+        "store_name": store.name,
+        "marketplace": mp,
+        "count": len(rows),
+        "linked_groups": linked_groups,
+        "preview": preview,
+        "candidates_count": len(suggest_link_candidates(rows, marketplace=mp)),
+        "message": f"{store.name}: загружено {len(rows)} карточек, связок {linked_groups}.",
+    }
+
+
+async def link_product_cards(
+    db: Database,
+    *,
+    marketplace: str,
+    store_id: Optional[int],
+    articles: Optional[list[str]] = None,
+    target_imt: Optional[int] = None,
+    model_name: Optional[str] = None,
+) -> dict[str, Any]:
+    mp = (marketplace or "").strip().lower()
+    if mp not in ("wb", "ozon"):
+        return {"error": "marketplace: wb или ozon"}
+    if store_id is None:
+        return {"error": "Укажите store_id"}
+    stores = [s for s in db.list_stores() if int(s.id) == int(store_id)]
+    if not stores:
+        return {"error": "Магазин не найден"}
+    store = stores[0]
+    if store.marketplace != mp:
+        return {"error": f"Магазин не {mp.upper()}"}
+
+    arts = [str(x).strip() for x in (articles or []) if str(x).strip()]
+    if not arts:
+        return {"error": "Укажите артикулы (articles)"}
+
+    try:
+        if mp == "wb":
+            rows = await fetch_wb_catalog(store.api_key, vendor_codes=arts, max_pages=5)
+            by_vendor = {str(r.get("vendor_code") or "").strip(): r for r in rows}
+            nm_ids = []
+            for a in arts:
+                row = by_vendor.get(a)
+                if not row:
+                    return {"error": f"Карточка WB не найдена: {a}"}
+                nm_ids.append(int(row.get("nm_id") or 0))
+            nm_ids = [x for x in nm_ids if x]
+            if not nm_ids:
+                return {"error": "nmID не найдены"}
+            tgt = int(target_imt or 0)
+            if not tgt:
+                tgt = int(rows[0].get("imt_id") or 0)
+            if not tgt:
+                return {"error": "Укажите target_imt (imtID целевой связки)"}
+            result = await wb_merge_cards(store.api_key, target_imt=tgt, nm_ids=nm_ids)
+            return {
+                "ok": True,
+                "marketplace": "wb",
+                "target_imt": tgt,
+                "nm_ids": nm_ids,
+                "result": result,
+                "message": f"WB: запрос на объединение {len(nm_ids)} карточек в imtID {tgt}.",
+            }
+
+        model = (model_name or "").strip()
+        if not model:
+            return {"error": "Укажите model_name (название модели Ozon, атрибут 9048)"}
+        result = await ozon_link_by_model(
+            store.client_id or "",
+            store.api_key,
+            offer_ids=arts,
+            model_name=model,
+        )
+        return {
+            "ok": True,
+            "marketplace": "ozon",
+            "offer_ids": arts,
+            "model_name": model,
+            "result": result,
+            "message": f"Ozon: обновлён атрибут модели для {len(arts)} товаров.",
+        }
+    except HttpStatusError as e:
+        return {"error": f"API {e.status}: {(e.body or '')[:300]}"}
+    except ValueError as e:
+        return {"error": str(e)}
+
+
+async def unlink_product_cards(
+    db: Database,
+    *,
+    marketplace: str,
+    store_id: Optional[int],
+    articles: Optional[list[str]] = None,
+    nm_ids: Optional[list[int]] = None,
+) -> dict[str, Any]:
+    mp = (marketplace or "").strip().lower()
+    if mp not in ("wb", "ozon"):
+        return {"error": "marketplace: wb или ozon"}
+    if store_id is None:
+        return {"error": "Укажите store_id"}
+    stores = [s for s in db.list_stores() if int(s.id) == int(store_id)]
+    if not stores:
+        return {"error": "Магазин не найден"}
+    store = stores[0]
+    if store.marketplace != mp:
+        return {"error": f"Магазин не {mp.upper()}"}
+
+    try:
+        if mp == "wb":
+            ids = [int(x) for x in (nm_ids or []) if x is not None]
+            arts = [str(x).strip() for x in (articles or []) if str(x).strip()]
+            if not ids and arts:
+                rows = await fetch_wb_catalog(store.api_key, vendor_codes=arts, max_pages=5)
+                by_vendor = {str(r.get("vendor_code") or "").strip(): r for r in rows}
+                for a in arts:
+                    row = by_vendor.get(a)
+                    if not row:
+                        return {"error": f"Карточка WB не найдена: {a}"}
+                    nid = int(row.get("nm_id") or 0)
+                    if nid:
+                        ids.append(nid)
+            ids = [x for x in ids if x]
+            if not ids:
+                return {"error": "Укажите nm_ids или артикулы (articles)"}
+            result = await wb_disconnect_cards(store.api_key, nm_ids=ids)
+            if result.get("errors"):
+                return {
+                    "error": f"WB: ошибки при разъединении {result.get('failed')} карточек",
+                    "details": result,
+                }
+            return {
+                "ok": True,
+                "marketplace": "wb",
+                "nm_ids": ids,
+                "result": result,
+                "message": f"WB: разъединено {result.get('processed', len(ids))} карточек.",
+            }
+
+        arts = [str(x).strip() for x in (articles or []) if str(x).strip()]
+        if not arts:
+            return {"error": "Укажите offer_id (articles)"}
+        titles: dict[str, str] = {}
+        rows = await fetch_ozon_catalog(
+            store.client_id or "",
+            store.api_key,
+            offer_ids=arts,
+            max_pages=3,
+        )
+        for r in rows:
+            oid = str(r.get("offer_id") or "").strip()
+            if oid:
+                titles[oid] = str(r.get("title") or "")
+        result = await ozon_unlink_cards(
+            store.client_id or "",
+            store.api_key,
+            offer_ids=arts,
+            titles_by_offer=titles,
+        )
+        return {
+            "ok": True,
+            "marketplace": "ozon",
+            "offer_ids": arts,
+            "result": result,
+            "message": f"Ozon: у {len(arts)} товаров заданы уникальные названия модели.",
+        }
+    except HttpStatusError as e:
+        return {"error": f"API {e.status}: {(e.body or '')[:300]}"}
+    except ValueError as e:
+        return {"error": str(e)}

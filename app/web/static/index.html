@@ -96,6 +96,10 @@
         </div>
       </div>
 
+      </div>
+
+      <button type="button" class="nav-link" data-tab="card-links">Связки</button>
+
       <button type="button" class="nav-link" data-tab="auto">Автозапуск</button>
       <button type="button" class="nav-link" data-tab="agent">AI</button>
 
@@ -579,6 +583,75 @@
             <button type="button" class="btn btn-secondary" id="btn-ozon-actions-remove-selected">Удалить товары из выбранных акций</button>
             <button type="button" class="btn btn-secondary" id="btn-ozon-actions-auto-remove">Автоудаление сейчас</button>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Связки карточек WB / Ozon -->
+    <section id="panel-card-links" class="panel">
+      <header class="panel-head">
+        <div>
+          <h2 class="panel-title">Связки карточек</h2>
+          <p class="panel-desc">Выгрузка каталога, проверка существующих связок и привязка по артикулам (только существующие карточки)</p>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-load">Загрузить каталог</button>
+      </header>
+      <div class="form-card form-card-wide">
+        <div class="form-row form-row-wrap">
+          <div class="form-group">
+            <label>Маркетплейс</label>
+            <select id="card-links-marketplace" class="select-md">
+              <option value="wb">Wildberries</option>
+              <option value="ozon">Ozon</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Магазин</label>
+            <select id="card-links-store" class="select-md"></select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Артикулы <span class="form-label-hint">(необязательно — по одному в строке или через запятую)</span></label>
+          <textarea id="card-links-articles" rows="3" placeholder="ART-001&#10;ART-002"></textarea>
+        </div>
+        <div id="card-links-status" class="form-hint" role="status">Выберите магазин и нажмите «Загрузить каталог».</div>
+        <div class="progress-wrap" id="card-links-loading" aria-live="polite" hidden>
+          <div class="progress-bar indeterminate" role="progressbar"></div>
+          <span class="progress-label" id="card-links-loading-text">Загрузка…</span>
+        </div>
+        <div class="card-links-view-tabs" role="tablist">
+          <button type="button" class="btn btn-secondary btn-sm card-links-tab active" data-cl-view="catalog">Каталог</button>
+          <button type="button" class="btn btn-secondary btn-sm card-links-tab" data-cl-view="groups">Группы</button>
+          <button type="button" class="btn btn-secondary btn-sm card-links-tab" data-cl-view="candidates">Кандидаты</button>
+        </div>
+        <div id="card-links-merge-bar" class="card-links-merge-bar" hidden>
+          <div class="form-row form-row-wrap card-links-merge-fields">
+            <div class="form-group card-links-wb-only" id="card-links-target-imt-wrap">
+              <label>target imtID (WB)</label>
+              <input type="number" id="card-links-target-imt" placeholder="из первой выбранной карточки">
+            </div>
+            <div class="form-group card-links-ozon-only" id="card-links-model-wrap" hidden>
+              <label>Название модели (Ozon, 9048)</label>
+              <input type="text" id="card-links-model-name" placeholder="Balea крем увлажняющий">
+            </div>
+            <button type="button" class="btn btn-primary" id="btn-card-links-merge">Связать выбранные</button>
+            <button type="button" class="btn btn-secondary" id="btn-card-links-disconnect">Разъединить выбранные</button>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table class="items-table card-links-table" id="card-links-table">
+            <thead>
+              <tr>
+                <th class="col-check"><input type="checkbox" id="card-links-check-all" title="Выбрать все"></th>
+                <th class="col-photo">Фото</th>
+                <th>Артикул</th>
+                <th>ID МП</th>
+                <th>Название</th>
+                <th>Связка</th>
+              </tr>
+            </thead>
+            <tbody id="card-links-tbody"></tbody>
+          </table>
         </div>
       </div>
     </section>

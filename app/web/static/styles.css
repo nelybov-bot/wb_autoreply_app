@@ -3510,3 +3510,59 @@ body.theme-dark .quality-cell--danger { color: #f87171; background: rgba(239, 68
     width: 100%;
   }
 }
+
+.card-links-view-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0 0.75rem;
+}
+
+.card-links-tab.active {
+  background: var(--accent, #2563eb);
+  color: #fff;
+  border-color: transparent;
+}
+
+.card-links-merge-bar {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  background: var(--surface-2, #f9fafb);
+}
+
+.card-links-table .col-photo {
+  width: 56px;
+}
+
+.card-link-thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: var(--surface-3, #eee);
+  display: block;
+}
+
+.card-link-thumb--empty {
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  background: var(--surface-3, #eee);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  color: var(--text-muted, #888);
+}
+
+.card-links-group-badge {
+  font-size: 0.8rem;
+  color: var(--text-muted, #666);
+}
+
+.card-links-group-badge.linked {
+  color: var(--success, #15803d);
+  font-weight: 600;
+}

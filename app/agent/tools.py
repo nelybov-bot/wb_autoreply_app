@@ -8,9 +8,12 @@ from typing import Any, Callable, Optional, TYPE_CHECKING
 from app.agent.playbooks import (
     check_buyer_chats,
     check_ozon_promotions,
+    link_product_cards,
+    list_product_cards_catalog,
     pipeline_answer_items,
     pipeline_buyer_chats,
     remove_ozon_promotions,
+    unlink_product_cards,
 )
 from app.core.quality_metrics import fetch_all_quality
 from app.core.telegram_notify import (
@@ -459,6 +462,73 @@ async def _tool_remove_ozon_promotions(ctx: AgentContext, args: dict[str, Any]) 
     )
 
 
+async def _tool_list_product_cards(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    mp = str(args.get("marketplace") or "").strip().lower()
+    sid, err = _resolve_store_id(
+        ctx.db,
+        store_id=args.get("store_id"),
+        store_name=args.get("store_name"),
+    )
+    if sid is None and (args.get("store_id") is not None or args.get("store_name")):
+        return {"error": err}
+    articles = args.get("articles")
+    if isinstance(articles, list):
+        articles = ",".join(str(x) for x in articles)
+    return await list_product_cards_catalog(
+        ctx.db,
+        marketplace=mp,
+        store_id=sid,
+        articles=str(articles) if articles else None,
+        max_pages=int(args.get("max_pages") or 15),
+    )
+
+
+async def _tool_link_product_cards(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    mp = str(args.get("marketplace") or "").strip().lower()
+    sid, err = _resolve_store_id(
+        ctx.db,
+        store_id=args.get("store_id"),
+        store_name=args.get("store_name"),
+    )
+    if sid is None:
+        return {"error": err or "Укажите store_id или store_name"}
+    articles = args.get("articles")
+    if articles is not None and not isinstance(articles, list):
+        articles = [str(articles)]
+    return await link_product_cards(
+        ctx.db,
+        marketplace=mp,
+        store_id=sid,
+        articles=articles,
+        target_imt=args.get("target_imt"),
+        model_name=args.get("model_name"),
+    )
+
+
+async def _tool_unlink_product_cards(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    mp = str(args.get("marketplace") or "").strip().lower()
+    sid, err = _resolve_store_id(
+        ctx.db,
+        store_id=args.get("store_id"),
+        store_name=args.get("store_name"),
+    )
+    if sid is None:
+        return {"error": err or "Укажите store_id или store_name"}
+    articles = args.get("articles")
+    if articles is not None and not isinstance(articles, list):
+        articles = [str(articles)]
+    nm_ids = args.get("nm_ids")
+    if nm_ids is not None:
+        nm_ids = [int(x) for x in nm_ids]
+    return await unlink_product_cards(
+        ctx.db,
+        marketplace=mp,
+        store_id=sid,
+        articles=articles,
+        nm_ids=nm_ids,
+    )
+
+
 async def _tool_check_buyer_chats(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
     mp = str(args.get("marketplace") or "all").strip().lower()
     if mp not in ("wb", "ozon", "all"):
@@ -756,6 +826,55 @@ TOOL_SPECS: list[ToolSpec] = [
             "max_chats_per_store": "int, default 50, max 100",
         },
         execute=_tool_pipeline_buyer_chats,
+    ),
+    ToolSpec(
+        name="list_product_cards",
+        description=(
+            "Выгрузить каталог карточек для связок: артикул, nmID/sku, название, фото, текущая группа. "
+            "WB или Ozon. Можно фильтр по артикулам. Используй перед привязкой карточек."
+        ),
+        risk="read",
+        parameters={
+            "marketplace": "wb | ozon",
+            "store_id": "int, optional",
+            "store_name": "str, optional",
+            "articles": "str или list — артикулы (vendor_code / offer_id), optional",
+            "max_pages": "int, optional",
+        },
+        execute=_tool_list_product_cards,
+    ),
+    ToolSpec(
+        name="link_product_cards",
+        description=(
+            "Привязать существующие карточки в одну связку. WB: moveNm (target_imt + nm_ids по артикулам). "
+            "Ozon: одинаковый атрибут 9048 «Название модели» (model_name + offer_id). Опасная операция."
+        ),
+        risk="write",
+        parameters={
+            "marketplace": "wb | ozon",
+            "store_id": "int",
+            "store_name": "str, optional",
+            "articles": "list[str] — артикулы для связки",
+            "target_imt": "int — для WB, imtID целевой связки",
+            "model_name": "str — для Ozon, название модели",
+        },
+        execute=_tool_link_product_cards,
+    ),
+    ToolSpec(
+        name="unlink_product_cards",
+        description=(
+            "Разъединить карточки. WB: moveNm без targetIMT (по nmID или артикулам). "
+            "Ozon: уникальное «Название модели» (9048) для каждого offer_id. Опасная операция."
+        ),
+        risk="write",
+        parameters={
+            "marketplace": "wb | ozon",
+            "store_id": "int",
+            "store_name": "str, optional",
+            "articles": "list[str] — артикулы / offer_id",
+            "nm_ids": "list[int], optional — для WB напрямую",
+        },
+        execute=_tool_unlink_product_cards,
     ),
 ]
 

@@ -82,6 +82,18 @@ from app.core.ozon_actions import (
     remove_products_from_actions,
 )
 from app.core.ozon_client import OzonClient
+from app.core.card_links import (
+    fetch_ozon_catalog,
+    fetch_wb_catalog,
+    group_ozon_rows,
+    group_wb_rows,
+    ozon_link_by_model,
+    parse_articles_csv,
+    suggest_link_candidates,
+    ozon_unlink_cards,
+    wb_disconnect_cards,
+    wb_merge_cards,
+)
 from app.core.chat_common import SETTING_AUTO_CHAT_MAX_AGE_DAYS, SETTING_REPLY_FROM, parse_api_error_detail
 from app.core.card_check import (
     DEFAULT_TELEGRAM_TEMPLATE,
@@ -3276,6 +3288,277 @@ async def api_ozon_actions_auto_remove(
     except Exception:
         pass
     return stats
+
+
+# ---------- API: связки карточек (WB / Ozon) ----------
+
+
+class CardLinksWbMergeBody(BaseModel):
+    target_imt: int
+    nm_ids: list[int]
+
+
+class CardLinksOzonLinkBody(BaseModel):
+    offer_ids: list[str]
+    model_name: str
+
+
+class CardLinksWbDisconnectBody(BaseModel):
+    nm_ids: list[int]
+
+
+class CardLinksOzonUnlinkBody(BaseModel):
+    offer_ids: list[str]
+
+
+def _card_links_http_error(marketplace: str, e: HttpStatusError) -> HTTPException:
+    mp = "Wildberries" if marketplace == "wb" else "Ozon"
+    body = (e.body or "")[:500]
+    if e.status in (401, 403):
+        hint = (
+            "Проверьте API-ключ: для WB нужен токен категории «Контент» (content-api)."
+            if marketplace == "wb"
+            else "Проверьте Client-Id и Api-Key Ozon."
+        )
+        return HTTPException(e.status, f"{mp}: доступ запрещён. {hint}")
+    return HTTPException(e.status, f"{mp} API {e.status}: {body or 'ошибка'}")
+
+
+@app.get("/api/card-links/wb/{store_id}/catalog")
+async def api_card_links_wb_catalog(
+    store_id: int,
+    articles: Optional[str] = Query(None, description="Артикулы через запятую или с новой строки"),
+    q: Optional[str] = Query(None, description="Поиск по названию/артикулу"),
+    max_pages: int = Query(20, ge=1, le=100),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    s = _require_wb_store_for_chats(db, store_id)
+    vendor_codes = parse_articles_csv(articles)
+    try:
+        rows = await fetch_wb_catalog(
+            s.api_key,
+            vendor_codes=vendor_codes or None,
+            text_search=(q or "").strip() or None,
+            max_pages=max_pages,
+        )
+    except HttpStatusError as e:
+        raise _card_links_http_error("wb", e) from e
+    groups = group_wb_rows(rows)
+    linked_groups = sum(1 for g in groups if g.get("linked"))
+    return {
+        "store_id": store_id,
+        "marketplace": "wb",
+        "count": len(rows),
+        "linked_groups": linked_groups,
+        "items": rows,
+        "groups": groups,
+        "candidates": suggest_link_candidates(rows, marketplace="wb"),
+    }
+
+
+@app.get("/api/card-links/ozon/{store_id}/catalog")
+async def api_card_links_ozon_catalog(
+    store_id: int,
+    articles: Optional[str] = Query(None, description="offer_id через запятую или с новой строки"),
+    max_pages: int = Query(15, ge=1, le=50),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    s = _require_ozon_store_for_chats(db, store_id)
+    offer_ids = parse_articles_csv(articles)
+    try:
+        rows = await fetch_ozon_catalog(
+            s.client_id or "",
+            s.api_key,
+            offer_ids=offer_ids or None,
+            max_pages=max_pages,
+        )
+    except HttpStatusError as e:
+        raise _card_links_http_error("ozon", e) from e
+    groups = group_ozon_rows(rows)
+    linked_groups = sum(1 for g in groups if g.get("linked") and g.get("group_id") != "__unlinked__")
+    return {
+        "store_id": store_id,
+        "marketplace": "ozon",
+        "count": len(rows),
+        "linked_groups": linked_groups,
+        "items": rows,
+        "groups": groups,
+        "candidates": suggest_link_candidates(rows, marketplace="ozon"),
+    }
+
+
+@app.post("/api/card-links/wb/{store_id}/merge")
+async def api_card_links_wb_merge(
+    store_id: int,
+    body: CardLinksWbMergeBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_permission("view_settings")),
+):
+    s = _require_wb_store_for_chats(db, store_id)
+    nm_ids = [int(x) for x in body.nm_ids if x is not None]
+    if not nm_ids:
+        raise HTTPException(400, "nm_ids пуст")
+    if len(nm_ids) > 30:
+        raise HTTPException(400, "WB: не более 30 nmID за один запрос")
+    try:
+        result = await wb_merge_cards(s.api_key, target_imt=int(body.target_imt), nm_ids=nm_ids)
+    except HttpStatusError as e:
+        raise _card_links_http_error("wb", e) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="wb_card_links_merge",
+            item_type="card_link",
+            store_id=store_id,
+            result="ok",
+            meta={"target_imt": int(body.target_imt), "nm_ids": nm_ids},
+        )
+    except Exception:
+        pass
+    return {"ok": True, "result": result, "message": "Запрос на объединение отправлен в WB. Склейка может занять до нескольких часов."}
+
+
+@app.post("/api/card-links/ozon/{store_id}/link")
+async def api_card_links_ozon_link(
+    store_id: int,
+    body: CardLinksOzonLinkBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_permission("view_settings")),
+):
+    s = _require_ozon_store_for_chats(db, store_id)
+    offer_ids = [str(x).strip() for x in body.offer_ids if str(x).strip()]
+    model_name = (body.model_name or "").strip()
+    if not offer_ids:
+        raise HTTPException(400, "offer_ids пуст")
+    if not model_name:
+        raise HTTPException(400, "model_name пуст (название модели, атрибут 9048)")
+    try:
+        result = await ozon_link_by_model(
+            s.client_id or "",
+            s.api_key,
+            offer_ids=offer_ids,
+            model_name=model_name,
+        )
+    except HttpStatusError as e:
+        raise _card_links_http_error("ozon", e) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="ozon_card_links_link",
+            item_type="card_link",
+            store_id=store_id,
+            result="ok",
+            meta={"offer_ids": offer_ids, "model_name": model_name},
+        )
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "result": result,
+        "message": "Атрибут «Название модели» обновлён. Склейка на Ozon может занять до 24 часов.",
+    }
+
+
+@app.post("/api/card-links/wb/{store_id}/disconnect")
+async def api_card_links_wb_disconnect(
+    store_id: int,
+    body: CardLinksWbDisconnectBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_permission("view_settings")),
+):
+    s = _require_wb_store_for_chats(db, store_id)
+    nm_ids = [int(x) for x in body.nm_ids if x is not None]
+    if not nm_ids:
+        raise HTTPException(400, "nm_ids пуст")
+    if len(nm_ids) > 30:
+        raise HTTPException(400, "WB: не более 30 nmID за операцию")
+    try:
+        result = await wb_disconnect_cards(s.api_key, nm_ids=nm_ids)
+    except HttpStatusError as e:
+        raise _card_links_http_error("wb", e) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    if result.get("errors"):
+        raise HTTPException(
+            502,
+            f"WB: не удалось разъединить {result.get('failed')} из {len(nm_ids)} карточек",
+        )
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="wb_card_links_disconnect",
+            item_type="card_link",
+            store_id=store_id,
+            result="ok",
+            meta={"nm_ids": nm_ids, "processed": result.get("processed")},
+        )
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "result": result,
+        "message": f"Разъединено карточек WB: {result.get('processed', len(nm_ids))}. Изменения могут отобразиться не сразу.",
+    }
+
+
+@app.post("/api/card-links/ozon/{store_id}/unlink")
+async def api_card_links_ozon_unlink(
+    store_id: int,
+    body: CardLinksOzonUnlinkBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_permission("view_settings")),
+):
+    s = _require_ozon_store_for_chats(db, store_id)
+    offer_ids = [str(x).strip() for x in body.offer_ids if str(x).strip()]
+    if not offer_ids:
+        raise HTTPException(400, "offer_ids пуст")
+    titles: dict[str, str] = {}
+    try:
+        rows = await fetch_ozon_catalog(
+            s.client_id or "",
+            s.api_key,
+            offer_ids=offer_ids,
+            max_pages=3,
+        )
+        for r in rows:
+            oid = str(r.get("offer_id") or "").strip()
+            if oid:
+                titles[oid] = str(r.get("title") or "")
+    except HttpStatusError:
+        pass
+    try:
+        result = await ozon_unlink_cards(
+            s.client_id or "",
+            s.api_key,
+            offer_ids=offer_ids,
+            titles_by_offer=titles,
+        )
+    except HttpStatusError as e:
+        raise _card_links_http_error("ozon", e) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="ozon_card_links_unlink",
+            item_type="card_link",
+            store_id=store_id,
+            result="ok",
+            meta={"offer_ids": offer_ids},
+        )
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "result": result,
+        "message": "У каждого товара задано уникальное «Название модели». Разъединение на Ozon может занять до 24 часов.",
+    }
 
 
 # ---------- API: stats ----------

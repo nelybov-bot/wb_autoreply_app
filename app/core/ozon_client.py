@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import socket
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 
@@ -454,5 +454,133 @@ class OzonClient:
     async def rating_index_fbs_info(self) -> dict:
         """POST /v1/rating/index/fbs/info — индекс ошибок FBS/rFBS."""
         data = await self._request("POST", "/v1/rating/index/fbs/info", json_body={})
+        return data if isinstance(data, dict) else {}
+
+    # ---------- Каталог / связки карточек ----------
+
+    OZON_MODEL_ATTR_ID = 9048
+
+    async def list_products(
+        self,
+        *,
+        limit: int = 100,
+        last_id: str = "",
+        offer_ids: Optional[List[str]] = None,
+        product_ids: Optional[List[int]] = None,
+        visibility: str = "ALL",
+    ) -> dict:
+        """POST /v3/product/list — одна страница списка товаров."""
+        body: Dict[str, Any] = {
+            "filter": {"visibility": visibility},
+            "limit": min(max(int(limit), 1), 1000),
+            "last_id": str(last_id or ""),
+        }
+        filt = body["filter"]
+        if offer_ids:
+            filt["offer_id"] = [str(x).strip() for x in offer_ids if str(x).strip()]
+        if product_ids:
+            filt["product_id"] = [int(x) for x in product_ids if x is not None]
+        data = await self._request("POST", "/v3/product/list", json_body=body)
+        return data if isinstance(data, dict) else {}
+
+    async def list_products_all(
+        self,
+        *,
+        max_pages: int = 30,
+        offer_ids: Optional[List[str]] = None,
+        visibility: str = "ALL",
+    ) -> List[dict]:
+        """Пагинация /v3/product/list."""
+        if offer_ids:
+            data = await self.list_products(limit=1000, offer_ids=offer_ids, visibility=visibility)
+            block = self._list_block(data)
+            items = block.get("items") or []
+            return [x for x in items if isinstance(x, dict)]
+
+        rows: List[dict] = []
+        last_id = ""
+        for _ in range(max(1, max_pages)):
+            data = await self.list_products(limit=100, last_id=last_id, visibility=visibility)
+            block = self._list_block(data)
+            batch = block.get("items") or []
+            if not isinstance(batch, list) or not batch:
+                break
+            for it in batch:
+                if isinstance(it, dict):
+                    rows.append(it)
+            last_id = str(block.get("last_id") or "").strip()
+            if not last_id or not block.get("has_next"):
+                break
+        return rows
+
+    async def product_info_list(
+        self,
+        *,
+        offer_ids: Optional[List[str]] = None,
+        product_ids: Optional[List[int]] = None,
+        skus: Optional[List[int]] = None,
+    ) -> List[dict]:
+        """POST /v3/product/info/list — детали товаров (название, фото, sku)."""
+        body: Dict[str, Any] = {}
+        if offer_ids:
+            body["offer_id"] = [str(x).strip() for x in offer_ids if str(x).strip()][:1000]
+        if product_ids:
+            body["product_id"] = [int(x) for x in product_ids if x is not None][:1000]
+        if skus:
+            body["sku"] = [str(int(x)) for x in skus if x is not None][:1000]
+        if not body:
+            return []
+        data = await self._request("POST", "/v3/product/info/list", json_body=body)
+        items = data.get("items")
+        if items is None:
+            items = (data.get("result") or {}).get("items")
+        return [x for x in (items or []) if isinstance(x, dict)]
+
+    async def product_info_attributes(
+        self,
+        *,
+        offer_ids: Optional[List[str]] = None,
+        product_ids: Optional[List[int]] = None,
+        limit: int = 100,
+        last_id: str = "",
+    ) -> dict:
+        """POST /v4/product/info/attributes — атрибуты (в т.ч. 9048 «Название модели»)."""
+        filt: Dict[str, Any] = {"visibility": "ALL"}
+        if offer_ids:
+            filt["offer_id"] = [str(x).strip() for x in offer_ids if str(x).strip()]
+        if product_ids:
+            filt["product_id"] = [int(x) for x in product_ids if x is not None]
+        body: Dict[str, Any] = {
+            "filter": filt,
+            "limit": min(max(int(limit), 1), 1000),
+            "last_id": str(last_id or ""),
+            "sort_dir": "ASC",
+        }
+        data = await self._request("POST", "/v4/product/info/attributes", json_body=body)
+        return data if isinstance(data, dict) else {}
+
+    async def product_related_sku_get(self, skus: List[int]) -> List[dict]:
+        """POST /v1/product/related-sku/get — связанные SKU."""
+        if not skus:
+            return []
+        sku_list = list(dict.fromkeys(int(s) for s in skus if s is not None))[:1000]
+        body = {"sku": [str(s) for s in sku_list]}
+        data = await self._request("POST", "/v1/product/related-sku/get", json_body=body)
+        if isinstance(data, dict):
+            items = data.get("items")
+            if items is None:
+                items = (data.get("result") or {}).get("items")
+            return [x for x in (items or []) if isinstance(x, dict)]
+        return []
+
+    async def update_product_attributes(self, items: List[dict]) -> dict:
+        """POST /v1/product/attributes/update — обновить атрибуты (склейка через 9048)."""
+        if not items:
+            return {}
+        data = await self._request(
+            "POST",
+            "/v1/product/attributes/update",
+            json_body={"items": items[:100]},
+        )
         return data if isinstance(data, dict) else {}
 
