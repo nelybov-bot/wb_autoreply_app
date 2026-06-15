@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
 from app.agent.playbooks import (
+    check_buyer_chats,
     check_ozon_promotions,
     pipeline_answer_items,
+    pipeline_buyer_chats,
     remove_ozon_promotions,
 )
 from app.core.quality_metrics import fetch_all_quality
@@ -457,6 +459,60 @@ async def _tool_remove_ozon_promotions(ctx: AgentContext, args: dict[str, Any]) 
     )
 
 
+async def _tool_check_buyer_chats(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    mp = str(args.get("marketplace") or "all").strip().lower()
+    if mp not in ("wb", "ozon", "all"):
+        return {"error": "marketplace: wb, ozon или all"}
+    sid, err = _resolve_store_id(
+        ctx.db,
+        store_id=args.get("store_id"),
+        store_name=args.get("store_name"),
+    )
+    if sid is None and (args.get("store_id") is not None or args.get("store_name")):
+        return {"error": err}
+    store_ids = args.get("store_ids")
+    if store_ids is not None:
+        store_ids = [int(x) for x in store_ids]
+    elif sid is not None:
+        store_ids = [sid]
+    session_ctx = ctx.session.context if ctx.session else None
+    return await check_buyer_chats(
+        ctx.db,
+        marketplace=mp,
+        store_ids=store_ids,
+        session_context=session_ctx,
+        max_preview=min(int(args.get("max_preview") or 12), 20),
+    )
+
+
+async def _tool_pipeline_buyer_chats(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    mp = str(args.get("marketplace") or "all").strip().lower()
+    if mp not in ("wb", "ozon", "all"):
+        return {"error": "marketplace: wb, ozon или all"}
+    store_ids = args.get("store_ids")
+    if store_ids is not None:
+        store_ids = [int(x) for x in store_ids]
+    sid, err = _resolve_store_id(
+        ctx.db,
+        store_id=args.get("store_id"),
+        store_name=args.get("store_name"),
+    )
+    if sid is None and (args.get("store_id") is not None or args.get("store_name")):
+        return {"error": err}
+    if sid is not None:
+        store_ids = [sid]
+    key = (ctx.db.get_setting("openai_key") or "").strip()
+    if not key:
+        return {"error": "Не задан OpenAI ключ"}
+    return await pipeline_buyer_chats(
+        ctx.db,
+        marketplace=mp,
+        store_ids=store_ids,
+        openai_key=key,
+        max_chats_per_store=min(int(args.get("max_chats_per_store") or 50), 100),
+    )
+
+
 async def _execute_tool(ctx: AgentContext, name: str, args: dict[str, Any]) -> Any:
     spec = TOOL_BY_NAME.get(name)
     if not spec:
@@ -669,6 +725,38 @@ TOOL_SPECS: list[ToolSpec] = [
         },
         execute=_tool_remove_ozon_promotions,
     ),
+    ToolSpec(
+        name="check_buyer_chats",
+        description=(
+            "Проверить чаты покупателей: где последнее сообщение от покупателя и нужен ответ. "
+            "«проверь чаты», «сколько чатов без ответа». marketplace: wb | ozon | all."
+        ),
+        risk="read",
+        parameters={
+            "marketplace": "wb | ozon | all (default all)",
+            "store_id": "int, optional",
+            "store_name": "str, optional",
+            "store_ids": "list[int], optional",
+            "max_preview": "int, сколько чатов показать в сводке",
+        },
+        execute=_tool_check_buyer_chats,
+    ),
+    ToolSpec(
+        name="pipeline_buyer_chats",
+        description=(
+            "Полный цикл по чатам: найти чаты с неотвеченными сообщениями → сгенерировать ответ ИИ → отправить. "
+            "«ответить в чатах», «разобрать чаты WB/Ozon». marketplace: wb | ozon | all."
+        ),
+        risk="write",
+        parameters={
+            "marketplace": "wb | ozon | all (default all)",
+            "store_id": "int, optional",
+            "store_name": "str, optional",
+            "store_ids": "list[int], optional",
+            "max_chats_per_store": "int, default 50, max 100",
+        },
+        execute=_tool_pipeline_buyer_chats,
+    ),
 ]
 
 TOOL_BY_NAME: dict[str, ToolSpec] = {t.name: t for t in TOOL_SPECS}
@@ -831,6 +919,28 @@ def format_tool_result(name: str, result: Any) -> str:
                         f"из {row.get('actions_processed')} акций"
                     )
             return "\n".join(lines)
+    if name == "check_buyer_chats":
+        lines = [f"💬 Чаты покупателей ({result.get('marketplace', 'all')}):"]
+        for block in result.get("stores") or []:
+            mp = block.get("marketplace", "").upper()
+            name = block.get("store_name", "?")
+            if block.get("error"):
+                lines.append(f"\n{mp} {name}: ⚠️ {block['error']}")
+                continue
+            cnt = int(block.get("eligible_count") or 0)
+            lines.append(f"\n{mp} {name}: {cnt} чат(ов) ждут ответа")
+            for ch in (block.get("chats") or [])[:8]:
+                lines.append(f"  • {ch.get('product', '—')[:45]}: «{ch.get('preview', '')[:50]}»")
+            if cnt > 8:
+                lines.append(f"  … ещё {cnt - 8}")
+        lines.append(f"\nИтого: {result.get('total_eligible', 0)} чатов")
+        return "\n".join(lines)
+    if name == "pipeline_buyer_chats":
+        steps = result.get("steps") or []
+        body = result.get("message") or ""
+        if steps:
+            body = (body + "\n\n" if body else "") + "\n".join(f"• {s}" for s in steps)
+        return body or "Чаты обработаны."
     if result.get("message"):
         return str(result["message"])
     if result.get("task_id"):

@@ -37,8 +37,10 @@ _SYSTEM = """Ты оператор MarketAI — помощник по управ
 ## Сценарии (цепочки — один инструмент, НЕ разбивай на шаги вручную)
 - «ответить на отзывы», «обработать отзывы» → pipeline_answer_reviews
 - «ответить на вопросы» → pipeline_answer_questions
+- «проверь чаты», «сколько чатов без ответа» → check_buyer_chats
+- «ответить в чатах», «разобрать чаты WB/Ozon» → pipeline_buyer_chats (marketplace: wb|ozon|all)
 - «проверь автоакции», «акции озон» → check_ozon_promotions
-- «удали из акций», «сними товары» (после проверки) → remove_ozon_promotions (use_last_check=true)
+- «удали из акций» (после проверки) → remove_ozon_promotions (use_last_check=true)
 - «как успехи?» → get_task_status
 
 pipeline_* сам: загрузка → генерация → отправка. Одно подтверждение на весь цикл.
@@ -225,6 +227,7 @@ async def handle_agent_message(
             default_summaries = {
                 "pipeline_answer_reviews": "Запустить полный цикл по отзывам: загрузка → генерация ответов → отправка на маркетплейсы.",
                 "pipeline_answer_questions": "Запустить полный цикл по вопросам: загрузка → генерация → отправка.",
+                "pipeline_buyer_chats": "Ответить в чатах покупателей: найти неотвеченные → сгенерировать ИИ → отправить.",
                 "remove_ozon_promotions": "Удалить товары из акций Ozon.",
                 "load_new_items": "Загрузить новые отзывы и вопросы с маркетплейсов.",
                 "send_telegram_broadcast": "Разослать сообщение во все настроенные Telegram-чаты.",

@@ -309,3 +309,238 @@ async def remove_ozon_promotions(
     else:
         aggregated["message"] = "Не удалось выполнить удаление."
     return aggregated
+
+
+def _wb_stores(db: Database, store_id: Optional[int] = None) -> list:
+    stores = [
+        s for s in db.list_stores()
+        if s.active and s.marketplace == "wb" and (s.api_key or "").strip()
+    ]
+    if store_id is not None:
+        stores = [s for s in stores if int(s.id) == int(store_id)]
+    return stores
+
+
+def _filter_stores(stores: list, store_ids: Optional[list[int]]) -> list:
+    if not store_ids:
+        return stores
+    want = {int(x) for x in store_ids}
+    return [s for s in stores if int(s.id) in want]
+
+
+async def _scan_wb_store(db: Database, store, *, max_preview: int = 12) -> dict[str, Any]:
+    from app.core.wb_buyer_chat import (
+        WbBuyerChatClient,
+        build_wb_thread_lines,
+        collect_global_events_by_chat,
+        merge_good_card,
+        product_title_from_wb_chat,
+    )
+    from app.core.workflows import _buyer_chat_reply_from, _last_client_text_from_lines, _wb_chat_eligibility
+
+    reply_from = _buyer_chat_reply_from(db)
+    block: dict[str, Any] = {"store_id": store.id, "store_name": store.name, "chats": [], "eligible_count": 0}
+    try:
+        client = WbBuyerChatClient(store.api_key)
+        chats = await client.list_chats()
+        events_by_chat = await collect_global_events_by_chat(client, max_pages=6)
+    except Exception as e:
+        block["error"] = str(e)[:200]
+        return block
+
+    chat_rows = [c for c in chats if isinstance(c, dict) and c.get("chatID")]
+    chat_rows.sort(
+        key=lambda c: int((c.get("lastMessage") or {}).get("addTimestamp") or 0),
+        reverse=True,
+    )
+    eligible: list[dict[str, Any]] = []
+    eligible_count = 0
+    for row in chat_rows[: max(30, max_preview * 4)]:
+        cid = str(row.get("chatID") or "").strip()
+        if not cid:
+            continue
+        evs = events_by_chat.get(cid) or []
+        lines_ts = build_wb_thread_lines(evs, cid, row)
+        ok, _reason, _mk, _ts = _wb_chat_eligibility(db, store.id, cid, lines_ts, reply_from)
+        if not ok:
+            continue
+        eligible_count += 1
+        if len(eligible) >= max_preview:
+            continue
+        gc = merge_good_card(row, evs)
+        texts = [t for _, t, __, ___ in lines_ts]
+        title = product_title_from_wb_chat(gc, texts)
+        preview = (_last_client_text_from_lines(lines_ts) or "")[:100]
+        eligible.append({"chat_id": cid, "product": title[:60], "preview": preview})
+    block["eligible_count"] = eligible_count
+    block["chats"] = eligible
+    return block
+
+
+async def _scan_ozon_store(db: Database, store, *, max_preview: int = 12) -> dict[str, Any]:
+    from app.core.ozon_buyer_chat import (
+        collect_ozon_thread_lines,
+        is_ozon_buyer_chat_row,
+        ozon_chat_row_id,
+        ozon_feature_unavailable_user_message,
+        ozon_http_skip_reason,
+        ozon_reply_window_hint,
+        product_title_from_ozon_chat,
+    )
+    from app.core.workflows import _buyer_chat_reply_from, _last_client_text_from_lines, _ozon_chat_eligibility
+
+    reply_from = _buyer_chat_reply_from(db)
+    block: dict[str, Any] = {"store_id": store.id, "store_name": store.name, "chats": [], "eligible_count": 0}
+    client = OzonClient(store.client_id or "", store.api_key)
+    try:
+        rows = await client.list_all_buyer_chats(unread_only=False)
+    except HttpStatusError as e:
+        reason = ozon_http_skip_reason(e.status, e.body or "", feature="chat")
+        block["error"] = ozon_feature_unavailable_user_message(reason, feature="chat") if reason else str(e)[:200]
+        return block
+    except Exception as e:
+        block["error"] = str(e)[:200]
+        return block
+
+    eligible: list[dict[str, Any]] = []
+    eligible_count = 0
+    for row in rows:
+        if not isinstance(row, dict) or not is_ozon_buyer_chat_row(row):
+            continue
+        chat_id = ozon_chat_row_id(row)
+        if not chat_id:
+            continue
+        try:
+            hist = await client.chat_history(chat_id, limit=80)
+        except Exception:
+            continue
+        messages = hist.get("messages") or []
+        if not isinstance(messages, list):
+            messages = []
+        lines = collect_ozon_thread_lines(messages)
+        chat_obj = row.get("chat") if isinstance(row.get("chat"), dict) else {}
+        window = ozon_reply_window_hint(lines, chat_status=str(chat_obj.get("chat_status") or ""))
+        if window.get("blocked"):
+            continue
+        ok, _reason, _mk, _created = _ozon_chat_eligibility(db, store.id, chat_id, lines, reply_from)
+        if not ok:
+            continue
+        eligible_count += 1
+        if len(eligible) >= max_preview:
+            continue
+        title = product_title_from_ozon_chat(messages, lines)
+        preview = (_last_client_text_from_lines(lines) or "")[:100]
+        eligible.append({"chat_id": chat_id, "product": title[:60], "preview": preview})
+    block["eligible_count"] = eligible_count
+    block["chats"] = eligible
+    return block
+
+
+async def check_buyer_chats(
+    db: Database,
+    *,
+    marketplace: str = "all",
+    store_id: Optional[int] = None,
+    store_ids: Optional[list[int]] = None,
+    session_context: Optional[dict[str, Any]] = None,
+    max_preview: int = 12,
+) -> dict[str, Any]:
+    """Сканирование чатов покупателей, где нужен ответ (без отправки)."""
+    mp = (marketplace or "all").strip().lower()
+    stores_data: list[dict[str, Any]] = []
+    total = 0
+
+    if mp in ("wb", "all"):
+        for store in _filter_stores(_wb_stores(db, store_id), store_ids):
+            block = await _scan_wb_store(db, store, max_preview=max_preview)
+            stores_data.append({"marketplace": "wb", **block})
+            total += int(block.get("eligible_count") or 0)
+
+    if mp in ("ozon", "all"):
+        for store in _filter_stores(_ozon_stores(db, store_id), store_ids):
+            block = await _scan_ozon_store(db, store, max_preview=max_preview)
+            stores_data.append({"marketplace": "ozon", **block})
+            total += int(block.get("eligible_count") or 0)
+
+    result = {"marketplace": mp, "stores": stores_data, "total_eligible": total}
+    if session_context is not None:
+        session_context["buyer_chats_scan"] = result
+    return result
+
+
+async def pipeline_buyer_chats(
+    db: Database,
+    *,
+    marketplace: str = "all",
+    store_ids: Optional[list[int]] = None,
+    openai_key: str,
+    max_chats_per_store: int = 50,
+) -> dict[str, Any]:
+    """Генерация и отправка ответов в чатах покупателей (WB и/или Ozon)."""
+    from app.core.workflows import (
+        ozon_buyer_chats_mass_generate_send_for_store,
+        wb_buyer_chats_mass_generate_send_for_store,
+    )
+
+    mp = (marketplace or "all").strip().lower()
+    key = (openai_key or "").strip()
+    if not key:
+        return {"error": "Не задан OpenAI ключ"}
+
+    steps: list[str] = []
+    per_store: list[dict[str, Any]] = []
+    total_sent = 0
+
+    if mp in ("wb", "all"):
+        for store in _filter_stores(_wb_stores(db), store_ids):
+            try:
+                stats = await wb_buyer_chats_mass_generate_send_for_store(
+                    db,
+                    store,
+                    openai_key=key,
+                    max_chats=max_chats_per_store,
+                    event_pages=8,
+                    pause_between_chats_sec=1.1,
+                    audit_actor="agent",
+                )
+            except Exception as e:
+                per_store.append({"marketplace": "wb", "store_name": store.name, "error": str(e)[:200]})
+                continue
+            sent = int(stats.get("wb_chat_sent") or 0)
+            total_sent += sent
+            steps.append(f"WB {store.name}: ответов отправлено {sent}")
+            per_store.append({"marketplace": "wb", "store_name": store.name, **stats})
+
+    if mp in ("ozon", "all"):
+        for store in _filter_stores(_ozon_stores(db), store_ids):
+            try:
+                stats = await ozon_buyer_chats_mass_generate_send_for_store(
+                    db,
+                    store,
+                    openai_key=key,
+                    max_chats=max_chats_per_store,
+                    pause_between_chats_sec=1.0,
+                    audit_actor="agent",
+                )
+            except Exception as e:
+                per_store.append({"marketplace": "ozon", "store_name": store.name, "error": str(e)[:200]})
+                continue
+            if stats.get("ozon_chat_skip_reason"):
+                steps.append(f"Ozon {store.name}: {stats.get('message') or stats.get('ozon_chat_skip_reason')}")
+                per_store.append({"marketplace": "ozon", "store_name": store.name, **stats})
+                continue
+            sent = int(stats.get("ozon_chat_sent") or 0)
+            total_sent += sent
+            steps.append(f"Ozon {store.name}: ответов отправлено {sent}")
+            per_store.append({"marketplace": "ozon", "store_name": store.name, **stats})
+
+    if not per_store:
+        return {"error": "Нет магазинов с чатами для обработки", "marketplace": mp}
+
+    return {
+        "marketplace": mp,
+        "total_sent": total_sent,
+        "steps": steps,
+        "per_store": per_store,
+        "message": f"Чаты обработаны. Всего отправлено ответов: {total_sent}.",
+    }
