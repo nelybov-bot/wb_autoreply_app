@@ -485,7 +485,7 @@ async def telegram_agent_loop() -> None:
                 allowed_updates=["message", "callback_query"],
             )
             if not ok:
-                if err and "409" not in err:
+                if err and err != "timeout" and "409" not in err:
                     log.warning("telegram agent getUpdates: %s", err[:200])
                 await asyncio.sleep(idle_sleep)
                 continue

@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import html as html_lib
 import json
 import logging
@@ -143,18 +144,20 @@ async def _telegram_api_call(
     method: str,
     *,
     json_payload: Optional[dict] = None,
+    timeout_sec: float = 15,
 ) -> Tuple[bool, str, dict, int]:
     """Вызов метода Bot API. Возвращает (ok, error_text, json_body, http_status)."""
     tok = normalize_telegram_bot_token(token)
     if not tok:
         return False, "токен бота не задан", {}, 0
     url = TELEGRAM_API_BASE.format(token=tok) + "/" + method.lstrip("/")
+    http_timeout = max(5.0, float(timeout_sec))
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 url,
                 json=json_payload,
-                timeout=aiohttp.ClientTimeout(total=15),
+                timeout=aiohttp.ClientTimeout(total=http_timeout),
             ) as resp:
                 raw = await resp.text()
                 http_status = int(resp.status)
@@ -170,8 +173,11 @@ async def _telegram_api_call(
                     err = describe_telegram_api_error(http_status, data)
                     return False, err, data, http_status
                 return True, "", data, http_status
+    except asyncio.TimeoutError:
+        log.warning("Telegram API %s: timeout (%.0fs)", method, http_timeout)
+        return False, "timeout", {}, 0
     except Exception as e:
-        log.exception("Telegram API %s: %s", method, e)
+        log.warning("Telegram API %s: %s", method, e)
         return False, str(e), {}, 0
 
 
@@ -344,12 +350,18 @@ async def telegram_get_updates(
     allowed_updates: Optional[list[str]] = None,
 ) -> Tuple[bool, str, list[dict]]:
     """Long polling getUpdates. Возвращает (ok, error, updates)."""
-    payload: dict = {"timeout": max(0, min(int(timeout), 50))}
+    poll = max(0, min(int(timeout), 50))
+    payload: dict = {"timeout": poll}
     if offset is not None:
         payload["offset"] = int(offset)
     if allowed_updates:
         payload["allowed_updates"] = allowed_updates
-    ok, err, data, _ = await _telegram_api_call(bot_token, "getUpdates", json_payload=payload)
+    ok, err, data, _ = await _telegram_api_call(
+        bot_token,
+        "getUpdates",
+        json_payload=payload,
+        timeout_sec=poll + 20,
+    )
     if not ok:
         return False, err, []
     result = data.get("result")
