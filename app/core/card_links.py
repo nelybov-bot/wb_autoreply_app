@@ -28,11 +28,14 @@ _OZON_SKIP_BASE_COMPARE_NAME_RE = re.compile(
     r"part\s*number|vendor\s*code|seller\s*code",
     re.I,
 )
-# Кол-во в упаковке при связке 1/2/3 шт должно отличаться, не блокировать.
+# При связке 1/2/3 шт отличаются кол-во, вес и габариты упаковки — не сравниваем.
 _OZON_QTY_PACK_NAME_RE = re.compile(
     r"количеств.*упаков|числ.*упаков|"
     r"кол\.?\s*в\s*уп|"
-    r"qty|pack\s*size|units?\s*per",
+    r"qty|pack\s*size|units?\s*per|"
+    r"вес.*упаков|weight.*pack|"
+    r"длин.*упаков|ширин.*упаков|высот.*упаков|"
+    r"габарит.*упаков|размер.*упаков|объ[её]м.*упаков",
     re.I,
 )
 
