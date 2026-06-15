@@ -3835,6 +3835,17 @@ body.theme-dark .card-links-cand-header td {
   border-top: 1px dashed var(--border, #e5e7eb);
 }
 
+.card-links-qty-wrap {
+  margin-top: 0.75rem;
+}
+
+.card-links-qty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
 .card-links-max-pages-label {
   display: flex;
   flex-wrap: wrap;

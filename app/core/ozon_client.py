@@ -592,6 +592,27 @@ class OzonClient:
             return [x for x in (items or []) if isinstance(x, dict)]
         return []
 
+    async def description_category_attributes(
+        self,
+        *,
+        description_category_id: int,
+        type_id: int,
+        language: str = "DEFAULT",
+    ) -> List[dict]:
+        """POST /v1/description-category/attribute — схема характеристик категории (is_aspect и т.д.)."""
+        body = {
+            "description_category_id": int(description_category_id),
+            "type_id": int(type_id),
+            "language": str(language or "DEFAULT"),
+        }
+        data = await self._request("POST", "/v1/description-category/attribute", json_body=body)
+        if not isinstance(data, dict):
+            return []
+        res = data.get("result")
+        if isinstance(res, list):
+            return [x for x in res if isinstance(x, dict)]
+        return []
+
     async def update_product_attributes(self, items: List[dict]) -> dict:
         """POST /v1/product/attributes/update — обновить атрибуты (склейка через «Название модели»)."""
         if not items:

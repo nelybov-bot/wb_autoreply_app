@@ -608,7 +608,14 @@
             <select id="card-links-max-pages" class="select-md"></select>
           </label>
           <p class="form-hint card-links-wb-only">Большой каталог грузится 2–3 минуты. Не нажимайте «Связать» подряд — между действиями пауза ~3 с.</p>
-          <p class="form-hint card-links-ozon-only">Ozon: ~1 запрос/с — полный каталог может грузиться несколько минут.</p>
+          <p class="form-hint card-links-ozon-only">Ozon: для связки по кол-ву вставьте таблицу TMS ниже. В каждой строке — артикулы для 1 / 2 / 3 шт.</p>
+          <div class="card-links-qty-wrap card-links-ozon-only">
+            <textarea id="card-links-qty-table" class="card-links-articles-input" rows="6" placeholder="819996&#9;819997&#9;819998&#10;819999&#9;820000&#9;820001"></textarea>
+            <div class="card-links-qty-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-qty-check">Проверить таблицу</button>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-qty-link">Связать все строки</button>
+            </div>
+          </div>
         </details>
         <div id="card-links-status" class="form-hint card-links-status" role="status">Выберите магазин и нажмите «Загрузить».</div>
         <div class="progress-wrap" id="card-links-loading" aria-live="polite" hidden>

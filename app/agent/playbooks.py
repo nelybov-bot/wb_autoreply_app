@@ -712,7 +712,7 @@ async def link_product_cards(
             "offer_ids": arts,
             "model_name": model,
             "result": result,
-            "message": f"Ozon: обновлён атрибут модели для {len(arts)} товаров.",
+            "message": f"Ozon: обновлено «Название модели» для {len(arts)} товаров.",
         }
     except HttpStatusError as e:
         return {"error": f"API {e.status}: {(e.body or '')[:300]}"}

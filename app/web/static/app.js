@@ -3501,14 +3501,14 @@
     if (!opts.skipConfirm && !confirm(ozConfirm)) return finish({ ok: false, cancelled: true });
     if (!bulk) {
       _cardLinksActionBusy = true;
-      setPanelLoading('card-links-loading', true, 'Обновление атрибута Ozon…');
+      setPanelLoading('card-links-loading', true, 'Обновление «Названия модели» на Ozon…');
     }
     try {
       await api(`/card-links/ozon/${storeId}/link`, {
         method: 'POST',
         body: JSON.stringify({ offer_ids: articles, model_name: modelName, catalog_rows: ozCatalogRows }),
       });
-      if (!opts.skipToast) toast('Атрибут модели обновлён');
+      if (!opts.skipToast) toast('Название модели обновлено');
       if (!bulk && !opts.skipReload) {
         cardLinksStartCooldown();
         cardLinksScheduleCatalogReload();
@@ -3525,6 +3525,60 @@
         setPanelLoading('card-links-loading', false);
         _cardLinksActionBusy = false;
       }
+    }
+  }
+
+  async function runOzonQtyTableLink(opts = {}) {
+    const dryRun = !!opts.dryRun;
+    const mp = cardLinksMarketplace();
+    if (mp !== 'ozon') {
+      toast('Таблица TMS — только для Ozon', 'error');
+      return;
+    }
+    const storeId = Number(document.getElementById('card-links-store')?.value || 0);
+    if (!storeId) {
+      toast('Выберите магазин Ozon', 'error');
+      return;
+    }
+    const table = (document.getElementById('card-links-qty-table')?.value || '').trim();
+    if (!table) {
+      toast('Вставьте таблицу TMS', 'error');
+      return;
+    }
+    if (_cardLinksActionBusy) return;
+    if (!dryRun && !cardLinksEnsureCooldown()) return;
+    if (!dryRun && !confirm('Связать все строки таблицы (1/2/3 шт) через «Название модели»?')) return;
+
+    _cardLinksActionBusy = true;
+    const loadMsg = dryRun ? 'Проверяю таблицу TMS…' : 'Связка по таблице TMS…';
+    setPanelLoading('card-links-loading', true, loadMsg);
+    setCardLinksStatus('');
+    try {
+      const data = await api(`/card-links/ozon/${storeId}/link-qty-table`, {
+        method: 'POST',
+        body: JSON.stringify({ table, dry_run: dryRun }),
+        timeoutMs: dryRun ? 120000 : 600000,
+      });
+      const fails = (data.results || data.preview || []).filter((r) => r && r.ok === false);
+      const msg = data.message || (dryRun ? 'Проверка завершена' : 'Готово');
+      setCardLinksStatus(msg);
+      if (fails.length) {
+        const first = fails[0];
+        toast(`${msg} · строка ${first.row}: ${first.error || 'ошибка'}`, fails.length === 1 ? 'error' : 'info');
+      } else {
+        toast(msg, dryRun ? 'info' : 'success');
+      }
+      if (!dryRun && (data.ok_count || 0) > 0) {
+        cardLinksStartCooldown();
+        cardLinksScheduleCatalogReload();
+      }
+    } catch (e) {
+      const errMsg = (e && e.message) ? e.message : 'Ошибка';
+      setCardLinksStatus(errMsg);
+      toast(errMsg, 'error');
+    } finally {
+      setPanelLoading('card-links-loading', false);
+      _cardLinksActionBusy = false;
     }
   }
 
@@ -3613,6 +3667,8 @@
       setCardLinksStatus('Магазин сменён — нажмите «Загрузить».');
     });
     document.getElementById('btn-card-links-load')?.addEventListener('click', () => { void loadCardLinksCatalog(); });
+    document.getElementById('btn-card-links-qty-check')?.addEventListener('click', () => { void runOzonQtyTableLink({ dryRun: true }); });
+    document.getElementById('btn-card-links-qty-link')?.addEventListener('click', () => { void runOzonQtyTableLink({ dryRun: false }); });
     document.getElementById('btn-card-links-ai')?.addEventListener('click', () => { void loadCardLinksAiSuggest(); });
     document.getElementById('btn-card-links-merge')?.addEventListener('click', () => { void mergeSelectedCardLinks(); });
     document.getElementById('btn-card-links-disconnect')?.addEventListener('click', () => { void disconnectSelectedCardLinks(); });

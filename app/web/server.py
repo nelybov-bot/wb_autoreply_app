@@ -91,6 +91,8 @@ from app.core.card_links import (
     group_wb_rows,
     ozon_link_by_model,
     ozon_unlink_cards,
+    link_ozon_tms_qty_groups,
+    parse_ozon_tms_qty_table,
     parse_articles_csv,
     suggest_attach_to_groups,
     suggest_combine_candidates,
@@ -3319,6 +3321,11 @@ class CardLinksOzonUnlinkBody(BaseModel):
     offer_ids: list[str]
 
 
+class CardLinksOzonQtyTableBody(BaseModel):
+    table: str
+    dry_run: bool = False
+
+
 def _card_links_http_error(marketplace: str, e: HttpStatusError) -> HTTPException:
     mp = "Wildberries" if marketplace == "wb" else "Ozon"
     body = (e.body or "")[:500]
@@ -3506,7 +3513,63 @@ async def api_card_links_ozon_link(
     return {
         "ok": True,
         "result": result,
-        "message": "Атрибут «Название модели» обновлён. Склейка на Ozon может занять до 24 часов.",
+        "message": (
+            "«Название модели» обновлено. Склейка на Ozon может занять до 24 часов. "
+            "У вариантов должны отличаться размер, цвет или другие вариативные характеристики."
+        ),
+    }
+
+
+@app.post("/api/card-links/ozon/{store_id}/link-qty-table")
+async def api_card_links_ozon_link_qty_table(
+    store_id: int,
+    body: CardLinksOzonQtyTableBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_permission("view_settings")),
+):
+    """Связка по таблице TMS: строка = 1/2/3 шт одного товара."""
+    s = _require_ozon_store_for_chats(db, store_id)
+    try:
+        result = await link_ozon_tms_qty_groups(
+            s.client_id or "",
+            s.api_key,
+            table=body.table or "",
+            dry_run=bool(body.dry_run),
+        )
+    except HttpStatusError as e:
+        raise _card_links_http_error("ozon", e) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    if not body.dry_run:
+        try:
+            db.add_audit_event(
+                actor=user.username,
+                action="ozon_card_links_qty_table",
+                item_type="card_link",
+                store_id=store_id,
+                result="ok",
+                meta={
+                    "group_count": result.get("group_count"),
+                    "ok_count": result.get("ok_count"),
+                    "fail_count": result.get("fail_count"),
+                },
+            )
+        except Exception:
+            pass
+    if body.dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            **result,
+            "message": f"Проверка: {result.get('group_count', 0)} строк, готовы к связке: {sum(1 for p in result.get('preview') or [] if p.get('ok'))}.",
+        }
+    return {
+        "ok": True,
+        **result,
+        "message": (
+            f"Связано строк: {result.get('ok_count', 0)} из {result.get('group_count', 0)}. "
+            f"Ошибок: {result.get('fail_count', 0)}. Склейка на Ozon может занять до 24 часов."
+        ),
     }
 
 

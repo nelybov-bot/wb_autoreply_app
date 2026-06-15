@@ -8,12 +8,18 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.core.net import HttpStatusError
 from app.core.ozon_client import OzonClient
 from app.core.wb_content_client import WbContentClient
 
 log = logging.getLogger("card_links")
 
 OZON_MODEL_ATTR_ID = OzonClient.OZON_MODEL_ATTR_ID
+# Частые ID «Бренд» в разных категориях Ozon (уточняются по схеме категории).
+OZON_BRAND_ATTR_IDS = (85, 31)
+
+_ozon_category_schema_cache: Dict[str, Tuple[float, set, Dict[int, str], set]] = {}
+_OZON_SCHEMA_CACHE_TTL_S = 600.0
 
 _PACK_RE = re.compile(
     r"\b(\d+)\s*(шт|штук|уп|упак|pack|pcs)\b|"
@@ -58,6 +64,136 @@ def parse_articles_csv(raw: Optional[str]) -> List[str]:
         seen.add(v)
         out.append(v)
     return out
+
+
+_TMS_QTY_CELL_RE = re.compile(r"^\d{4,12}$")
+
+
+def parse_ozon_tms_qty_table(raw: Optional[str]) -> List[List[str]]:
+    """
+    Таблица TMS: одна строка = связка по кол-ву (1/2/3 шт).
+    Колонки через таб, запятую или пробелы. Берём только числовые артикулы TMS.
+    """
+    groups: List[List[str]] = []
+    for line in str(raw or "").splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        if re.search(r"артикул", text, re.I) and not _TMS_QTY_CELL_RE.search(text):
+            continue
+        if re.search(r"[\t,;]", text):
+            parts = re.split(r"[\t,;]+", text)
+        else:
+            parts = text.split()
+        oids: List[str] = []
+        seen: set[str] = set()
+        for part in parts:
+            v = part.strip().strip('"').strip("'").replace("\u00a0", "")
+            if not v or not _TMS_QTY_CELL_RE.fullmatch(v):
+                continue
+            if v in seen:
+                continue
+            seen.add(v)
+            oids.append(v)
+        if len(oids) >= 2:
+            groups.append(oids[:MAX_LINK_ITEMS])
+    return groups
+
+
+async def link_ozon_tms_qty_groups(
+    client_id: str,
+    api_key: str,
+    *,
+    table: str,
+    dry_run: bool = False,
+    pause_s: float = 3.0,
+) -> dict:
+    """Связать строки TMS-таблицы (1/2/3 шт) через «Название модели»."""
+    groups = parse_ozon_tms_qty_table(table)
+    if not groups:
+        raise ValueError(
+            "Не найдено строк для связки. Вставьте таблицу: в каждой строке минимум 2 числовых артикула TMS "
+            "(колонки 1 шт / 2 шт / 3 шт)."
+        )
+
+    all_oids = sorted({oid for grp in groups for oid in grp})
+    catalog = await fetch_ozon_catalog(
+        client_id,
+        api_key,
+        offer_ids=all_oids,
+        max_pages=max(3, (len(all_oids) + 99) // 100),
+    )
+    by_oid = {str(r.get("offer_id") or "").strip(): r for r in catalog if str(r.get("offer_id") or "").strip()}
+
+    preview: List[dict] = []
+    results: List[dict] = []
+    ok_count = 0
+    fail_count = 0
+
+    for row_no, oids in enumerate(groups, start=1):
+        rows = [by_oid[oid] for oid in oids if oid in by_oid]
+        missing = [oid for oid in oids if oid not in by_oid]
+        model_name = _suggested_model_name(rows) if rows else ""
+        if not model_name and oids:
+            model_name = f"TMS {oids[0]}"
+
+        entry = {
+            "row": row_no,
+            "offer_ids": oids,
+            "model_name": model_name,
+            "missing_on_ozon": missing,
+            "titles": [(r.get("title") or "")[:80] for r in rows],
+        }
+
+        if missing:
+            entry["ok"] = False
+            entry["error"] = f"Не найдено на Ozon: {', '.join(missing)}"
+            fail_count += 1
+            preview.append(entry)
+            results.append(entry)
+            continue
+
+        if len(rows) < 2:
+            entry["ok"] = False
+            entry["error"] = "В строке меньше 2 найденных артикулов"
+            fail_count += 1
+            preview.append(entry)
+            results.append(entry)
+            continue
+
+        preview.append({**entry, "ok": True, "error": None})
+
+        if dry_run:
+            continue
+
+        try:
+            await ozon_link_by_model(
+                client_id,
+                api_key,
+                offer_ids=oids,
+                model_name=model_name,
+                catalog_rows=catalog,
+            )
+            ok_count += 1
+            results.append({**entry, "ok": True, "error": None})
+        except (ValueError, HttpStatusError) as e:
+            msg = str(e)
+            if isinstance(e, HttpStatusError):
+                msg = (e.body or str(e.status))[:400]
+            fail_count += 1
+            results.append({**entry, "ok": False, "error": msg})
+
+        if not dry_run and row_no < len(groups):
+            await asyncio.sleep(max(0.5, float(pause_s)))
+
+    return {
+        "dry_run": dry_run,
+        "group_count": len(groups),
+        "ok_count": ok_count,
+        "fail_count": fail_count,
+        "preview": preview,
+        "results": results,
+    }
 
 
 def _wb_photo_url(card: dict) -> str:
@@ -112,6 +248,62 @@ def _ozon_primary_image(item: dict) -> str:
     return ""
 
 
+def _ozon_attr_id(a: dict) -> int:
+    for key in ("id", "attribute_id", "attributeId"):
+        try:
+            val = int(a.get(key) or 0)
+        except (TypeError, ValueError):
+            val = 0
+        if val:
+            return val
+    return 0
+
+
+def _ozon_attr_values_normalized(a: dict) -> List[str]:
+    vals = a.get("values") or []
+    out: List[str] = []
+    for v in vals if isinstance(vals, list) else []:
+        if isinstance(v, dict):
+            text = str(v.get("value") or "").strip()
+            if not text:
+                dv = str(v.get("dictionary_value") or "").strip()
+                if dv:
+                    text = dv
+                elif v.get("dictionary_value_id") not in (None, 0, "0"):
+                    text = str(v.get("dictionary_value_id"))
+            if text:
+                out.append(text)
+        elif v is not None:
+            s = str(v).strip()
+            if s:
+                out.append(s)
+    return sorted(set(out))
+
+
+def _ozon_attribute_fingerprint(attrs: Optional[List[dict]]) -> Dict[int, str]:
+    """Все заполненные характеристики товара → id → нормализованное значение."""
+    fp: Dict[int, str] = {}
+    for a in attrs or []:
+        if not isinstance(a, dict):
+            continue
+        aid = _ozon_attr_id(a)
+        if not aid:
+            continue
+        parts = _ozon_attr_values_normalized(a)
+        if parts:
+            fp[aid] = "|".join(parts)
+    return fp
+
+
+def _ozon_brand_from_fingerprint(fp: Dict[int, str], brand_attr_ids: Optional[set] = None) -> str:
+    ids = brand_attr_ids or set(OZON_BRAND_ATTR_IDS)
+    for bid in ids:
+        raw = fp.get(int(bid), "")
+        if raw:
+            return raw.split("|")[0].strip()
+    return ""
+
+
 def _attr_value(attrs: List[dict], attr_id: int) -> str:
     for a in attrs or []:
         if not isinstance(a, dict):
@@ -131,12 +323,71 @@ def _attr_value(attrs: List[dict], attr_id: int) -> str:
         if isinstance(vals, list) and vals:
             first = vals[0]
             if isinstance(first, dict):
-                return str(first.get("value") or first.get("dictionary_value") or "").strip()
-            return str(first).strip()
+                text = str(first.get("value") or "").strip()
+                if text:
+                    return text
+                # Словарное значение — только если это текст, не числовой ID
+                dv = str(first.get("dictionary_value") or "").strip()
+                if dv and not dv.isdigit():
+                    return dv
+            elif first is not None:
+                text = str(first).strip()
+                if text and not text.isdigit():
+                    return text
+            continue
         raw = a.get("value")
-        if isinstance(raw, str) and raw.strip():
+        if isinstance(raw, str) and raw.strip() and not raw.strip().isdigit():
             return raw.strip()
     return ""
+
+
+def _enrich_ozon_model_from_peers(rows: List[dict]) -> None:
+    """Если у связанных SKU «Название модели» пришло не у всех — подтянуть от соседа."""
+    by_sku: Dict[int, dict] = {}
+    for r in rows:
+        try:
+            sku = int(r.get("sku") or 0)
+        except (TypeError, ValueError):
+            sku = 0
+        if sku:
+            by_sku[sku] = r
+
+    def _apply_model(row: dict, model: str) -> None:
+        m = (model or "").strip()
+        if not m:
+            return
+        row["model_name"] = m
+        row["link_group_id"] = m
+        row["link_group_label"] = m
+
+    for r in rows:
+        if (r.get("model_name") or "").strip():
+            continue
+        rel = [int(x) for x in (r.get("related_skus") or []) if x]
+        for sku in rel:
+            peer = by_sku.get(sku)
+            if not peer:
+                continue
+            pm = (peer.get("model_name") or "").strip()
+            if pm:
+                _apply_model(r, pm)
+                break
+        if (r.get("model_name") or "").strip():
+            continue
+        # Обратная связь: у соседа пусто, но у текущего после другого прохода могло появиться
+        try:
+            my_sku = int(r.get("sku") or 0)
+        except (TypeError, ValueError):
+            my_sku = 0
+        if not my_sku:
+            continue
+        for peer in rows:
+            if peer is r:
+                continue
+            rel_p = peer.get("related_skus") or []
+            if my_sku in rel_p and (peer.get("model_name") or "").strip():
+                _apply_model(r, peer["model_name"])
+                break
 
 
 def normalize_ozon_product(
@@ -158,6 +409,16 @@ def normalize_ozon_product(
     model_name = _attr_value(attrs or [], OZON_MODEL_ATTR_ID)
     rel = sorted(set(int(x) for x in (related_skus or []) if x))
     cat_key, cat_label = _ozon_category_key(info)
+    attr_fp = _ozon_attribute_fingerprint(attrs)
+    brand = _ozon_brand_from_fingerprint(attr_fp)
+    try:
+        dc_i = int(info.get("description_category_id") or info.get("descriptionCategoryId") or 0)
+    except (TypeError, ValueError):
+        dc_i = 0
+    try:
+        tid_i = int(info.get("type_id") or info.get("typeId") or 0)
+    except (TypeError, ValueError):
+        tid_i = 0
     group_label = model_name or (f"SKU {rel[0]}" if rel else None)
     return {
         "offer_id": offer_id,
@@ -166,9 +427,13 @@ def normalize_ozon_product(
         "title": str(info.get("name") or "").strip(),
         "photo_url": _ozon_primary_image(info),
         "model_name": model_name,
+        "brand": brand,
         "related_skus": rel,
         "category_key": cat_key,
         "category_label": cat_label,
+        "description_category_id": dc_i,
+        "type_id": tid_i,
+        "attribute_fingerprint": attr_fp,
         "linked": False,
         "link_group_id": model_name or (str(rel[0]) if rel else None),
         "link_group_label": group_label,
@@ -189,8 +454,8 @@ def _ozon_category_key(info: dict) -> Tuple[str, str]:
     key = f"{dc_i}:{tid_i}"
     label = str(info.get("type_name") or info.get("typeName") or "").strip()
     if not label and (dc_i or tid_i):
-        label = f"категория {dc_i}, тип {tid_i}"
-    return key, label or key
+        label = ""  # не показываем сырые ID категории в UI
+    return key, label or "категория Ozon"
 
 
 def apply_link_status(rows: List[dict], groups: List[dict]) -> None:
@@ -445,6 +710,122 @@ def validate_ozon_link_capacity(
         )
 
 
+def validate_ozon_link_rows(
+    rows: List[dict],
+    offer_ids: List[str],
+    *,
+    aspect_attr_ids: set,
+    attr_names: Dict[int, str],
+    brand_attr_ids: set,
+) -> None:
+    """
+    Правила Ozon перед объединением:
+    - одна категория и один бренд;
+    - все НЕ-вариативные характеристики совпадают;
+    - вариативные (is_aspect: размер, цвет…) должны отличаться между SKU.
+    """
+    oid_set = {str(x).strip() for x in offer_ids if str(x).strip()}
+    selected = [r for r in rows if str(r.get("offer_id") or "").strip() in oid_set]
+    if len(selected) < 2:
+        return
+
+    cats = {str(r.get("category_key") or "") for r in selected}
+    if len(cats) > 1:
+        labels = sorted({str(r.get("category_label") or r.get("category_key") or "") for r in selected})
+        raise ValueError(
+            f"Разные категории Ozon ({', '.join(labels)}). Связывайте товары одного типа."
+        )
+
+    def _brand(row: dict) -> str:
+        b = (row.get("brand") or "").strip()
+        if b:
+            return b
+        fp = row.get("attribute_fingerprint") or {}
+        return _ozon_brand_from_fingerprint(fp, brand_attr_ids)
+
+    brands = {_brand(r) for r in selected if _brand(r)}
+    if len(brands) > 1:
+        raise ValueError(f"Разные бренды: {', '.join(sorted(brands))}.")
+
+    fingerprints = [r.get("attribute_fingerprint") or {} for r in selected]
+    all_ids: set[int] = set()
+    for fp in fingerprints:
+        for k in fp:
+            try:
+                all_ids.add(int(k))
+            except (TypeError, ValueError):
+                pass
+
+    skip = set(aspect_attr_ids) | {OZON_MODEL_ATTR_ID}
+    for aid in all_ids - skip:
+        vals = {str(fp.get(aid) or "").strip() for fp in fingerprints}
+        vals.discard("")
+        if len(vals) > 1:
+            nm = attr_names.get(aid, f"характеристика {aid}")
+            raise ValueError(
+                f"Различается «{nm}»: у связуемых товаров должны совпадать все характеристики, "
+                f"кроме вариантов (размер, цвет, количество в упаковке…)."
+            )
+
+    if not aspect_attr_ids:
+        return
+
+    for i in range(len(selected)):
+        for j in range(i + 1, len(selected)):
+            a, b = selected[i], selected[j]
+            fp_a, fp_b = fingerprints[i], fingerprints[j]
+            filled = [aid for aid in aspect_attr_ids if fp_a.get(aid) and fp_b.get(aid)]
+            if filled and all(fp_a[aid] == fp_b[aid] for aid in filled):
+                names = [attr_names.get(aid, str(aid)) for aid in filled[:5]]
+                raise ValueError(
+                    f"Артикулы {a.get('offer_id')} и {b.get('offer_id')}: одинаковые вариативные "
+                    f"характеристики ({', '.join(names)}). Измените хотя бы одну — размер, цвет, "
+                    f"кол-во в упаковке и т.п."
+                )
+
+
+async def _ozon_category_schema(
+    client: OzonClient,
+    description_category_id: int,
+    type_id: int,
+) -> Tuple[set, Dict[int, str], set]:
+    """Схема категории: id вариативных атрибутов (is_aspect), названия, id бренда."""
+    key = f"{description_category_id}:{type_id}"
+    now = time.time()
+    cached = _ozon_category_schema_cache.get(key)
+    if cached and now - cached[0] < _OZON_SCHEMA_CACHE_TTL_S:
+        return cached[1], cached[2], cached[3]
+
+    raw = await client.description_category_attributes(
+        description_category_id=description_category_id,
+        type_id=type_id,
+    )
+    aspect_ids: set[int] = set()
+    names: Dict[int, str] = {}
+    brand_ids: set[int] = set()
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        try:
+            aid = int(row.get("id") or 0)
+        except (TypeError, ValueError):
+            aid = 0
+        if not aid:
+            continue
+        nm = str(row.get("name") or "").strip()
+        if nm:
+            names[aid] = nm
+        if row.get("is_aspect"):
+            aspect_ids.add(aid)
+        if "бренд" in nm.lower():
+            brand_ids.add(aid)
+    if not brand_ids:
+        brand_ids = set(OZON_BRAND_ATTR_IDS)
+
+    _ozon_category_schema_cache[key] = (now, aspect_ids, names, brand_ids)
+    return aspect_ids, names, brand_ids
+
+
 def group_wb_rows(rows: List[dict]) -> List[dict]:
     """Группы по imtID (существующие связки WB)."""
     buckets: Dict[int, List[dict]] = {}
@@ -516,7 +897,7 @@ def group_ozon_rows(rows: List[dict]) -> List[dict]:
             rel_map.setdefault(rel, []).append(r)
 
     for rel, items in rel_map.items():
-        label = f"related: {', '.join(str(x) for x in rel[:5])}"
+        label = f"связка SKU {', '.join(str(x) for x in rel[:5])}"
         linked = len(items) > 1 or len(rel) > 1
         gid = "rel:" + "_".join(str(x) for x in rel)
         for it in items:
@@ -1520,6 +1901,7 @@ async def fetch_ozon_catalog(
                 related_skus=related_by_sku.get(sku),
             )
         )
+    _enrich_ozon_model_from_peers(rows)
     if meta_out is not None:
         meta_out.update(list_meta)
         meta_out["count"] = len(rows)
@@ -1643,6 +2025,23 @@ async def ozon_link_by_model(
     if catalog_rows:
         validate_ozon_link_capacity(catalog_rows, model_name=model, offer_ids=oids)
     client = OzonClient(client_id, api_key, timeout_s=60.0)
+    if catalog_rows and len(oids) >= 2:
+        picked = [r for r in catalog_rows if str(r.get("offer_id") or "").strip() in set(oids)]
+        if len(picked) >= 2:
+            try:
+                dc = int(picked[0].get("description_category_id") or 0)
+                tid = int(picked[0].get("type_id") or 0)
+            except (TypeError, ValueError):
+                dc, tid = 0, 0
+            if dc and tid:
+                aspect_ids, attr_names, brand_ids = await _ozon_category_schema(client, dc, tid)
+                validate_ozon_link_rows(
+                    catalog_rows,
+                    oids,
+                    aspect_attr_ids=aspect_ids,
+                    attr_names=attr_names,
+                    brand_attr_ids=brand_ids,
+                )
     items = [
         {
             "offer_id": oid,
