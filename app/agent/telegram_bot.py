@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import time
 from typing import Callable, Optional
 
 from app.agent.formatting import plain_to_telegram_html, strip_leaked_json
@@ -17,6 +19,7 @@ from app.core.telegram_notify import (
     telegram_edit_message_reply_markup,
     telegram_get_updates,
     telegram_send_chat_action,
+    verify_telegram_bot_token,
 )
 from app.db import Database, UserRow
 
@@ -47,7 +50,9 @@ _HELP_TEXT = """🤖 <b>MarketAI</b> — управление через Telegra
 
 Что умею: магазины, статистика, отзывы/вопросы (полный цикл), чаты WB/Ozon, автозапуск, акции Ozon, качество, задачи, журнал, Telegram.
 
-Опасные действия требуют подтверждения кнопкой или «да»."""
+Опасные действия требуют подтверждения кнопкой или «да».
+
+<b>В групповом чате</b> обращайтесь к боту: @упоминание, ответ на его сообщение или команда /help."""
 
 _CONFIRM_KEYBOARD = {
     "inline_keyboard": [
@@ -61,6 +66,103 @@ _CONFIRM_KEYBOARD = {
 _context_factory: Optional[Callable[[Database], Optional[AgentContext]]] = None
 _get_db_fn: Optional[Callable[[], Database]] = None
 _loop_task: Optional[asyncio.Task] = None
+_bot_identity: dict[str, object] = {"username": "", "id": 0, "fetched_at": 0.0}
+
+
+def _is_group_chat(chat: dict) -> bool:
+    return str(chat.get("type") or "private") in ("group", "supergroup")
+
+
+async def _bot_identity_for(token: str) -> tuple[str, int]:
+    """Кэш username и id бота (getMe), TTL 1 час."""
+    now = time.time()
+    cached_at = float(_bot_identity.get("fetched_at") or 0)
+    if _bot_identity.get("username") and now - cached_at < 3600:
+        return str(_bot_identity["username"]), int(_bot_identity["id"] or 0)
+    ok, _, me = await verify_telegram_bot_token(token)
+    if not ok or not me:
+        return "", 0
+    username = str(me.get("username") or "").strip().lower()
+    bot_id = int(me.get("id") or 0)
+    _bot_identity.update({"username": username, "id": bot_id, "fetched_at": now})
+    return username, bot_id
+
+
+def _is_reply_to_bot(message: dict, bot_id: int) -> bool:
+    if not bot_id:
+        return False
+    reply = message.get("reply_to_message") or {}
+    frm = reply.get("from") or {}
+    return bool(frm.get("is_bot")) and int(frm.get("id") or 0) == bot_id
+
+
+def _entities_mention_bot(message: dict, bot_username: str, bot_id: int) -> bool:
+    if not bot_username:
+        return False
+    text = message.get("text") or ""
+    uname = bot_username.lower().lstrip("@")
+    for ent in message.get("entities") or []:
+        if not isinstance(ent, dict):
+            continue
+        etype = str(ent.get("type") or "")
+        if etype == "mention":
+            offset = int(ent.get("offset") or 0)
+            length = int(ent.get("length") or 0)
+            chunk = text[offset : offset + length].lower().lstrip("@")
+            if chunk == uname:
+                return True
+        if etype == "text_mention":
+            user = ent.get("user") or {}
+            if user.get("is_bot") and int(user.get("id") or 0) == bot_id:
+                return True
+    return False
+
+
+def _strip_bot_address(text: str, bot_username: str) -> str:
+    if not text or not bot_username:
+        return (text or "").strip()
+    uname = re.escape(bot_username.lstrip("@"))
+    s = text.strip()
+    s = re.sub(rf"@{uname}\b", "", s, flags=re.IGNORECASE).strip()
+    s = re.sub(rf"^(/\w+)@{uname}\b", r"\1", s, flags=re.IGNORECASE).strip()
+    return s
+
+
+def _command_for_this_bot(text: str, bot_username: str) -> bool:
+    """Команда /help или /help@botname в группе."""
+    part = (text or "").strip().split(maxsplit=1)[0].lower()
+    if not part.startswith("/"):
+        return False
+    if "@" not in part:
+        return part in ("/start", "/help", "/new", "/id")
+    if not bot_username:
+        return False
+    return part.endswith(f"@{bot_username.lstrip('@')}")
+
+
+async def _message_addresses_bot(message: dict, token: str) -> tuple[bool, str]:
+    """
+    В личке — всегда True.
+    В группе — только @бот, ответ на бота или команда боту.
+    Возвращает (обращение к боту, текст без @упоминания).
+    """
+    chat = message.get("chat") or {}
+    text = (message.get("text") or "").strip()
+    if not text:
+        return False, ""
+    if not _is_group_chat(chat):
+        return True, text
+
+    bot_username, bot_id = await _bot_identity_for(token)
+    if _is_reply_to_bot(message, bot_id):
+        return True, text
+    if _entities_mention_bot(message, bot_username, bot_id):
+        return True, _strip_bot_address(text, bot_username)
+    if bot_username and re.search(rf"@{re.escape(bot_username)}\b", text, re.IGNORECASE):
+        return True, _strip_bot_address(text, bot_username)
+    if _command_for_this_bot(text, bot_username):
+        return True, text
+    return False, ""
 
 
 def configure_telegram_agent(
@@ -260,7 +362,13 @@ async def _handle_message(db: Database, message: dict) -> None:
 
     text = (message.get("text") or "").strip()
     low = text.lower()
-    if low == "/id":
+
+    # /id — всегда доступен (даже до проверки чата), в группе только при обращении к боту
+    if low == "/id" or low.startswith("/id@"):
+        if _is_group_chat(chat):
+            addressed, _ = await _message_addresses_bot(message, token)
+            if not addressed:
+                return
         uid = user_id if user_id is not None else "—"
         await _reply_agent(
             token=token,
@@ -273,6 +381,13 @@ async def _handle_message(db: Database, message: dict) -> None:
     if not _request_allowed(db, chat_id, user_id):
         return
 
+    addressed, agent_text = await _message_addresses_bot(message, token)
+    if not addressed:
+        return
+
+    text = agent_text
+    low = text.lower()
+
     if not text:
         await _reply_agent(
             token=token,
@@ -282,10 +397,10 @@ async def _handle_message(db: Database, message: dict) -> None:
         )
         return
 
-    if low in ("/start", "/help"):
+    if low in ("/start", "/help") or low.startswith("/help@"):
         await send_telegram_message(token, chat_id, _HELP_TEXT, parse_mode="HTML", db=db)
         return
-    if low == "/new":
+    if low == "/new" or low.startswith("/new@"):
         admin = _first_admin(db)
         if admin:
             session = _session_for_telegram(db, chat_id=chat_id, user_id=user_id)
