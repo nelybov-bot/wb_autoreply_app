@@ -21,6 +21,29 @@ OZON_BRAND_ATTR_IDS = (85, 31)
 _ozon_category_schema_cache: Dict[str, Tuple[float, set, Dict[int, str], set]] = {}
 _OZON_SCHEMA_CACHE_TTL_S = 600.0
 
+# У каждого варианта свой артикул/TMS — не сравниваем при связке «Модель».
+_OZON_SKIP_BASE_COMPARE_NAME_RE = re.compile(
+    r"код\s*продавца|артикул\s*прод|offer|"
+    r"штрих|barcode|ean|"
+    r"part\s*number|vendor\s*code|seller\s*code",
+    re.I,
+)
+# Кол-во в упаковке при связке 1/2/3 шт должно отличаться, не блокировать.
+_OZON_QTY_PACK_NAME_RE = re.compile(
+    r"количеств.*упаков|числ.*упаков|"
+    r"кол\.?\s*в\s*уп|"
+    r"qty|pack\s*size|units?\s*per",
+    re.I,
+)
+
+
+def _ozon_skip_base_compare_attr(name: str) -> bool:
+    return bool(_OZON_SKIP_BASE_COMPARE_NAME_RE.search(name or ""))
+
+
+def _ozon_qty_pack_attr(name: str) -> bool:
+    return bool(_OZON_QTY_PACK_NAME_RE.search(name or ""))
+
 _PACK_RE = re.compile(
     r"\b(\d+)\s*(шт|штук|уп|упак|pack|pcs)\b|"
     r"\bx\s*(\d+)\b|"
@@ -163,9 +186,6 @@ async def link_ozon_tms_qty_groups(
 
         preview.append({**entry, "ok": True, "error": None})
 
-        if dry_run:
-            continue
-
         try:
             await ozon_link_by_model(
                 client_id,
@@ -173,7 +193,11 @@ async def link_ozon_tms_qty_groups(
                 offer_ids=oids,
                 model_name=model_name,
                 catalog_rows=catalog,
+                qty_pack=True,
+                validate_only=dry_run,
             )
+            if dry_run:
+                continue
             ok_count += 1
             results.append({**entry, "ok": True, "error": None})
         except (ValueError, HttpStatusError) as e:
@@ -181,7 +205,10 @@ async def link_ozon_tms_qty_groups(
             if isinstance(e, HttpStatusError):
                 msg = (e.body or str(e.status))[:400]
             fail_count += 1
-            results.append({**entry, "ok": False, "error": msg})
+            entry_fail = {**entry, "ok": False, "error": msg}
+            results.append(entry_fail)
+            if dry_run:
+                preview[-1] = entry_fail
 
         if not dry_run and row_no < len(groups):
             await asyncio.sleep(max(0.5, float(pause_s)))
@@ -717,11 +744,12 @@ def validate_ozon_link_rows(
     aspect_attr_ids: set,
     attr_names: Dict[int, str],
     brand_attr_ids: set,
+    qty_pack: bool = False,
 ) -> None:
     """
     Правила Ozon перед объединением:
     - одна категория и один бренд;
-    - все НЕ-вариативные характеристики совпадают;
+    - все НЕ-вариативные характеристики совпадают (кроме артикула/TMS у вариантов);
     - вариативные (is_aspect: размер, цвет…) должны отличаться между SKU.
     """
     oid_set = {str(x).strip() for x in offer_ids if str(x).strip()}
@@ -758,23 +786,51 @@ def validate_ozon_link_rows(
 
     skip = set(aspect_attr_ids) | {OZON_MODEL_ATTR_ID}
     for aid in all_ids - skip:
+        nm = attr_names.get(aid, f"характеристика {aid}")
+        if _ozon_skip_base_compare_attr(nm):
+            continue
+        if qty_pack and _ozon_qty_pack_attr(nm):
+            continue
         vals = {str(fp.get(aid) or "").strip() for fp in fingerprints}
         vals.discard("")
         if len(vals) > 1:
-            nm = attr_names.get(aid, f"характеристика {aid}")
             raise ValueError(
                 f"Различается «{nm}»: у связуемых товаров должны совпадать все характеристики, "
                 f"кроме вариантов (размер, цвет, количество в упаковке…)."
             )
 
     if not aspect_attr_ids:
+        if qty_pack:
+            for i in range(len(selected)):
+                for j in range(i + 1, len(selected)):
+                    fp_a, fp_b = fingerprints[i], fingerprints[j]
+                    qty_aids = [aid for aid in all_ids if _ozon_qty_pack_attr(attr_names.get(aid, ""))]
+                    if not qty_aids:
+                        continue
+                    if not any(
+                        fp_a.get(aid) and fp_b.get(aid) and fp_a.get(aid) != fp_b.get(aid)
+                        for aid in qty_aids
+                    ):
+                        raise ValueError(
+                            f"Артикулы {selected[i].get('offer_id')} и {selected[j].get('offer_id')}: "
+                            f"одинаковое «Количество в упаковке». В карточках Ozon должны быть 1, 2 и 3 шт."
+                        )
         return
 
     for i in range(len(selected)):
         for j in range(i + 1, len(selected)):
             a, b = selected[i], selected[j]
             fp_a, fp_b = fingerprints[i], fingerprints[j]
+            if qty_pack:
+                qty_aids = [aid for aid in all_ids if _ozon_qty_pack_attr(attr_names.get(aid, ""))]
+                if qty_aids and any(
+                    fp_a.get(aid) and fp_b.get(aid) and fp_a.get(aid) != fp_b.get(aid)
+                    for aid in qty_aids
+                ):
+                    continue
             filled = [aid for aid in aspect_attr_ids if fp_a.get(aid) and fp_b.get(aid)]
+            if qty_pack:
+                filled = [aid for aid in filled if not _ozon_qty_pack_attr(attr_names.get(aid, ""))]
             if filled and all(fp_a[aid] == fp_b[aid] for aid in filled):
                 names = [attr_names.get(aid, str(aid)) for aid in filled[:5]]
                 raise ValueError(
@@ -2015,6 +2071,8 @@ async def ozon_link_by_model(
     offer_ids: List[str],
     model_name: str,
     catalog_rows: Optional[List[dict]] = None,
+    qty_pack: bool = False,
+    validate_only: bool = False,
 ) -> dict:
     model = (model_name or "").strip()
     if not model:
@@ -2041,7 +2099,10 @@ async def ozon_link_by_model(
                     aspect_attr_ids=aspect_ids,
                     attr_names=attr_names,
                     brand_attr_ids=brand_ids,
+                    qty_pack=qty_pack,
                 )
+    if validate_only:
+        return {"ok": True, "validated": True}
     items = [
         {
             "offer_id": oid,
