@@ -3300,6 +3300,7 @@ async def api_ozon_actions_auto_remove(
 class CardLinksWbMergeBody(BaseModel):
     target_imt: int
     nm_ids: list[int]
+    catalog_rows: list[dict] = []
 
 
 class CardLinksOzonLinkBody(BaseModel):
@@ -3417,7 +3418,12 @@ async def api_card_links_wb_merge(
     if len(nm_ids) > 30:
         raise HTTPException(400, "WB: не более 30 nmID за один запрос")
     try:
-        result = await wb_merge_cards(s.api_key, target_imt=int(body.target_imt), nm_ids=nm_ids)
+        result = await wb_merge_cards(
+            s.api_key,
+            target_imt=int(body.target_imt),
+            nm_ids=nm_ids,
+            catalog_rows=body.catalog_rows or None,
+        )
     except HttpStatusError as e:
         raise _card_links_http_error("wb", e) from e
     except ValueError as e:

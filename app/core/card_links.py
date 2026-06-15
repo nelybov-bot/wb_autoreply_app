@@ -246,6 +246,8 @@ def group_wb_rows(rows: List[dict]) -> List[dict]:
                 "count": len(items),
                 "subject_id": items[0].get("subject_id"),
                 "subject_name": items[0].get("subject_name"),
+                "parent_id": items[0].get("parent_id"),
+                "parent_name": items[0].get("parent_name"),
                 "items": items,
             }
         )
@@ -401,7 +403,11 @@ def suggest_attach_to_groups(
             continue
         for u in unlinked:
             if marketplace == "wb":
+                u_pid = int(u.get("parent_id") or 0)
+                g_pid = int(g.get("parent_id") or ref.get("parent_id") or 0)
                 if int(u.get("subject_id") or 0) != int(g.get("subject_id") or ref.get("subject_id") or 0):
+                    continue
+                if u_pid and g_pid and u_pid != g_pid:
                     continue
                 uid = str(u.get("nm_id") or u.get("vendor_code") or "")
                 target_imt = int(g.get("group_id") or ref.get("imt_id") or 0)
@@ -664,6 +670,31 @@ def wb_merge_error_message(body: str) -> str:
     return f"WB API: {text[:300]}"
 
 
+async def _wb_fetch_row_by_nm(
+    client: WbContentClient,
+    *,
+    nm_id: int,
+    vendor_code: str = "",
+    subject_map: Optional[Dict[int, dict]] = None,
+) -> Optional[dict]:
+    """Подгрузить одну карточку: сначала по артикулу (textSearch), иначе из каталога не найдётся."""
+    vc = (vendor_code or "").strip()
+    if vc:
+        try:
+            page = await client.list_cards(limit=20, text_search=vc)
+            for card in page.get("cards") or []:
+                if not isinstance(card, dict):
+                    continue
+                row = normalize_wb_card(card)
+                if int(row.get("nm_id") or 0) == int(nm_id):
+                    if subject_map:
+                        _enrich_wb_row(row, subject_map)
+                    return row
+        except Exception:
+            log.warning("WB card fetch by vendor_code=%s failed", vc[:40])
+    return None
+
+
 async def _wb_rows_for_merge(
     api_key: str,
     *,
@@ -673,13 +704,17 @@ async def _wb_rows_for_merge(
 ) -> List[dict]:
     """Подгружает карточки по nmID / imtID для проверки перед merge."""
     by_nm: Dict[int, dict] = {}
+    vendor_by_nm: Dict[int, str] = {}
     for r in rows or []:
         try:
             nid = int(r.get("nm_id") or 0)
         except (TypeError, ValueError):
             nid = 0
         if nid:
-            by_nm[nid] = r
+            by_nm[nid] = dict(r)
+            vc = str(r.get("vendor_code") or "").strip()
+            if vc:
+                vendor_by_nm[nid] = vc
 
     need_nm = [int(x) for x in nm_ids if int(x) not in by_nm]
     need_imt = int(target_imt or 0)
@@ -692,28 +727,21 @@ async def _wb_rows_for_merge(
     subject_map = await _wb_subject_map(api_key)
 
     for nid in need_nm:
-        try:
-            page = await client.list_cards(limit=20, nm_ids=[int(nid)])
-        except Exception:
-            continue
-        for card in page.get("cards") or []:
-            if not isinstance(card, dict):
-                continue
-            row = normalize_wb_card(card)
-            _enrich_wb_row(row, subject_map)
-            nm = int(row.get("nm_id") or 0)
-            if nm:
-                by_nm[nm] = row
+        row = await _wb_fetch_row_by_nm(
+            client,
+            nm_id=int(nid),
+            vendor_code=vendor_by_nm.get(int(nid), ""),
+            subject_map=subject_map,
+        )
+        if row:
+            by_nm[int(nid)] = row
 
     if need_imt and not any(int(r.get("imt_id") or 0) == need_imt for r in by_nm.values()):
-        # Подгрузить одну карточку целевой связки по imt (через известный nm из запроса)
-        for nid in nm_ids:
-            row = by_nm.get(int(nid))
-            if row and int(row.get("imt_id") or 0) == need_imt:
-                break
-        else:
-            for row in list(by_nm.values()):
-                if int(row.get("imt_id") or 0) == need_imt:
+        for r in rows or []:
+            if int(r.get("imt_id") or 0) == need_imt:
+                nid = int(r.get("nm_id") or 0)
+                if nid:
+                    by_nm[nid] = dict(r)
                     break
 
     return list(by_nm.values())

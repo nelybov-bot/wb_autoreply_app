@@ -79,8 +79,9 @@ class WbContentClient:
         if vendor_codes:
             # WB ищет по textSearch; для нескольких артикулов — через запятую или по одному снаружи
             filt["textSearch"] = ",".join(v.strip() for v in vendor_codes if v and str(v).strip())
-        if nm_ids:
-            filt["nmID"] = int(nm_ids[0]) if len(nm_ids) == 1 else None
+        elif nm_ids and len(nm_ids) == 1:
+            # nmID в filter не работает — ищем по vendorCode через textSearch снаружи
+            pass
         cursor: Dict[str, Any] = {"limit": min(max(int(limit), 1), 100)}
         if cursor_updated_at:
             cursor["updatedAt"] = cursor_updated_at

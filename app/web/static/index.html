@@ -579,11 +579,11 @@
       <header class="panel-head">
         <div>
           <h2 class="panel-title">Связки карточек</h2>
-          <p class="panel-desc">Выгрузка каталога, проверка существующих связок и привязка по артикулам (только существующие карточки)</p>
+          <p class="panel-desc">Загрузите каталог — связывайте по предложениям или вручную из каталога</p>
         </div>
       </header>
       <div class="form-card form-card-wide">
-        <div class="panel-toolbar">
+        <div class="panel-toolbar card-links-toolbar">
           <div class="toolbar-group">
             <span class="toolbar-label">Маркетплейс</span>
             <select id="card-links-marketplace" class="select-md">
@@ -595,61 +595,37 @@
             <span class="toolbar-label">Магазин</span>
             <select id="card-links-store" class="select-md"></select>
           </div>
-          <div class="toolbar-group toolbar-group--grow">
-            <span class="toolbar-label">Артикулы <span class="form-label-hint">(необязательно)</span></span>
-            <textarea id="card-links-articles" class="card-links-articles-input" rows="2" placeholder="ART-001, ART-002 или по одному в строке"></textarea>
-          </div>
-          <div class="toolbar-divider" aria-hidden="true"></div>
           <div class="toolbar-group toolbar-group--actions">
-            <button type="button" class="btn btn-primary" id="btn-card-links-load">Загрузить каталог</button>
-            <button type="button" class="btn btn-secondary" id="btn-card-links-ai" title="Нужен OpenAI ключ в настройках">AI-подсказки</button>
+            <button type="button" class="btn btn-primary" id="btn-card-links-load">Загрузить</button>
+            <button type="button" class="btn btn-secondary" id="btn-card-links-ai" title="Нужен OpenAI ключ в настройках">ИИ</button>
           </div>
         </div>
-        <div id="card-links-status" class="form-hint" role="status">Выберите магазин и нажмите «Загрузить каталог».</div>
+        <details class="card-links-more">
+          <summary>Фильтр по артикулам</summary>
+          <textarea id="card-links-articles" class="card-links-articles-input" rows="2" placeholder="ART-001, ART-002 или по одному в строке"></textarea>
+        </details>
+        <div id="card-links-status" class="form-hint card-links-status" role="status">Выберите магазин и нажмите «Загрузить».</div>
         <div class="progress-wrap" id="card-links-loading" aria-live="polite" hidden>
           <div class="progress-bar indeterminate" role="progressbar"></div>
           <span class="progress-label" id="card-links-loading-text">Загрузка…</span>
         </div>
         <div class="card-links-nav">
-          <div class="segmented card-links-view-tabs" role="tablist" aria-label="Вид таблицы">
-            <button type="button" class="card-links-tab active" data-cl-view="catalog" role="tab">Каталог</button>
-            <button type="button" class="card-links-tab" data-cl-view="groups" role="tab">Группы</button>
-            <button type="button" class="card-links-tab" data-cl-view="candidates" role="tab">Кандидаты</button>
-          </div>
-          <div class="segmented card-links-cand-filters" id="card-links-cand-filters" role="tablist" aria-label="Фильтр кандидатов" hidden>
-            <button type="button" class="card-links-cf active" data-cf="all" role="tab">Все</button>
-            <button type="button" class="card-links-cf" data-cf="new" role="tab">Новые</button>
-            <button type="button" class="card-links-cf" data-cf="attach" role="tab">В связку</button>
-            <button type="button" class="card-links-cf" data-cf="ai" role="tab">ИИ</button>
+          <div class="segmented card-links-view-tabs" role="tablist" aria-label="Режим">
+            <button type="button" class="card-links-tab active" data-cl-view="candidates" role="tab">Предложения</button>
+            <button type="button" class="card-links-tab" data-cl-view="catalog" role="tab">Каталог</button>
           </div>
         </div>
         <div id="card-links-merge-bar" class="card-links-merge-wrap" hidden>
-          <div class="panel-toolbar panel-toolbar--muted card-links-merge-bar">
-            <div class="toolbar-group toolbar-group--grow card-links-wb-only" id="card-links-target-imt-wrap">
-              <span class="toolbar-label">Связка WB (imtID)</span>
-              <select id="card-links-target-group" class="select-lg input-grow">
-                <option value="">— существующая связка —</option>
-              </select>
-            </div>
-            <div class="toolbar-group toolbar-group--grow card-links-ozon-only" id="card-links-model-wrap" hidden>
-              <span class="toolbar-label">Модель Ozon (9048)</span>
-              <div class="card-links-ozon-target-row">
-                <select id="card-links-target-model-group" class="select-md input-grow">
-                  <option value="">— существующая —</option>
-                </select>
-                <input type="text" id="card-links-model-name" class="input-grow" placeholder="или новое название">
-              </div>
-            </div>
-            <div class="toolbar-divider" aria-hidden="true"></div>
-            <div class="toolbar-group toolbar-group--actions">
-              <button type="button" class="btn btn-primary" id="btn-card-links-merge">Связать</button>
-              <button type="button" class="btn btn-secondary" id="btn-card-links-disconnect">Разъединить</button>
-            </div>
+          <div class="card-links-merge-compact">
+            <div id="card-links-merge-picker-wrap" class="card-links-merge-picker-wrap card-links-wb-only input-grow"></div>
+            <div id="card-links-ozon-picker-wrap" class="card-links-merge-picker-wrap card-links-ozon-only input-grow" hidden></div>
+            <input type="text" id="card-links-model-name" class="input-grow card-links-ozon-only" placeholder="или новое название модели" hidden>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-merge">Связать</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-disconnect">Разъединить</button>
           </div>
-          <p class="form-hint card-links-target-hint card-links-wb-only">Для «в связку» выберите imtID. Для новой связки оставьте пустым — возьмётся imtID первой карточки.</p>
         </div>
         <div class="table-scroll">
-          <table class="items-table card-links-table" id="card-links-table">
+          <table class="items-table card-links-table card-links--candidates" id="card-links-table">
             <thead>
               <tr>
                 <th class="col-check"><input type="checkbox" id="card-links-check-all" title="Выбрать все"></th>
