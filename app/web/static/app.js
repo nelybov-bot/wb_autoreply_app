@@ -2340,7 +2340,7 @@
     const prev = String(sel.value || '').trim();
     sel.innerHTML = list.length
       ? list.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')
-      : `<option value="">Нет магазинов ${mp === 'wb' ? 'WB' : 'Ozon'}</option>`;
+      : `<option value="">Нет магазинов ${mp === 'wb' ? 'WB' : 'Ozon'} — добавьте во вкладке «Магазины»</option>`;
     if (list.length) {
       const ids = new Set(list.map(s => String(s.id)));
       if (prev && ids.has(prev)) sel.value = prev;
@@ -2559,9 +2559,11 @@
     wireCardLinksPanel._done = true;
     document.getElementById('card-links-marketplace')?.addEventListener('change', () => {
       cardLinksData = { items: [], groups: [], candidates: [] };
-      syncCardLinksStoreSelect();
-      renderCardLinksTable();
-      setCardLinksStatus('Маркетплейс сменён — загрузите каталог.');
+      void ensureStoresLoaded().then(() => {
+        syncCardLinksStoreSelect();
+        renderCardLinksTable();
+        setCardLinksStatus('Маркетплейс сменён — загрузите каталог.');
+      });
     });
     document.getElementById('card-links-store')?.addEventListener('change', () => {
       cardLinksData = { items: [], groups: [], candidates: [] };
