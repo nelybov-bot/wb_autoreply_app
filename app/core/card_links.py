@@ -45,27 +45,11 @@ def _ozon_qty_pack_attr(name: str) -> bool:
     return bool(_OZON_QTY_PACK_NAME_RE.search(name or ""))
 
 
-def _validate_ozon_qty_pack_rows(
-    selected: List[dict],
-    fingerprints: List[dict],
-    all_ids: set,
-    attr_names: Dict[int, str],
-) -> None:
-    """TMS 1/2/3 шт: название, вес и артикулы могут отличаться — только кол-во в упаковке."""
-    qty_aids = [aid for aid in all_ids if _ozon_qty_pack_attr(attr_names.get(aid, ""))]
-    if not qty_aids:
-        return
-    for i in range(len(selected)):
-        for j in range(i + 1, len(selected)):
-            fp_a, fp_b = fingerprints[i], fingerprints[j]
-            if not any(
-                fp_a.get(aid) and fp_b.get(aid) and fp_a.get(aid) != fp_b.get(aid)
-                for aid in qty_aids
-            ):
-                raise ValueError(
-                    f"Артикулы {selected[i].get('offer_id')} и {selected[j].get('offer_id')}: "
-                    f"одинаковое «Количество в упаковке». В карточках Ozon должны быть 1, 2 и 3 шт."
-                )
+def _ozon_qty_pack_attr_id(attr_names: Dict[int, str]) -> Optional[int]:
+    for aid, nm in attr_names.items():
+        if _ozon_qty_pack_attr(nm):
+            return aid
+    return None
 
 _PACK_RE = re.compile(
     r"\b(\d+)\s*(шт|штук|уп|упак|pack|pcs)\b|"
@@ -772,7 +756,7 @@ def validate_ozon_link_rows(
     """
     Правила Ozon перед объединением:
     - одна категория и один бренд;
-    - qty_pack (TMS 1/2/3 шт): только категория, бренд и разное «Количество в упаковке»;
+    - qty_pack (TMS 1/2/3 шт): только категория и бренд; кол-во в упаковке выставится при связке;
     - иначе: все НЕ-вариативные характеристики совпадают (кроме артикула/TMS);
     - вариативные (is_aspect) должны отличаться между SKU.
     """
@@ -799,6 +783,9 @@ def validate_ozon_link_rows(
     if len(brands) > 1:
         raise ValueError(f"Разные бренды: {', '.join(sorted(brands))}.")
 
+    if qty_pack:
+        return
+
     fingerprints = [r.get("attribute_fingerprint") or {} for r in selected]
     all_ids: set[int] = set()
     for fp in fingerprints:
@@ -807,10 +794,6 @@ def validate_ozon_link_rows(
                 all_ids.add(int(k))
             except (TypeError, ValueError):
                 pass
-
-    if qty_pack:
-        _validate_ozon_qty_pack_rows(selected, fingerprints, all_ids, attr_names)
-        return
 
     skip = set(aspect_attr_ids) | {OZON_MODEL_ATTR_ID}
     for aid in all_ids - skip:
@@ -2085,6 +2068,7 @@ async def ozon_link_by_model(
     if catalog_rows:
         validate_ozon_link_capacity(catalog_rows, model_name=model, offer_ids=oids)
     client = OzonClient(client_id, api_key, timeout_s=60.0)
+    qty_attr_id: Optional[int] = None
     if catalog_rows and len(oids) >= 2:
         picked = [r for r in catalog_rows if str(r.get("offer_id") or "").strip() in set(oids)]
         if len(picked) >= 2:
@@ -2103,18 +2087,24 @@ async def ozon_link_by_model(
                     brand_attr_ids=brand_ids,
                     qty_pack=qty_pack,
                 )
+                if qty_pack:
+                    qty_attr_id = _ozon_qty_pack_attr_id(attr_names)
     if validate_only:
         return {"ok": True, "validated": True}
-    items = [
-        {
-            "offer_id": oid,
-            "attributes": [
+    items = []
+    for idx, oid in enumerate(oids[:100]):
+        attrs: List[dict] = [
+            {
+                "id": OZON_MODEL_ATTR_ID,
+                "values": [{"dictionary_value_id": 0, "value": model}],
+            }
+        ]
+        if qty_pack and qty_attr_id:
+            attrs.append(
                 {
-                    "id": OZON_MODEL_ATTR_ID,
-                    "values": [{"dictionary_value_id": 0, "value": model}],
+                    "id": qty_attr_id,
+                    "values": [{"dictionary_value_id": 0, "value": str(idx + 1)}],
                 }
-            ],
-        }
-        for oid in oids[:100]
-    ]
+            )
+        items.append({"offer_id": oid, "attributes": attrs})
     return await client.update_product_attributes(items)
