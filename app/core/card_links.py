@@ -1863,6 +1863,85 @@ async def fetch_wb_catalog(
     return rows, catalog_meta
 
 
+def _ozon_attrs_page_cursor(page: dict) -> Tuple[str, bool]:
+    if not isinstance(page, dict):
+        return "", False
+    res = page.get("result")
+    block = res if isinstance(res, dict) else page
+    last_id = str(block.get("last_id") or "").strip()
+    has_next = block.get("has_next")
+    if has_next is None:
+        has_next = bool(last_id)
+    return last_id, bool(has_next)
+
+
+async def _fetch_ozon_attributes_by_offers(
+    client: OzonClient,
+    offer_ids: List[str],
+) -> Dict[str, List[dict]]:
+    """Все страницы /v4/product/info/attributes для списка offer_id."""
+    out: Dict[str, List[dict]] = {}
+    oids = [str(x).strip() for x in offer_ids if str(x).strip()]
+    for i in range(0, len(oids), 100):
+        batch = oids[i : i + 100]
+        last_id = ""
+        for _ in range(50):
+            page = await client.product_info_attributes(offer_ids=batch, limit=1000, last_id=last_id)
+            out.update(_parse_ozon_attributes_by_offer(page))
+            next_id, has_next = _ozon_attrs_page_cursor(page)
+            if not has_next or not next_id or next_id == last_id:
+                break
+            last_id = next_id
+    return out
+
+
+async def _fetch_ozon_info_by_offers(
+    client: OzonClient,
+    oids: List[str],
+    listed_by_oid: Dict[str, dict],
+) -> Tuple[Dict[str, dict], int]:
+    """Детали товаров: info/list + повтор по product_id + fallback из list."""
+    info_by_oid: Dict[str, dict] = {}
+    pid_by_oid: Dict[str, int] = {}
+    for oid, it in listed_by_oid.items():
+        try:
+            pid = int(it.get("product_id") or it.get("id") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        if pid:
+            pid_by_oid[oid] = pid
+
+    for i in range(0, len(oids), 1000):
+        batch = oids[i : i + 1000]
+        for info in await client.product_info_list(offer_ids=batch):
+            if not isinstance(info, dict):
+                continue
+            oid = str(info.get("offer_id") or info.get("offerId") or "").strip()
+            if oid:
+                info_by_oid[oid] = info
+
+    missing = [oid for oid in oids if oid not in info_by_oid]
+    if missing:
+        retry_pids = [pid_by_oid[oid] for oid in missing if pid_by_oid.get(oid)]
+        for i in range(0, len(retry_pids), 1000):
+            for info in await client.product_info_list(product_ids=retry_pids[i : i + 1000]):
+                if not isinstance(info, dict):
+                    continue
+                oid = str(info.get("offer_id") or info.get("offerId") or "").strip()
+                if oid:
+                    info_by_oid[oid] = info
+
+    recovered = 0
+    for oid in oids:
+        if oid in info_by_oid:
+            continue
+        stub = listed_by_oid.get(oid)
+        if stub:
+            info_by_oid[oid] = stub
+            recovered += 1
+    return info_by_oid, recovered
+
+
 async def fetch_ozon_catalog(
     client_id: str,
     api_key: str,
@@ -1890,21 +1969,21 @@ async def fetch_ozon_catalog(
     if not oids:
         return []
 
-    info_rows: List[dict] = []
-    for i in range(0, len(oids), 100):
-        batch = oids[i : i + 100]
-        info_rows.extend(await client.product_info_list(offer_ids=batch))
+    listed_by_oid: Dict[str, dict] = {}
+    for it in listed:
+        if not isinstance(it, dict):
+            continue
+        oid = str(it.get("offer_id") or it.get("offerId") or "").strip()
+        if oid:
+            listed_by_oid[oid] = it
 
-    attrs_by_offer: Dict[str, List[dict]] = {}
-    for i in range(0, len(oids), 100):
-        batch = oids[i : i + 100]
-        page = await client.product_info_attributes(offer_ids=batch, limit=1000)
-        attrs_by_offer.update(_parse_ozon_attributes_by_offer(page))
+    info_by_oid, recovered_from_list = await _fetch_ozon_info_by_offers(client, oids, listed_by_oid)
+    attrs_by_offer = await _fetch_ozon_attributes_by_offers(client, oids)
 
     skus: List[int] = []
-    for it in info_rows:
+    for info in info_by_oid.values():
         try:
-            s = int(it.get("sku") or 0)
+            s = int(info.get("sku") or 0)
         except (TypeError, ValueError):
             s = 0
         if s:
@@ -1930,8 +2009,12 @@ async def fetch_ozon_catalog(
                 related_by_sku[sku] = sorted(set(parsed))
 
     rows: List[dict] = []
-    for info in info_rows:
-        oid = str(info.get("offer_id") or "").strip()
+    dropped = 0
+    for oid in oids:
+        info = info_by_oid.get(oid)
+        if not info:
+            dropped += 1
+            continue
         try:
             sku = int(info.get("sku") or 0)
         except (TypeError, ValueError):
@@ -1946,6 +2029,10 @@ async def fetch_ozon_catalog(
     _enrich_ozon_model_from_peers(rows)
     if meta_out is not None:
         meta_out.update(list_meta)
+        meta_out["listed_count"] = len(oids)
+        meta_out["info_count"] = len(info_by_oid)
+        meta_out["recovered_from_list"] = recovered_from_list
+        meta_out["dropped_count"] = dropped
         meta_out["count"] = len(rows)
     return rows
 

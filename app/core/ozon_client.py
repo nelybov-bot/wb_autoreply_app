@@ -508,9 +508,10 @@ class OzonClient:
         last_id = ""
         pages = 0
         truncated = False
+        page_size = 1000
         for _ in range(max(1, max_pages)):
             pages += 1
-            data = await self.list_products(limit=100, last_id=last_id, visibility=visibility)
+            data = await self.list_products(limit=page_size, last_id=last_id, visibility=visibility)
             block = self._list_block(data)
             batch = block.get("items") or []
             if not isinstance(batch, list) or not batch:
@@ -528,7 +529,7 @@ class OzonClient:
         if meta_out is not None:
             meta_out["pages_fetched"] = pages
             meta_out["max_pages"] = max_pages
-            meta_out["page_size"] = 100
+            meta_out["page_size"] = page_size
             meta_out["truncated"] = truncated
         return rows
 

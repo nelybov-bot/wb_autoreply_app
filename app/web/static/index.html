@@ -608,7 +608,7 @@
             <select id="card-links-max-pages" class="select-md"></select>
           </label>
           <p class="form-hint card-links-wb-only">Большой каталог грузится 2–3 минуты. Не нажимайте «Связать» подряд — между действиями пауза ~3 с.</p>
-          <p class="form-hint card-links-ozon-only">Ozon: таблица TMS — в строке артикулы для 1 / 2 / 3 шт. При связке проставится «Название модели» и «Количество в упаковке» (1, 2, 3 по колонкам).</p>
+          <p class="form-hint card-links-ozon-only">Ozon: таблица TMS — в строке артикулы для 1 / 2 / 3 шт. При связке проставится «Название модели» и «Количество в упаковке» (1, 2, 3 по колонкам). Одиночные товары без пары смотрите во вкладке «Каталог».</p>
           <div class="card-links-qty-wrap card-links-ozon-only">
             <textarea id="card-links-qty-table" class="card-links-articles-input" rows="6" placeholder="819996&#9;819997&#9;819998&#10;819999&#9;820000&#9;820001"></textarea>
             <div class="card-links-qty-actions">
@@ -649,6 +649,12 @@
             <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-merge">Связать</button>
             <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-disconnect">Разъединить</button>
           </div>
+        </div>
+        <div id="card-links-catalog-filter" class="card-links-catalog-filter" hidden>
+          <input type="search" id="card-links-catalog-search" class="input-grow" placeholder="Поиск по названию или артикулу в каталоге" autocomplete="off">
+          <label class="card-links-catalog-unlinked-label">
+            <input type="checkbox" id="card-links-catalog-unlinked-only"> Только без связки
+          </label>
         </div>
         <div class="table-scroll">
           <table class="items-table card-links-table card-links--candidates" id="card-links-table">

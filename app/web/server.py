@@ -3375,10 +3375,12 @@ async def api_card_links_wb_catalog(
     review = suggest_review_linked_groups(groups, marketplace="wb")
     combine = suggest_combine_candidates(candidates, marketplace="wb")
     linked_groups = sum(1 for g in groups if g.get("linked"))
+    unlinked_count = sum(1 for r in rows if not r.get("linked"))
     return {
         "store_id": store_id,
         "marketplace": "wb",
         "count": len(rows),
+        "unlinked_count": unlinked_count,
         "linked_groups": linked_groups,
         "max_link_items": 30,
         "items": rows,
@@ -3395,7 +3397,7 @@ async def api_card_links_wb_catalog(
 async def api_card_links_ozon_catalog(
     store_id: int,
     articles: Optional[str] = Query(None, description="offer_id через запятую или с новой строки"),
-    max_pages: int = Query(30, ge=1, le=50),
+    max_pages: int = Query(30, ge=1, le=100),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):
@@ -3419,10 +3421,12 @@ async def api_card_links_ozon_catalog(
     review = suggest_review_linked_groups(groups, marketplace="ozon")
     combine = suggest_combine_candidates(candidates, marketplace="ozon")
     linked_groups = sum(1 for g in groups if g.get("linked") and g.get("group_id") != "__unlinked__")
+    unlinked_count = sum(1 for r in rows if not r.get("linked"))
     return {
         "store_id": store_id,
         "marketplace": "ozon",
         "count": len(rows),
+        "unlinked_count": unlinked_count,
         "linked_groups": linked_groups,
         "max_link_items": 30,
         "items": rows,
