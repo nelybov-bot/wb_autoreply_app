@@ -2285,7 +2285,7 @@
   let _cardLinksActionBusy = false;
   let _cardLinksCooldownUntil = 0;
   let _cardLinksReloadTimer = null;
-  const cardLinksSelectedCandidates = new Set();
+  const cardLinksSelectedApply = new Set();
   const cardLinksSelectedReview = new Set();
 
   const CARD_LINKS_MAX_PAGES_OPTS = {
@@ -2459,6 +2459,14 @@
     return Number(g?.count || (g?.items || []).length || 0);
   }
 
+  function cardLinksCanBulkApplyCandidate(c) {
+    const kind = c?.kind || '';
+    if (['attach', 'attach_batch', 'new_link', 'combine_suggestions', 'merge_groups', 'relocate'].includes(kind)) {
+      return (c.items || []).length > 0;
+    }
+    return !!(c?.ai && (c.items || []).length);
+  }
+
   function cardLinksCanCombineCandidate(c) {
     const kind = c?.kind || '';
     return kind === 'new_link' || kind === 'combine_suggestions';
@@ -2557,16 +2565,23 @@
     return cardLinksCandidateGroups().filter((c) => cardLinksCanCombineCandidate(c));
   }
 
+  function cardLinksBulkApplyCandidates() {
+    if (cardLinksView === 'review') {
+      return cardLinksReviewGroups().filter((c) => cardLinksCanBulkApplyCandidate(c));
+    }
+    return cardLinksCandidateGroups().filter((c) => cardLinksCanBulkApplyCandidate(c));
+  }
+
   function cardLinksPruneSelectionSets() {
-    const combinable = new Set(
-      cardLinksCombinableCandidates().map((c) => String(c.candidate_id || '')).filter(Boolean),
+    const applyable = new Set(
+      cardLinksBulkApplyCandidates().map((c) => String(c.candidate_id || '')).filter(Boolean),
     );
-    for (const id of [...cardLinksSelectedCandidates]) {
-      if (!combinable.has(id)) cardLinksSelectedCandidates.delete(id);
+    for (const id of [...cardLinksSelectedApply]) {
+      if (!applyable.has(id)) cardLinksSelectedApply.delete(id);
     }
     const reviewable = new Set(
       cardLinksReviewGroups()
-        .filter((c) => cardLinksCanBulkReview(c))
+        .filter((c) => cardLinksCanBulkApplyCandidate(c))
         .map((c) => String(c.candidate_id || ''))
         .filter(Boolean),
     );
@@ -2575,9 +2590,9 @@
     }
   }
 
-  function cardLinksResolvedSelectedCandidates() {
+  function cardLinksResolvedCombinableSelected() {
     cardLinksPruneSelectionSets();
-    return [...cardLinksSelectedCandidates]
+    return [...cardLinksSelectedApply]
       .map((id) => findCardLinksCandidate(id))
       .filter((c) => c && cardLinksCanCombineCandidate(c));
   }
@@ -2586,28 +2601,40 @@
     cardLinksPruneSelectionSets();
     return [...cardLinksSelectedReview]
       .map((id) => findCardLinksCandidate(id))
-      .filter((c) => c && cardLinksCanBulkReview(c));
+      .filter((c) => c && cardLinksCanBulkApplyCandidate(c));
   }
 
   function cardLinksSelectAllCombinable() {
-    cardLinksSelectedCandidates.clear();
+    cardLinksSelectedApply.clear();
     for (const c of cardLinksCombinableCandidates()) {
       const id = String(c.candidate_id || '').trim();
-      if (id) cardLinksSelectedCandidates.add(id);
+      if (id) cardLinksSelectedApply.add(id);
     }
     renderCardLinksTable();
   }
 
-  function cardLinksCanBulkReview(c) {
-    const kind = c?.kind || '';
-    return kind === 'merge_groups' || kind === 'relocate';
+  function cardLinksSelectAllApply() {
+    if (cardLinksView === 'review') {
+      cardLinksSelectedReview.clear();
+      for (const c of cardLinksBulkApplyCandidates()) {
+        const id = String(c.candidate_id || '').trim();
+        if (id) cardLinksSelectedReview.add(id);
+      }
+    } else {
+      cardLinksSelectedApply.clear();
+      for (const c of cardLinksBulkApplyCandidates()) {
+        const id = String(c.candidate_id || '').trim();
+        if (id) cardLinksSelectedApply.add(id);
+      }
+    }
+    renderCardLinksTable();
   }
 
   function syncCardLinksReviewBar() {
     const bar = document.getElementById('card-links-review-bar');
     const label = document.getElementById('card-links-review-label');
     if (!bar || !label) return;
-    const available = cardLinksReviewGroups().filter((c) => cardLinksCanBulkReview(c));
+    const available = cardLinksReviewGroups().filter((c) => cardLinksCanBulkApplyCandidate(c));
     if (cardLinksView !== 'review' || !available.length) {
       bar.hidden = true;
       return;
@@ -2620,35 +2647,59 @@
     if (relocN) parts.push(`${relocN} перепривязок`);
     label.textContent = cands.length
       ? `Выбрано ${cands.length}: ${parts.join(', ') || 'операции'}`
-      : `Доступно ${available.length} — отметьте или нажмите «Все»`;
+      : `Доступно ${available.length} — отметьте чекбоксом или «Все»`;
     const btn = document.getElementById('btn-card-links-review-apply');
     if (btn) btn.disabled = cands.length < 1;
     bar.hidden = false;
   }
 
-  function cardLinksSelectAllReview() {
-    cardLinksSelectedReview.clear();
-    for (const c of cardLinksReviewGroups()) {
-      if (!cardLinksCanBulkReview(c)) continue;
-      const id = String(c.candidate_id || '').trim();
-      if (id) cardLinksSelectedReview.add(id);
+  function syncCardLinksApplyBar() {
+    const bar = document.getElementById('card-links-apply-bar');
+    const label = document.getElementById('card-links-apply-label');
+    if (!bar || !label) return;
+    const available = cardLinksBulkApplyCandidates();
+    if (cardLinksView !== 'candidates' || !available.length) {
+      bar.hidden = true;
+      return;
     }
-    renderCardLinksTable();
+    const cands = [...cardLinksSelectedApply]
+      .map((id) => findCardLinksCandidate(id))
+      .filter((c) => c && cardLinksCanBulkApplyCandidate(c));
+    const poolN = cands.filter((c) => c.kind === 'attach_batch' || c.kind === 'attach').length;
+    const newN = cands.filter((c) => c.kind === 'new_link' || c.kind === 'combine_suggestions').length;
+    const parts = [];
+    if (poolN) parts.push(`${poolN} в связку`);
+    if (newN) parts.push(`${newN} новых`);
+    label.textContent = cands.length
+      ? `Выбрано ${cands.length}${parts.length ? `: ${parts.join(', ')}` : ''}`
+      : `Доступно ${available.length} — отметьте чекбоксом или «Все»`;
+    const btn = document.getElementById('btn-card-links-apply-run');
+    if (btn) btn.disabled = cands.length < 1;
+    bar.hidden = false;
   }
 
-  async function runBulkReviewActions() {
+  function cardLinksSelectAllReview() {
+    cardLinksSelectAllApply();
+  }
+
+  async function runBulkApplyActions(viewLabel) {
     if (_cardLinksActionBusy) return;
-    const cands = cardLinksResolvedSelectedReview();
+    const cands = cardLinksView === 'review'
+      ? cardLinksResolvedSelectedReview()
+      : [...cardLinksSelectedApply]
+        .map((id) => findCardLinksCandidate(id))
+        .filter((c) => c && cardLinksCanBulkApplyCandidate(c));
     cands.sort((a, b) => {
-      const pa = a.kind === 'merge_groups' ? 0 : 1;
-      const pb = b.kind === 'merge_groups' ? 0 : 1;
-      return pa - pb || (b.target_group_count || 0) - (a.target_group_count || 0);
+      const order = { attach_batch: 0, attach: 1, combine_suggestions: 2, new_link: 3, merge_groups: 4, relocate: 5 };
+      const pa = order[a.kind] ?? 9;
+      const pb = order[b.kind] ?? 9;
+      return pa - pb || String(a.target_group_label || '').localeCompare(String(b.target_group_label || ''));
     });
     if (!cands.length) {
       toast(
-        cardLinksSelectedReview.size
+        (cardLinksView === 'review' ? cardLinksSelectedReview : cardLinksSelectedApply).size
           ? 'Выбранные пункты устарели — обновите каталог и выберите снова'
-          : 'Выберите объединения или перепривязки',
+          : 'Отметьте предложения чекбоксом',
         'error',
       );
       return;
@@ -2661,7 +2712,7 @@
     let stopped = false;
     for (let i = 0; i < cands.length; i++) {
       if (stopped) break;
-      setPanelLoading('card-links-loading', true, `Перепроверка: ${i + 1} из ${cands.length}…`);
+      setPanelLoading('card-links-loading', true, `${viewLabel}: ${i + 1} из ${cands.length}…`);
       const res = await mergeSelectedCardLinks({
         candidate: cands[i],
         bulk: true,
@@ -2680,7 +2731,8 @@
         await new Promise((r) => setTimeout(r, CARD_LINKS_ACTION_COOLDOWN_MS));
       }
     }
-    cardLinksSelectedReview.clear();
+    if (cardLinksView === 'review') cardLinksSelectedReview.clear();
+    else cardLinksSelectedApply.clear();
     setPanelLoading('card-links-loading', false);
     _cardLinksActionBusy = false;
     if (ok > 0) {
@@ -2696,6 +2748,10 @@
     renderCardLinksTable();
   }
 
+  async function runBulkReviewActions() {
+    return runBulkApplyActions('Перепроверка');
+  }
+
   function syncCardLinksCombineBar() {
     const bar = document.getElementById('card-links-combine-bar');
     const label = document.getElementById('card-links-combine-label');
@@ -2705,7 +2761,7 @@
       bar.hidden = true;
       return;
     }
-    const cands = cardLinksResolvedSelectedCandidates();
+    const cands = cardLinksResolvedCombinableSelected();
     const items = cardLinksMergeCandidateItems(cands);
     const sameCat = cands.length >= 2 && cardLinksCandidatesSameCategory(cands);
     const sizeErr = sameCat ? cardLinksValidateLinkSize(items.length, 0) : '';
@@ -3085,15 +3141,15 @@
     const checkAll = document.getElementById('card-links-check-all');
     if (!checkAll) return;
     if (cardLinksView === 'candidates') {
-      const available = cardLinksCombinableCandidates();
-      const selected = available.filter((c) => cardLinksSelectedCandidates.has(String(c.candidate_id || '')));
+      const available = cardLinksBulkApplyCandidates();
+      const selected = available.filter((c) => cardLinksSelectedApply.has(String(c.candidate_id || '')));
       checkAll.disabled = !available.length;
       checkAll.checked = available.length > 0 && selected.length === available.length;
       checkAll.indeterminate = selected.length > 0 && selected.length < available.length;
       return;
     }
     if (cardLinksView === 'review') {
-      const available = cardLinksReviewGroups().filter((c) => cardLinksCanBulkReview(c));
+      const available = cardLinksBulkApplyCandidates();
       const selected = available.filter((c) => cardLinksSelectedReview.has(String(c.candidate_id || '')));
       checkAll.disabled = !available.length;
       checkAll.checked = available.length > 0 && selected.length === available.length;
@@ -3235,10 +3291,10 @@
           const refItem = cardLinksRefItemFromCandidate(c);
           const addCount = cardLinksCandidateAddCount(c);
           const compatGroups = cardLinksCompatibleGroups(refItem, addCount);
-          const canCombine = cardLinksCanCombineCandidate(c);
-          const canBulkReview = cardLinksCanBulkReview(c);
-          const candChecked = cardLinksSelectedCandidates.has(String(c.candidate_id || ''));
-          const reviewChecked = cardLinksSelectedReview.has(String(c.candidate_id || ''));
+          const canSelect = cardLinksCanBulkApplyCandidate(c);
+          const rowChecked = cardLinksView === 'review'
+            ? cardLinksSelectedReview.has(String(c.candidate_id || ''))
+            : cardLinksSelectedApply.has(String(c.candidate_id || ''));
           const needsPicker = kind === 'attach' || kind === 'attach_batch' || kind === 'relocate' || kind === 'merge_groups';
           const defaultTarget = needsPicker
             ? String(c.suggested_target_imt || c.target_group_id || c.suggested_model_name || c.target_group_label || '')
@@ -3275,21 +3331,16 @@
             const overLimit = itemN > MAX_LINK_ITEMS;
             actionBtn = `<button type="button" class="btn btn-primary btn-sm card-links-merge-group" data-candidate-id="${cid}"${overLimit ? ' disabled title="Более 30 товаров"' : ''}>Связать</button>`;
           }
-          const combineCheck = (cardLinksView === 'candidates' && canCombine)
-            ? `<label class="card-links-cand-check-wrap" title="Выбрать для объединения предложений «Новая» в одну связку">
-                <input type="checkbox" class="card-links-cand-check" data-candidate-id="${cid}"${candChecked ? ' checked' : ''}>
-              </label>`
-            : '';
-          const reviewCheck = (cardLinksView === 'review' && canBulkReview)
+          const rowCheck = canSelect
             ? `<label class="card-links-cand-check-wrap" title="Выбрать для пакетного применения">
-                <input type="checkbox" class="card-links-review-check" data-candidate-id="${cid}"${reviewChecked ? ' checked' : ''}>
+                <input type="checkbox" class="card-links-row-check" data-candidate-id="${cid}"${rowChecked ? ' checked' : ''}>
               </label>`
             : '';
           html += `<tr class="card-links-cand-header"><td colspan="6">
             <div class="card-links-cand-block">
               <div class="card-links-cand-row">
                 <div class="card-links-cand-head">
-                  ${reviewCheck || combineCheck}
+                  ${rowCheck}
                   <span class="card-links-cand-badge card-links-cand-badge--${badge.cls}">${escapeHtml(badge.text)}</span>
                   <span class="card-links-cand-title">${escapeHtml(title)}</span>
                 </div>
@@ -3309,6 +3360,7 @@
     renderCardLinksMergePickers();
     syncCardLinksTableMode();
     syncCardLinksCombineBar();
+    syncCardLinksApplyBar();
     syncCardLinksReviewBadge();
     syncCardLinksReviewBar();
   }
@@ -3378,7 +3430,7 @@
     if (!opts.quiet) setCardLinksStatus('');
     try {
       const data = await api(`/card-links/${mp}/${storeId}/catalog?${qs.toString()}`);
-      cardLinksSelectedCandidates.clear();
+      cardLinksSelectedApply.clear();
       cardLinksSelectedReview.clear();
       cardLinksData = {
         items: data.items || [],
@@ -3844,7 +3896,7 @@
     document.getElementById('btn-card-links-merge')?.addEventListener('click', () => { void mergeSelectedCardLinks(); });
     document.getElementById('btn-card-links-disconnect')?.addEventListener('click', () => { void disconnectSelectedCardLinks(); });
     document.getElementById('btn-card-links-combine-candidates')?.addEventListener('click', () => {
-      const cands = cardLinksResolvedSelectedCandidates();
+      const cands = cardLinksResolvedCombinableSelected();
       if (cands.length < 2) {
         toast('Выберите минимум 2 предложения одной категории', 'error');
         return;
@@ -3867,7 +3919,15 @@
     });
     document.getElementById('btn-card-links-combine-select-all')?.addEventListener('click', () => { cardLinksSelectAllCombinable(); });
     document.getElementById('btn-card-links-combine-clear')?.addEventListener('click', () => {
-      cardLinksSelectedCandidates.clear();
+      for (const c of cardLinksCombinableCandidates()) {
+        cardLinksSelectedApply.delete(String(c.candidate_id || ''));
+      }
+      renderCardLinksTable();
+    });
+    document.getElementById('btn-card-links-apply-run')?.addEventListener('click', () => { void runBulkApplyActions('Предложения'); });
+    document.getElementById('btn-card-links-apply-select-all')?.addEventListener('click', () => { cardLinksSelectAllApply(); });
+    document.getElementById('btn-card-links-apply-clear')?.addEventListener('click', () => {
+      cardLinksSelectedApply.clear();
       renderCardLinksTable();
     });
     document.getElementById('btn-card-links-review-apply')?.addEventListener('click', () => { void runBulkReviewActions(); });
@@ -3877,21 +3937,15 @@
       renderCardLinksTable();
     });
     document.getElementById('card-links-tbody')?.addEventListener('change', (e) => {
-      if (e.target.matches('.card-links-review-check')) {
+      if (e.target.matches('.card-links-row-check')) {
         const id = e.target.getAttribute('data-candidate-id');
         if (!id) return;
-        if (e.target.checked) cardLinksSelectedReview.add(id);
-        else cardLinksSelectedReview.delete(id);
-        syncCardLinksReviewBar();
-        syncCardLinksCheckAllState();
-        return;
-      }
-      if (e.target.matches('.card-links-cand-check')) {
-        const id = e.target.getAttribute('data-candidate-id');
-        if (!id) return;
-        if (e.target.checked) cardLinksSelectedCandidates.add(id);
-        else cardLinksSelectedCandidates.delete(id);
+        const targetSet = cardLinksView === 'review' ? cardLinksSelectedReview : cardLinksSelectedApply;
+        if (e.target.checked) targetSet.add(id);
+        else targetSet.delete(id);
+        syncCardLinksApplyBar();
         syncCardLinksCombineBar();
+        syncCardLinksReviewBar();
         syncCardLinksCheckAllState();
         return;
       }
@@ -3919,9 +3973,9 @@
     document.getElementById('card-links-check-all')?.addEventListener('change', (e) => {
       const on = !!e.target.checked;
       if (cardLinksView === 'candidates') {
-        if (on) cardLinksSelectAllCombinable();
+        if (on) cardLinksSelectAllApply();
         else {
-          cardLinksSelectedCandidates.clear();
+          cardLinksSelectedApply.clear();
           renderCardLinksTable();
         }
         return;
