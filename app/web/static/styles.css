@@ -2679,6 +2679,18 @@ body.theme-dark .toggle-row:hover {
 }
 
 /* Прогресс */
+.progress-wrap:not(.visible) {
+  display: none;
+}
+
+.progress-wrap.visible {
+  display: block;
+}
+
+#card-links-loading[hidden] {
+  display: none !important;
+}
+
 .progress-wrap {
   border-radius: var(--radius);
   border: 1px solid var(--border);
@@ -3563,6 +3575,34 @@ body.theme-dark .card-links-merge-compact {
 
 .card-links--candidates thead .col-check {
   display: table-cell;
+}
+
+.card-links-cat-divider--solo td {
+  background: rgba(100, 116, 139, 0.08);
+  border-top: 2px solid rgba(100, 116, 139, 0.18);
+}
+
+.card-links-bundle-divider td {
+  padding: 0.55rem 0.75rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text, #1e293b);
+  background: rgba(16, 185, 129, 0.08);
+  border-top: 2px solid rgba(16, 185, 129, 0.22);
+}
+
+.card-links-bundle-divider-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #059669;
+  margin-right: 0.35rem;
+}
+
+.card-links-bundle-divider-cat {
+  font-weight: 500;
+  color: var(--text-muted, #64748b);
 }
 
 .card-links-cat-divider td {

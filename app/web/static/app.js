@@ -707,10 +707,11 @@
   function setPanelLoading(id, visible, message) {
     const wrap = document.getElementById(id);
     if (!wrap) return;
+    wrap.hidden = !visible;
     wrap.classList.toggle('visible', !!visible);
-    wrap.style.display = visible ? 'block' : '';
+    wrap.style.removeProperty('display');
     if (message) {
-      const t = wrap.querySelector('.progress-text');
+      const t = wrap.querySelector('.progress-text') || wrap.querySelector('.progress-label');
       if (t) t.textContent = message;
     }
   }
@@ -2337,24 +2338,69 @@
     }
   }
 
+  function cardLinksSortCatalogRows(rows) {
+    const mp = cardLinksMarketplace();
+    const bundles = new Map();
+    const unlinked = [];
+    for (const r of rows || []) {
+      if (r?.linked) {
+        const gid = String(r.link_group_id || r.imt_id || r.model_name || '');
+        if (!gid) {
+          unlinked.push(r);
+          continue;
+        }
+        if (!bundles.has(gid)) bundles.set(gid, []);
+        bundles.get(gid).push(r);
+      } else {
+        unlinked.push(r);
+      }
+    }
+    const bundleOrder = [...bundles.entries()].sort((a, b) => {
+      const itemsA = a[1];
+      const itemsB = b[1];
+      const ca = cardLinkItemCategory(itemsA[0], mp).toLowerCase();
+      const cb = cardLinkItemCategory(itemsB[0], mp).toLowerCase();
+      if (ca !== cb) return ca.localeCompare(cb, 'ru');
+      if (itemsB.length !== itemsA.length) return itemsB.length - itemsA.length;
+      const la = String(itemsA[0].link_group_label || a[0]).toLowerCase();
+      const lb = String(itemsB[0].link_group_label || b[0]).toLowerCase();
+      return la.localeCompare(lb, 'ru');
+    });
+    const out = [];
+    for (const [, items] of bundleOrder) {
+      items.sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), 'ru'));
+      out.push(...items);
+    }
+    unlinked.sort((a, b) => {
+      const ca = cardLinkItemCategory(a, mp).toLowerCase();
+      const cb = cardLinkItemCategory(b, mp).toLowerCase();
+      if (ca !== cb) return ca.localeCompare(cb, 'ru');
+      return String(a.title || '').localeCompare(String(b.title || ''), 'ru');
+    });
+    out.push(...unlinked);
+    return out;
+  }
+
   function cardLinksCatalogFilterRows(rows) {
     let out = rows || [];
     if (_cardLinksCatalogUnlinkedOnly) {
       out = out.filter((r) => !r.linked);
     }
     const q = (_cardLinksCatalogSearch || '').trim().toLowerCase();
-    if (!q) return out;
-    const mp = cardLinksMarketplace();
-    return out.filter((r) => {
-      const title = String(r.title || '').toLowerCase();
-      const article = mp === 'wb'
-        ? String(r.vendor_code || '').toLowerCase()
-        : String(r.offer_id || '').toLowerCase();
-      const mpId = mp === 'wb'
-        ? String(r.nm_id || '')
-        : String(r.sku || '');
-      return title.includes(q) || article.includes(q) || mpId.includes(q);
-    });
+    if (q) {
+      const mp = cardLinksMarketplace();
+      out = out.filter((r) => {
+        const title = String(r.title || '').toLowerCase();
+        const article = mp === 'wb'
+          ? String(r.vendor_code || '').toLowerCase()
+          : String(r.offer_id || '').toLowerCase();
+        const mpId = mp === 'wb'
+          ? String(r.nm_id || '')
+          : String(r.sku || '');
+        return title.includes(q) || article.includes(q) || mpId.includes(q);
+      });
+    }
+    return cardLinksSortCatalogRows(out);
   }
 
   function syncCardLinksCatalogFilterBar() {
@@ -3320,7 +3366,32 @@
       } else if (!rows.length) {
         tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">Ничего не найдено — измените поиск или снимите фильтр «Только без связки».</td></tr>';
       } else {
-        html = rows.map((row, idx) => cardLinkRowHtml(row.item, mp, idx, row.meta)).join('');
+        let lastBundle = '';
+        let lastUnlinkedCat = '';
+        for (const row of rows) {
+          const it = row.item;
+          if (it.linked) {
+            const bundleKey = String(it.link_group_id || it.imt_id || it.model_name || '');
+            if (bundleKey && bundleKey !== lastBundle) {
+              lastBundle = bundleKey;
+              lastUnlinkedCat = '';
+              const label = String(it.link_group_label || bundleKey);
+              const cat = cardLinkItemCategory(it, mp);
+              const grp = (cardLinksData.groups || []).find((g) => String(g.group_id) === bundleKey);
+              const n = grp?.count || grp?.items?.length || 0;
+              html += `<tr class="card-links-bundle-divider"><td colspan="7"><span class="card-links-bundle-divider-label">Связка</span> ${escapeHtml(label)}${n ? ` · ${n} шт.` : ''}${cat ? ` · <span class="card-links-bundle-divider-cat">${escapeHtml(cat)}</span>` : ''}</td></tr>`;
+            }
+          } else {
+            const cat = cardLinkItemCategory(it, mp);
+            if (cat && cat !== lastUnlinkedCat) {
+              lastUnlinkedCat = cat;
+              lastBundle = '';
+              html += `<tr class="card-links-cat-divider card-links-cat-divider--solo"><td colspan="7">Без связки · ${escapeHtml(cat)}</td></tr>`;
+            }
+            lastBundle = '';
+          }
+          html += cardLinkRowHtml(it, mp, 0, row.meta);
+        }
         tbody.innerHTML = html;
       }
     } else {
@@ -3532,7 +3603,7 @@
       cardLinksData = { items: [], groups: [], candidates: [], attach_suggestions: [], review_suggestions: [], combine_suggestions: [], ai_suggestions: [], catalog_meta: {} };
       renderCardLinksTable();
     } finally {
-      if (!opts.quiet) setPanelLoading('card-links-loading', false);
+      setPanelLoading('card-links-loading', false);
     }
   }
 

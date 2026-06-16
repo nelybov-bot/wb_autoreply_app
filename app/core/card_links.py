@@ -525,11 +525,34 @@ def _split_items_by_category(items: List[dict], *, marketplace: str) -> List[Lis
     for it in items:
         if marketplace == "wb":
             sid = int(it.get("subject_id") or 0)
-            key = f"wb:{sid}"
+            pid = int(it.get("parent_id") or 0)
+            key = f"wb:{sid}:{pid}"
         else:
             key = f"oz:{it.get('category_key') or '0:0'}"
         buckets.setdefault(key, []).append(it)
     return [grp for grp in buckets.values() if len(grp) >= 2]
+
+
+def sort_catalog_rows(rows: List[dict], *, marketplace: str) -> List[dict]:
+    """Каталог: категория → связки подряд (крупные первыми) → одиночки."""
+    group_sizes: Dict[str, int] = {}
+    for r in rows:
+        if not r.get("linked"):
+            continue
+        gid = str(r.get("link_group_id") or r.get("imt_id") or r.get("model_name") or "")
+        if gid:
+            group_sizes[gid] = group_sizes.get(gid, 0) + 1
+
+    def _sort_key(r: dict) -> tuple:
+        cat = _candidate_label([r], marketplace=marketplace).lower()
+        if r.get("linked"):
+            gid = str(r.get("link_group_id") or r.get("imt_id") or r.get("model_name") or "")
+            size = group_sizes.get(gid, 1)
+            return (cat, 0, -size, gid.lower(), str(r.get("title") or "").lower())
+        solo = str(r.get("nm_id") or r.get("offer_id") or r.get("vendor_code") or "")
+        return (cat, 1, 0, solo.lower(), str(r.get("title") or "").lower())
+
+    return sorted(rows, key=_sort_key)
 
 
 def _wb_target_imt(items: List[dict]) -> int:
@@ -1040,92 +1063,76 @@ def _parse_ozon_attributes_by_offer(page: dict) -> Dict[str, List[dict]]:
     return out
 
 
+def _append_new_link_candidate(
+    out: List[dict],
+    *,
+    seq: int,
+    items: List[dict],
+    marketplace: str,
+) -> int:
+    if len(items) < 2:
+        return seq
+    if marketplace == "wb":
+        imts = {int(x.get("imt_id") or 0) for x in items}
+        imts.discard(0)
+        nms = {int(x.get("nm_id") or 0) for x in items}
+        nms.discard(0)
+        if len(imts) <= 1 or len(nms) < 2:
+            return seq
+    else:
+        models = {(x.get("model_name") or "").strip() for x in items}
+        if len(models) == 1 and list(models)[0]:
+            return seq
+    seq += 1
+    cat_label = _candidate_label(items, marketplace=marketplace)
+    sug_model = _suggested_model_name(items)
+    out.append(
+        {
+            "candidate_id": f"new-{marketplace}-{seq}",
+            "kind": "new_link",
+            "marketplace": marketplace,
+            "category_label": cat_label,
+            "subject_id": items[0].get("subject_id") if marketplace == "wb" else None,
+            "category_key": items[0].get("category_key") if marketplace == "ozon" else None,
+            "count": len(items),
+            "suggested_target_imt": _wb_target_imt(items) if marketplace == "wb" else None,
+            "suggested_model_name": sug_model,
+            "hint": f"Похожие названия · {cat_label}",
+            "items": items,
+        }
+    )
+    return seq
+
+
 def suggest_link_candidates(rows: List[dict], *, marketplace: str) -> List[dict]:
     """Новые связки: похожие несвязанные карточки в одной категории."""
     pool = [r for r in rows if not r.get("linked")]
     out: List[dict] = []
     seq = 0
+    by_cat: Dict[str, List[dict]] = {}
 
-    if marketplace == "ozon":
-        by_cat: Dict[str, List[dict]] = {}
-        for r in pool:
-            base = _title_base_key(r.get("title") or "")
-            if not base:
-                continue
-            cat = str(r.get("category_key") or "0:0")
-            by_cat.setdefault(cat, []).append(r)
-        for cat_items in by_cat.values():
-            for items in _cluster_items_by_title(cat_items):
-                models = {(x.get("model_name") or "").strip() for x in items}
-                if len(models) == 1 and list(models)[0]:
-                    continue
-                seq += 1
-                cat_label = _candidate_label(items, marketplace=marketplace)
-                sug_model = _suggested_model_name(items)
-                out.append(
-                    {
-                        "candidate_id": f"new-{marketplace}-{seq}",
-                        "kind": "new_link",
-                        "marketplace": marketplace,
-                        "category_label": cat_label,
-                        "category_key": items[0].get("category_key"),
-                        "count": len(items),
-                        "suggested_model_name": sug_model,
-                        "hint": f"Похожие названия · {cat_label}",
-                        "items": items,
-                    }
-                )
-        out.sort(key=lambda x: -x["count"])
-        return out[:80]
-
-    buckets: Dict[str, List[dict]] = {}
     for r in pool:
-        brand = (r.get("brand") or "").lower().strip()
-        base = _title_base_key(r.get("title") or "")
-        if not base:
-            continue
         if marketplace == "wb":
             sid = int(r.get("subject_id") or 0)
             if not sid:
                 continue
-            key = f"{brand}|{base}|s{sid}"
+            pid = int(r.get("parent_id") or 0)
+            key = f"wb:{sid}:{pid}"
         else:
-            cat = str(r.get("category_key") or "")
-            key = f"{cat}|{base}"
-        buckets.setdefault(key, []).append(r)
+            key = str(r.get("category_key") or "0:0")
+        by_cat.setdefault(key, []).append(r)
 
-    out: List[dict] = []
-    seq = 0
-    for _key, raw_items in buckets.items():
-        for items in _split_items_by_category(raw_items, marketplace=marketplace):
-            if marketplace == "wb":
-                imts = {int(x.get("imt_id") or 0) for x in items}
-                if len(imts) <= 1:
-                    continue
-            else:
-                models = {(x.get("model_name") or "").strip() for x in items}
-                if len(models) == 1 and list(models)[0]:
-                    continue
-            seq += 1
-            cat_label = _candidate_label(items, marketplace=marketplace)
-            sug_model = _suggested_model_name(items)
-            out.append(
-                {
-                    "candidate_id": f"new-{marketplace}-{seq}",
-                    "kind": "new_link",
-                    "marketplace": marketplace,
-                    "category_label": cat_label,
-                    "subject_id": items[0].get("subject_id") if marketplace == "wb" else None,
-                    "category_key": items[0].get("category_key") if marketplace == "ozon" else None,
-                    "count": len(items),
-                    "suggested_target_imt": _wb_target_imt(items) if marketplace == "wb" else None,
-                    "suggested_model_name": sug_model,
-                    "hint": f"Похожие названия · {cat_label}",
-                    "items": items,
-                }
-            )
-    out.sort(key=lambda x: -x["count"])
-    return out[:80]
+    for cat_items in by_cat.values():
+        for items in _cluster_items_by_title(cat_items):
+            seq = _append_new_link_candidate(out, seq=seq, items=items, marketplace=marketplace)
+
+    out.sort(
+        key=lambda x: (
+            str(x.get("category_label") or "").lower(),
+            -(x.get("count") or 0),
+        )
+    )
+    return out[:150]
 
 
 def suggest_attach_to_groups(
@@ -1149,9 +1156,6 @@ def suggest_attach_to_groups(
         if len(ref_items) >= MAX_LINK_ITEMS:
             continue
         ref = ref_items[0]
-        ref_base = _title_base_key(ref.get("title") or "")
-        if not ref_base:
-            continue
         for u in unlinked:
             if marketplace == "wb":
                 u_pid = int(u.get("parent_id") or 0)
@@ -1167,10 +1171,7 @@ def suggest_attach_to_groups(
                     continue
                 uid = str(u.get("offer_id") or "")
                 target_imt = None
-            u_base = _title_base_key(u.get("title") or "")
-            if not u_base:
-                continue
-            if not _titles_related_enough(u_base, ref_base):
+            if not _item_matches_group_attach(u, g):
                 continue
             dedupe = f"{uid}:{g.get('group_id')}"
             if dedupe in seen:
@@ -1205,7 +1206,7 @@ def suggest_attach_to_groups(
             str((x.get("items") or [{}])[0].get("title") or "").lower(),
         )
     )
-    return out[:120]
+    return out[:200]
 
 
 def group_attach_suggestions(suggestions: List[dict], *, marketplace: str) -> List[dict]:
@@ -1351,6 +1352,35 @@ def _item_matches_group(item: dict, group: dict) -> bool:
     for it in group.get("items") or []:
         b = _title_base_key(it.get("title") or "")
         if b and _titles_related_enough(u_base, b):
+            return True
+    return False
+
+
+def _item_matches_group_attach(item: dict, group: dict) -> bool:
+    """Мягче, чем для перепроверки: одиночку чаще предлагаем в существующую связку."""
+    if _item_matches_group(item, group):
+        return True
+    u_base = _title_base_key(item.get("title") or "")
+    if not u_base:
+        return False
+    brand_u = (item.get("brand") or "").lower().strip()
+    u_tokens = _title_tokens(u_base)
+    for it in group.get("items") or []:
+        g_base = _title_base_key(it.get("title") or "")
+        if not g_base:
+            continue
+        if _titles_similar(u_base, g_base):
+            return True
+        g_tokens = _title_tokens(g_base)
+        shared = u_tokens & g_tokens
+        if not shared:
+            continue
+        brand_g = (it.get("brand") or "").lower().strip()
+        if brand_u and brand_g and brand_u == brand_g:
+            return True
+        if len(shared) >= 2:
+            return True
+        if len(shared) == 1 and any(len(tok) >= 5 for tok in shared):
             return True
     return False
 
