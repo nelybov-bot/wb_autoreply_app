@@ -9,162 +9,442 @@
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="stylesheet" href="/static/styles.css">
   <style>
-    /* Страница входа — не зависит от --card, своя вёрстка */
     body.login-page { display: block; overflow: auto; }
-    body.login-page::after { opacity: 0.42; animation: none; }
-    body.login-page .bg-noise { opacity: 0.02; }
-    .login-page .login-wrap {
+    body.login-page::after { opacity: 0.38; animation: loginBgDrift 28s ease-in-out infinite alternate; }
+    body.login-page .bg-noise { opacity: 0.025; }
+
+    @keyframes loginBgDrift {
+      from { transform: scale(1.02) translate3d(0, 0, 0); }
+      to { transform: scale(1.06) translate3d(-1.5%, 1%, 0); }
+    }
+
+    .login-wrap {
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 24px;
+      padding: 24px 20px 40px;
       position: relative;
       z-index: 1;
     }
-    .login-card {
-      width: min(420px, 100%);
-      background: rgba(255,255,255,0.78);
-      border: 1px solid rgba(226,232,240,0.9);
-      border-radius: 16px;
-      box-shadow: 0 12px 40px rgba(0,0,0,0.10);
-      padding: 28px;
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
+
+    .login-panel {
+      width: min(400px, 100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0;
     }
-    .login-title { margin-bottom: 8px; }
-    .login-title h1 { margin: 0; font-size: 1.55rem; color: #0f172a; font-family: var(--font-heading, system-ui); letter-spacing: -0.02em; }
+
+    /* —— Зайчик —— */
+    .bunny-stage {
+      width: 200px;
+      height: 148px;
+      position: relative;
+      margin-bottom: -6px;
+      z-index: 2;
+      filter: drop-shadow(0 10px 18px rgba(79, 70, 229, 0.14));
+    }
+
+    .bunny {
+      width: 100%;
+      height: 100%;
+      animation: bunnyFloat 4.2s ease-in-out infinite;
+    }
+
+    @keyframes bunnyFloat {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-7px); }
+    }
+
+    .bunny svg { width: 100%; height: 100%; overflow: visible; }
+
+    .bunny-head {
+      transform-origin: 100px 118px;
+      transition: transform 0.55s cubic-bezier(0.34, 1.35, 0.64, 1);
+    }
+
+    .bunny-ear {
+      transform-origin: center bottom;
+      transition: transform 0.45s cubic-bezier(0.34, 1.2, 0.64, 1);
+    }
+
+    .bunny-ear--l { animation: earWiggleL 5s ease-in-out infinite; }
+    .bunny-ear--r { animation: earWiggleR 5.6s ease-in-out infinite 0.4s; }
+
+    @keyframes earWiggleL {
+      0%, 88%, 100% { transform: rotate(0deg); }
+      92% { transform: rotate(-6deg); }
+      96% { transform: rotate(2deg); }
+    }
+    @keyframes earWiggleR {
+      0%, 90%, 100% { transform: rotate(0deg); }
+      94% { transform: rotate(7deg); }
+      98% { transform: rotate(-2deg); }
+    }
+
+    .bunny-pupil {
+      transition: transform 0.4s cubic-bezier(0.34, 1.2, 0.64, 1);
+    }
+
+    .bunny-paw {
+      opacity: 0;
+      transform: translateY(28px);
+      transition: opacity 0.35s ease, transform 0.45s cubic-bezier(0.34, 1.35, 0.64, 1);
+    }
+
+    .bunny-blush { transition: opacity 0.35s ease; }
+
+    /* Состояния */
+    .bunny[data-state="away"] .bunny-head {
+      transform: rotate(-22deg) translateX(-10px);
+    }
+    .bunny[data-state="away"] .bunny-pupil--l { transform: translate(-5px, 0); }
+    .bunny[data-state="away"] .bunny-pupil--r { transform: translate(-5px, 0); }
+    .bunny[data-state="away"] .bunny-ear--l { transform: rotate(-8deg); }
+    .bunny[data-state="away"] .bunny-ear--r { transform: rotate(-14deg); }
+
+    .bunny[data-state="user"] .bunny-head {
+      transform: rotate(-4deg) translateY(-2px);
+    }
+    .bunny[data-state="user"] .bunny-pupil--l { transform: translate(-1px, -3px); }
+    .bunny[data-state="user"] .bunny-pupil--r { transform: translate(1px, -3px); }
+
+    .bunny[data-state="watch"] .bunny-head {
+      transform: rotate(14deg) translateY(6px);
+    }
+    .bunny[data-state="watch"] .bunny-pupil--l { transform: translate(2px, 7px) scale(1.15); }
+    .bunny[data-state="watch"] .bunny-pupil--r { transform: translate(2px, 7px) scale(1.15); }
+    .bunny[data-state="watch"] .bunny-ear--l { transform: rotate(6deg); }
+    .bunny[data-state="watch"] .bunny-ear--r { transform: rotate(10deg); }
+    .bunny[data-state="watch"] .bunny-blush { opacity: 1; }
+
+    .bunny[data-state="shy"] .bunny-head { transform: rotate(0deg) translateY(2px); }
+    .bunny[data-state="shy"] .bunny-paw { opacity: 1; transform: translateY(0); }
+    .bunny[data-state="shy"] .bunny-eye-open { opacity: 0; }
+    .bunny[data-state="shy"] .bunny-blush { opacity: 1; }
+
+    .bunny-eye-open { transition: opacity 0.25s ease; }
+
+    /* —— Карточка —— */
+    .login-card {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.82);
+      border: 1px solid rgba(226, 232, 240, 0.95);
+      border-radius: 20px;
+      box-shadow:
+        0 20px 50px rgba(79, 70, 229, 0.1),
+        0 4px 16px rgba(15, 23, 42, 0.06);
+      padding: 26px 28px 24px;
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .login-card::before {
+      content: '';
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 3px;
+      background: linear-gradient(90deg, #2563eb, #7c3aed, #ec4899, #2563eb);
+      background-size: 200% 100%;
+      animation: loginStripe 6s linear infinite;
+    }
+
+    @keyframes loginStripe {
+      to { background-position: 200% 0; }
+    }
+
+    .login-title { text-align: center; margin: 4px 0 6px; }
+    .login-title h1 {
+      margin: 0;
+      font-size: 1.65rem;
+      color: #0f172a;
+      font-family: var(--font-heading, system-ui);
+      letter-spacing: -0.03em;
+    }
+
     .login-sub {
       color: #64748b;
-      font-size: 0.9rem;
-      margin: 0 0 20px;
-      line-height: 1.4;
+      font-size: 0.88rem;
+      margin: 0 0 22px;
+      line-height: 1.45;
+      text-align: center;
     }
-    .login-meta {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      margin: 0 0 18px;
-      color: #64748b;
-      font-size: 0.82rem;
-    }
-    .login-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      background: rgba(37, 99, 235, 0.08);
-      border: 1px solid rgba(37, 99, 235, 0.18);
-    }
-    .login-chip .dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 999px;
-      background: #2563eb;
-      display: inline-block;
-    }
-    .login-card .form-group {
-      margin-bottom: 16px;
-    }
+
+    .login-card .form-group { margin-bottom: 14px; }
+
     .login-card .form-group label {
       display: block;
-      font-size: 0.85rem;
-      font-weight: 500;
+      font-size: 0.82rem;
+      font-weight: 600;
       color: #475569;
       margin-bottom: 6px;
+      letter-spacing: 0.01em;
     }
+
     .login-card .form-group input {
       width: 100%;
       padding: 12px 14px;
       font-size: 1rem;
-      border: 1px solid #e2e8f0;
-      border-radius: 8px;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 12px;
       background: #fff;
       color: #0f172a;
       box-sizing: border-box;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
     }
+
+    .login-card .form-group input:hover {
+      border-color: #cbd5e1;
+    }
+
     .login-card .form-group input:focus {
       outline: none;
-      border-color: #2563eb;
-      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+      border-color: #6366f1;
+      box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.18);
+      transform: translateY(-1px);
     }
+
+    .login-card .form-group--pass input:focus {
+      border-color: #ec4899;
+      box-shadow: 0 0 0 4px rgba(236, 72, 153, 0.16);
+    }
+
     .login-actions {
       display: flex;
-      gap: 12px;
+      gap: 10px;
       justify-content: space-between;
       align-items: center;
       margin-top: 20px;
-      flex-wrap: wrap;
     }
-    .login-actions .btn { min-width: 100px; }
+
+    .login-actions .btn { min-width: 108px; border-radius: 12px; }
+
+    .login-actions .btn-primary {
+      background: linear-gradient(135deg, #2563eb 0%, #6366f1 55%, #7c3aed 100%);
+      box-shadow: 0 8px 20px rgba(79, 70, 229, 0.28);
+      transition: transform 0.15s ease, box-shadow 0.2s ease, filter 0.2s ease;
+    }
+
+    .login-actions .btn-primary:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 10px 24px rgba(79, 70, 229, 0.34);
+      filter: brightness(1.03);
+    }
+
+    .login-actions .btn-primary:active:not(:disabled) { transform: translateY(0); }
+
     .login-actions .btn-secondary {
-      background: rgba(15, 23, 42, 0.06);
-      color: #0f172a;
-      border: 1px solid rgba(15, 23, 42, 0.10);
+      background: rgba(15, 23, 42, 0.05);
+      color: #475569;
+      border: 1px solid rgba(15, 23, 42, 0.08);
       box-shadow: none;
       text-decoration: none;
+      font-size: 0.88rem;
     }
-    .login-actions .btn-secondary:hover { filter: brightness(0.98); }
-    .login-links {
-      margin-top: 16px;
-      font-size: 0.85rem;
-      color: #64748b;
+
+    .login-actions .btn-secondary:hover { background: rgba(15, 23, 42, 0.08); }
+
+    .login-hint {
+      margin-top: 14px;
+      font-size: 0.8rem;
+      color: #94a3b8;
+      text-align: center;
+      line-height: 1.4;
     }
-    .login-links a { color: #2563eb; text-decoration: none; }
-    .login-links a:hover { text-decoration: underline; }
+
+    .login-hint a { color: #6366f1; text-decoration: none; }
+    .login-hint a:hover { text-decoration: underline; }
+
     .login-err {
       color: #b91c1c;
-      font-size: 0.9rem;
+      font-size: 0.88rem;
       margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(185, 28, 28, 0.08);
+      border: 1px solid rgba(185, 28, 28, 0.15);
       display: none;
+      text-align: center;
+      animation: loginShake 0.45s ease;
+    }
+
+    @keyframes loginShake {
+      0%, 100% { transform: translateX(0); }
+      20% { transform: translateX(-6px); }
+      40% { transform: translateX(6px); }
+      60% { transform: translateX(-4px); }
+      80% { transform: translateX(4px); }
+    }
+
+    .login-err.visible { display: block; }
+
+    @media (prefers-reduced-motion: reduce) {
+      body.login-page::after,
+      .bunny,
+      .bunny-ear--l,
+      .bunny-ear--r,
+      .login-card::before { animation: none; }
+      .bunny-head,
+      .bunny-pupil,
+      .bunny-paw,
+      .bunny-blush,
+      .bunny-eye-open { transition: none; }
     }
   </style>
 </head>
 <body class="login-page">
   <div class="bg-noise" aria-hidden="true"></div>
   <div class="login-wrap">
-    <div class="login-card">
-      <div class="login-title">
-        <h1>Market<span class="title-gradient">AI</span></h1>
-      </div>
-      <p class="login-sub">Вход обязателен. Без логина и пароля интерфейс недоступен.</p>
-      <div class="login-meta">
-        <div class="login-chip"><span class="dot"></span><span>Сессия защищена</span></div>
-        <div class="login-chip" style="background: rgba(15, 23, 42, 0.04); border-color: rgba(15, 23, 42, 0.10);"><span class="dot" style="background:#0f172a;"></span><span>Только для вашей команды</span></div>
+    <div class="login-panel">
+      <div class="bunny-stage" aria-hidden="true">
+        <div class="bunny" id="bunny" data-state="away">
+          <svg viewBox="0 0 200 148" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <!-- тело -->
+            <ellipse cx="100" cy="128" rx="52" ry="22" fill="#e8d5c4"/>
+            <ellipse cx="100" cy="118" rx="44" ry="36" fill="#f5ebe0"/>
+            <ellipse cx="100" cy="122" rx="28" ry="22" fill="#fff8f2" opacity="0.85"/>
+
+            <g class="bunny-head">
+              <!-- уши -->
+              <g class="bunny-ear bunny-ear--l">
+                <ellipse cx="62" cy="42" rx="16" ry="38" fill="#f5ebe0" transform="rotate(-12 62 42)"/>
+                <ellipse cx="62" cy="44" rx="9" ry="26" fill="#ffc9d9" transform="rotate(-12 62 44)"/>
+              </g>
+              <g class="bunny-ear bunny-ear--r">
+                <ellipse cx="138" cy="42" rx="16" ry="38" fill="#f5ebe0" transform="rotate(12 138 42)"/>
+                <ellipse cx="138" cy="44" rx="9" ry="26" fill="#ffc9d9" transform="rotate(12 138 44)"/>
+              </g>
+
+              <!-- голова -->
+              <circle cx="100" cy="88" r="46" fill="#f5ebe0"/>
+              <ellipse cx="100" cy="96" rx="30" ry="24" fill="#fff8f2" opacity="0.7"/>
+
+              <!-- румянец -->
+              <g class="bunny-blush" opacity="0.55">
+                <ellipse cx="68" cy="96" rx="10" ry="6" fill="#ffb8c9"/>
+                <ellipse cx="132" cy="96" rx="10" ry="6" fill="#ffb8c9"/>
+              </g>
+
+              <!-- глаза -->
+              <g class="bunny-eye-open">
+                <ellipse cx="78" cy="82" rx="11" ry="13" fill="#fff"/>
+                <ellipse cx="122" cy="82" rx="11" ry="13" fill="#fff"/>
+                <circle class="bunny-pupil bunny-pupil--l" cx="80" cy="84" r="5.5" fill="#2d2640"/>
+                <circle class="bunny-pupil bunny-pupil--r" cx="124" cy="84" r="5.5" fill="#2d2640"/>
+                <circle cx="82" cy="81" r="2" fill="#fff" opacity="0.9"/>
+                <circle cx="126" cy="81" r="2" fill="#fff" opacity="0.9"/>
+              </g>
+
+              <!-- нос и рот -->
+              <ellipse cx="100" cy="98" rx="5" ry="4" fill="#f4a5b8"/>
+              <path d="M100 102 Q94 108 90 106" stroke="#c4a99a" stroke-width="2" stroke-linecap="round" fill="none"/>
+              <path d="M100 102 Q106 108 110 106" stroke="#c4a99a" stroke-width="2" stroke-linecap="round" fill="none"/>
+
+              <!-- усы -->
+              <path d="M58 94 H38" stroke="#c4a99a" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+              <path d="M58 100 H34" stroke="#c4a99a" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+              <path d="M142 94 H162" stroke="#c4a99a" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+              <path d="M142 100 H166" stroke="#c4a99a" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+
+              <!-- лапки (закрывают глаза) -->
+              <g class="bunny-paw bunny-paw--l">
+                <ellipse cx="76" cy="80" rx="18" ry="14" fill="#f5ebe0" stroke="#e8d5c4" stroke-width="2"/>
+                <circle cx="70" cy="78" r="2.5" fill="#ffc9d9" opacity="0.7"/>
+                <circle cx="78" cy="76" r="2.5" fill="#ffc9d9" opacity="0.7"/>
+                <circle cx="86" cy="78" r="2.5" fill="#ffc9d9" opacity="0.7"/>
+              </g>
+              <g class="bunny-paw bunny-paw--r">
+                <ellipse cx="124" cy="80" rx="18" ry="14" fill="#f5ebe0" stroke="#e8d5c4" stroke-width="2"/>
+                <circle cx="118" cy="78" r="2.5" fill="#ffc9d9" opacity="0.7"/>
+                <circle cx="126" cy="76" r="2.5" fill="#ffc9d9" opacity="0.7"/>
+                <circle cx="134" cy="78" r="2.5" fill="#ffc9d9" opacity="0.7"/>
+              </g>
+            </g>
+          </svg>
+        </div>
       </div>
 
-      <div class="form-group">
-        <label for="login-username">Логин</label>
-        <input type="text" id="login-username" autocomplete="username" placeholder="admin">
+      <div class="login-card">
+        <div class="login-title">
+          <h1>Market<span class="title-gradient">AI</span></h1>
+        </div>
+        <p class="login-sub">Привет! Зайчик пропустит только своих.</p>
+
+        <div class="form-group">
+          <label for="login-username">Логин</label>
+          <input type="text" id="login-username" autocomplete="username" placeholder="admin">
+        </div>
+        <div class="form-group form-group--pass">
+          <label for="login-password">Пароль</label>
+          <input type="password" id="login-password" autocomplete="current-password" placeholder="••••••••">
+        </div>
+
+        <div class="login-actions">
+          <a class="btn btn-secondary" href="/reset">Сброс admin</a>
+          <button type="button" class="btn btn-primary" id="btn-login">Войти</button>
+        </div>
+
+        <div class="login-err" id="login-err" role="alert"></div>
+        <p class="login-hint">Забыли пароль? <a href="/reset">Сброс по токену</a></p>
       </div>
-      <div class="form-group">
-        <label for="login-password">Пароль</label>
-        <input type="password" id="login-password" autocomplete="current-password" placeholder="пароль">
-      </div>
-      <div class="login-actions">
-        <a class="btn btn-secondary" href="/reset">Сброс admin</a>
-        <button type="button" class="btn btn-primary" id="btn-login">Войти</button>
-      </div>
-      <div class="login-err" id="login-err"></div>
-      <div class="login-links">Если забыли пароль — используйте «Сброс admin» (требуется токен).</div>
     </div>
   </div>
 
   <script>
     (function () {
+      var bunny = document.getElementById('bunny');
       var errEl = document.getElementById('login-err');
       var userEl = document.getElementById('login-username');
       var passEl = document.getElementById('login-password');
       var btnEl = document.getElementById('btn-login');
+      var passHover = false;
+
+      function setBunnyState(state) {
+        if (bunny) bunny.setAttribute('data-state', state);
+      }
+
+      function refreshBunny() {
+        var passFocused = document.activeElement === passEl;
+        var userFocused = document.activeElement === userEl;
+        var hasPass = (passEl.value || '').length > 0;
+
+        if (passFocused && hasPass) {
+          setBunnyState('shy');
+        } else if (passFocused || passHover) {
+          setBunnyState('watch');
+        } else if (userFocused) {
+          setBunnyState('user');
+        } else {
+          setBunnyState('away');
+        }
+      }
+
+      passEl.addEventListener('mouseenter', function () {
+        passHover = true;
+        refreshBunny();
+      });
+      passEl.addEventListener('mouseleave', function () {
+        passHover = false;
+        refreshBunny();
+      });
+      passEl.addEventListener('focus', refreshBunny);
+      passEl.addEventListener('blur', refreshBunny);
+      passEl.addEventListener('input', refreshBunny);
+
+      userEl.addEventListener('focus', refreshBunny);
+      userEl.addEventListener('blur', refreshBunny);
 
       function showError(msg) {
         errEl.textContent = msg || 'Ошибка';
-        errEl.style.display = 'block';
+        errEl.classList.add('visible');
+        setBunnyState('away');
       }
 
       function doLogin() {
-        errEl.style.display = 'none';
+        errEl.classList.remove('visible');
         var username = (userEl.value || '').trim();
         var password = passEl.value || '';
         if (!username || !password) {
@@ -172,6 +452,7 @@
           return;
         }
         btnEl.disabled = true;
+        btnEl.textContent = 'Входим…';
         fetch('/api/auth/login', {
           method: 'POST',
           credentials: 'include',
@@ -180,6 +461,7 @@
         })
           .then(function (res) {
             if (res.ok) {
+              setBunnyState('user');
               window.location.href = '/app';
               return;
             }
@@ -188,12 +470,14 @@
           .catch(function (msg) {
             showError(typeof msg === 'string' ? msg : 'Ошибка входа');
             btnEl.disabled = false;
+            btnEl.textContent = 'Войти';
           });
       }
 
       if (btnEl) btnEl.addEventListener('click', doLogin);
-      if (passEl) passEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
-      if (userEl) setTimeout(function () { userEl.focus(); }, 100);
+      passEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
+      userEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') passEl.focus(); });
+      setTimeout(function () { userEl.focus(); refreshBunny(); }, 120);
     })();
   </script>
 </body>
