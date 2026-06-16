@@ -103,6 +103,13 @@ from app.core.card_links import (
     wb_merge_error_message,
 )
 from app.core.chat_common import SETTING_AUTO_CHAT_MAX_AGE_DAYS, SETTING_REPLY_FROM, parse_api_error_detail
+from app.core.secret_mask import (
+    mask_settings_for_api,
+    redact_secrets_in_text,
+    resolve_secret_setting,
+    sanitize_for_audit,
+    SECRET_SETTING_KEYS,
+)
 from app.core.card_check import (
     DEFAULT_TELEGRAM_TEMPLATE,
     SETTING_CARD_CHECK_ENABLED,
@@ -345,6 +352,7 @@ class StoreOut(BaseModel):
     marketplace: str
     name: str
     active: bool
+    api_key_set: bool = False
     business_id: Optional[int] = None
     client_id: Optional[str] = None
 
@@ -1620,9 +1628,20 @@ def _store_to_out(s: Store) -> StoreOut:
         marketplace=s.marketplace,
         name=s.name,
         active=s.active,
+        api_key_set=bool((s.api_key or "").strip()),
         business_id=s.business_id,
         client_id=s.client_id,
     )
+
+
+def _audit_meta_for_api(raw: str) -> str:
+    if not (raw or "").strip():
+        return raw or ""
+    try:
+        obj = json.loads(raw)
+        return json.dumps(sanitize_for_audit(obj), ensure_ascii=False)
+    except Exception:
+        return redact_secrets_in_text(raw)
 
 
 def _item_to_out(r: ItemRow) -> ItemOut:
@@ -1796,7 +1815,11 @@ def api_update_store(store_id: int, body: StoreUpdate, db: Database = Depends(ge
         raise HTTPException(404, "Магазин не найден")
     s = stores[0]
     name = body.name if body.name is not None else s.name
-    api_key = body.api_key if body.api_key is not None else s.api_key
+    api_key = s.api_key
+    if body.api_key is not None:
+        ak = (body.api_key or "").strip()
+        if ak:
+            api_key = ak
     active = body.active if body.active is not None else s.active
     business_id = body.business_id if body.business_id is not None else s.business_id
     client_id = body.client_id if body.client_id is not None else (s.client_id or "")
@@ -1917,13 +1940,19 @@ def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(requir
         SETTING_REPLY_FROM,
         SETTING_AUTO_CHAT_MAX_AGE_DAYS,
     ]
-    return {k: db.get_setting(k) or "" for k in keys}
+    raw = {k: db.get_setting(k) or "" for k in keys}
+    return mask_settings_for_api(raw)
 
 
 @app.post("/api/settings")
 def api_set_settings(body: dict[str, str], db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
     global _tg_report_fail_until, _tg_report_fail_token
     for k, v in body.items():
+        if k.endswith("_set"):
+            continue
+        if k in SECRET_SETTING_KEYS:
+            old = db.get_setting(k) or ""
+            v = resolve_secret_setting(v, old)
         if k == "telegram_bot_token":
             v = normalize_telegram_bot_token(v or "")
             _tg_report_fail_until = 0.0
@@ -1944,7 +1973,10 @@ async def api_telegram_test(
 ):
     """Проверка токена (getMe) и пробная отправка в чат."""
     token = normalize_telegram_bot_token(
-        (body.get("telegram_bot_token") or db.get_setting("telegram_bot_token") or "").strip()
+        resolve_secret_setting(
+            body.get("telegram_bot_token"),
+            db.get_setting("telegram_bot_token") or "",
+        )
     )
     chat_id = (
         (body.get("telegram_chat_id") or "").strip()
@@ -2101,8 +2133,11 @@ class ConfigImportBody(BaseModel):
 
 
 @app.get("/api/config/export")
-def api_config_export(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
-    """Выгрузка магазинов, настроек, расписания и промптов в JSON-файл."""
+def api_config_export(
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_permission("view_settings")),
+):
+    """Выгрузка магазинов, настроек, расписания и промптов в JSON-файл (без API-ключей)."""
     payload = export_config(db)
     stamp = dt.datetime.now(MSK_TZ).strftime("%Y%m%d-%H%M%S")
     filename = f"wb-autoreply-config-{stamp}.json"
@@ -2395,7 +2430,7 @@ def api_log_dev(
             continue
         if qq and qq not in s.lower():
             continue
-        out.append(s)
+        out.append(redact_secrets_in_text(s))
         if len(out) >= max(10, min(int(limit), 2000)):
             break
     return {"lines": list(reversed(out))}
@@ -2432,7 +2467,7 @@ def api_log_ops(
                 "item_type": r.item_type,
                 "store_id": r.store_id,
                 "result": r.result,
-                "meta_json": r.meta_json,
+                "meta_json": _audit_meta_for_api(r.meta_json),
             }
             for r in rows
         ]
@@ -3328,7 +3363,7 @@ class CardLinksOzonQtyTableBody(BaseModel):
 
 def _card_links_http_error(marketplace: str, e: HttpStatusError) -> HTTPException:
     mp = "Wildberries" if marketplace == "wb" else "Ozon"
-    body = (e.body or "")[:500]
+    body = redact_secrets_in_text((e.body or "")[:500])
     if e.status in (401, 403):
         hint = (
             "Проверьте API-ключ: для WB нужен токен категории «Контент» (content-api)."
@@ -3818,7 +3853,7 @@ def _sanitize_log_for_admin_ui(text: str) -> str:
             out.append(line[:500] + " …(длинная строка)… " + line[-200:])
         else:
             out.append(line)
-    tail_lines = out[-450:]
+    tail_lines = [redact_secrets_in_text(ln) for ln in out[-450:]]
     return "\n".join(tail_lines)
 
 

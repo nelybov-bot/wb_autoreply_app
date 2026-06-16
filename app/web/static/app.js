@@ -826,7 +826,7 @@
           <div class="store-card-head">
             <h3>${escapeHtml(s.name)} ${mpPillHtml(s.marketplace)}</h3>
           </div>
-          <div class="meta">ID ${s.id}${s.active ? '' : ' · неактивен'}</div>
+          <div class="meta">ID ${s.id}${s.api_key_set ? ' · ключ задан' : ''}${s.active ? '' : ' · неактивен'}</div>
           <div class="actions">
             <button type="button" class="btn btn-secondary btn-sm btn-edit-store" data-id="${s.id}">Изменить</button>
             <button type="button" class="btn btn-danger btn-sm btn-delete-store" data-id="${s.id}">Удалить</button>
@@ -4404,9 +4404,8 @@
     try {
       await loadMe(true);
       const data = await api('/settings');
+      const secretSettingKeys = ['openai_key', 'telegram_bot_token'];
       [
-        'openai_key',
-        'telegram_bot_token',
         'telegram_chat_id',
         'telegram_report_chat_id',
         'telegram_card_error_chat_id',
@@ -4416,6 +4415,15 @@
       ].forEach(k => {
         const el = document.getElementById('setting-' + k);
         if (el) el.value = data[k] || '';
+      });
+      secretSettingKeys.forEach(k => {
+        const el = document.getElementById('setting-' + k);
+        if (!el) return;
+        el.value = '';
+        const isSet = String(data[k + '_set'] || '0') === '1';
+        el.placeholder = isSet
+          ? 'Ключ сохранён — введите новый, чтобы заменить'
+          : (k === 'openai_key' ? 'sk-...' : '123456789:AAH...');
       });
       const autoAgeEl = document.getElementById('setting-buyer_chat_auto_max_age_days');
       if (autoAgeEl) autoAgeEl.value = String(data.buyer_chat_auto_max_age_days || '3');
@@ -4657,7 +4665,7 @@
         btnExport.disabled = true;
         try {
           const base = getApiBase();
-          const url = base ? base + '/api/config/export' : API + '/config/export';
+          const url = (base ? base + '/api/config/export' : API + '/config/export');
           const res = await fetch(url, { credentials: 'include' });
           if (!res.ok) {
             const text = await res.text();
@@ -4677,7 +4685,7 @@
           a.click();
           a.remove();
           URL.revokeObjectURL(a.href);
-          toast('Настройки выгружены в файл');
+          toast('Настройки выгружены (без API-ключей)');
         } catch (err) {
           toast(err.message || String(err), 'error');
         } finally {
@@ -4756,8 +4764,6 @@
 
   async function saveServerSettings() {
     const body = {
-      openai_key: document.getElementById('setting-openai_key').value,
-      telegram_bot_token: document.getElementById('setting-telegram_bot_token').value,
       telegram_chat_id: document.getElementById('setting-telegram_chat_id').value,
       telegram_report_chat_id: document.getElementById('setting-telegram_report_chat_id')?.value || '',
       telegram_card_error_chat_id: document.getElementById('setting-telegram_card_error_chat_id')?.value || '',
@@ -4779,6 +4785,10 @@
       buyer_chat_reply_from_date: document.getElementById('setting-buyer_chat_reply_from_date')?.value || '',
       buyer_chat_auto_max_age_days: String(parseInt(document.getElementById('setting-buyer_chat_auto_max_age_days')?.value || '3', 10) || 3),
     };
+    const openaiKey = (document.getElementById('setting-openai_key')?.value || '').trim();
+    if (openaiKey) body.openai_key = openaiKey;
+    const tgToken = (document.getElementById('setting-telegram_bot_token')?.value || '').trim();
+    if (tgToken) body.telegram_bot_token = tgToken;
     await api('/settings', { method: 'POST', body: JSON.stringify(body) });
     toast('Сохранено');
   }

@@ -802,8 +802,8 @@
           </div>
           <h3 class="settings-subhead">Резервная копия настроек</h3>
           <p class="form-hint">
-            Один файл: магазины, API-ключи, Telegram, расписание автозапуска, Ozon-акции и промпты.
-            В файле есть секреты — храните его в безопасном месте, не выкладывайте в git.
+            Один файл: магазины, Telegram, расписание автозапуска, Ozon-акции и промпты.
+            API-ключи в файл не попадают — при импорте на другой сервер их нужно ввести заново.
           </p>
           <div class="settings-actions settings-actions--tight">
             <button type="button" class="btn btn-secondary" id="btn-config-export">Выгрузить настройки</button>
@@ -816,7 +816,8 @@
           <h2>OpenAI</h2>
           <div class="form-group">
             <label>API-ключ</label>
-            <input type="password" id="setting-openai_key" placeholder="sk-...">
+            <input type="password" id="setting-openai_key" placeholder="sk-..." autocomplete="off">
+            <p class="form-hint">Ключ после сохранения нельзя прочитать в интерфейсе. Оставьте поле пустым, чтобы не менять.</p>
           </div>
           <div class="settings-actions">
             <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
@@ -845,8 +846,8 @@
           <h3 class="settings-subhead">Бот и чаты</h3>
           <div class="form-group">
             <label>Токен бота</label>
-            <input type="password" id="setting-telegram_bot_token" placeholder="123456789:AAH...">
-            <div class="form-hint">Только строка от @BotFather, без «Bot» и без ссылки api.telegram.org.</div>
+            <input type="password" id="setting-telegram_bot_token" placeholder="123456789:AAH..." autocomplete="off">
+            <div class="form-hint">Только строка от @BotFather. После сохранения токен нельзя прочитать — пустое поле = не менять.</div>
           </div>
           <div class="form-group">
             <label>ID чата по умолчанию</label>

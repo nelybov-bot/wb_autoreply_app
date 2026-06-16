@@ -21,6 +21,7 @@ from app.core.telegram_notify import (
     normalize_telegram_chat_id,
     send_telegram_message,
 )
+from app.core.secret_mask import redact_secrets_in_text, sanitize_for_audit
 from app.db import Database
 from app.web import tasks as web_tasks
 from app.web.store_locks import StoreBusyError
@@ -587,7 +588,7 @@ async def _execute_tool(ctx: AgentContext, name: str, args: dict[str, Any]) -> A
             action=f"agent_tool_{name}",
             item_type="agent",
             result="ok" if not (isinstance(result, dict) and result.get("error")) else "error",
-            meta={"args": args, "result_preview": str(result)[:500]},
+            meta={"args": sanitize_for_audit(args), "result_preview": redact_secrets_in_text(str(result)[:500])},
         )
     except Exception:
         pass

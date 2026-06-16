@@ -6,6 +6,7 @@ import json
 from typing import Any, Optional
 
 from app.db import Database
+from app.core.secret_mask import MASK_BULLETS, SECRET_SETTING_KEYS, is_masked_display
 from app.core.telegram_notify import normalize_telegram_bot_token
 
 BACKUP_VERSION = 1
@@ -56,13 +57,16 @@ def parse_store_key(key: str) -> tuple[str, str]:
 
 
 def _store_to_export(s) -> dict:
+    has_key = bool((s.api_key or "").strip())
     return {
         "marketplace": s.marketplace,
         "name": s.name,
-        "api_key": s.api_key,
+        "api_key": "",
         "active": bool(s.active),
         "business_id": s.business_id,
         "client_id": s.client_id or "",
+        "api_key_set": has_key,
+        "api_key_redacted": has_key,
     }
 
 
@@ -177,7 +181,15 @@ def export_config(db: Database) -> dict:
     stores = db.list_stores()
     id_to_key = {s.id: store_key(s.marketplace, s.name) for s in stores}
     now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-    settings = {k: db.get_setting(k) or "" for k in SETTING_KEYS}
+    settings = {}
+    for k in SETTING_KEYS:
+        raw = db.get_setting(k) or ""
+        if k in SECRET_SETTING_KEYS:
+            settings[k] = ""
+            settings[f"{k}_set"] = bool(raw.strip())
+            settings[f"{k}_redacted"] = bool(raw.strip())
+        else:
+            settings[k] = raw
     prompts = [
         {
             "item_type": p.item_type,
@@ -190,6 +202,7 @@ def export_config(db: Database) -> dict:
         "version": BACKUP_VERSION,
         "app": APP_NAME,
         "exported_at": now,
+        "secrets_included": False,
         "stores": [_store_to_export(s) for s in stores],
         "settings": settings,
         "auto_schedule": _export_auto_schedule(db, id_to_key),
@@ -210,6 +223,8 @@ def _upsert_store_from_backup(db: Database, row: dict) -> tuple[str, bool]:
     existing = {store_key(s.marketplace, s.name): s for s in db.list_stores()}
     if key in existing:
         s = existing[key]
+        if row.get("api_key_redacted") or row.get("api_key_set") or api_key == MASK_BULLETS or not api_key:
+            api_key = (s.api_key or "").strip()
         business_id = row.get("business_id")
         if business_id is not None and business_id != "":
             try:
@@ -242,9 +257,12 @@ def _import_settings(db: Database, settings: dict) -> int:
         return n
     for k, v in settings.items():
         key = str(k).strip()
-        if not key or key in RUNTIME_SETTING_KEYS:
+        if not key or key in RUNTIME_SETTING_KEYS or key.endswith("_redacted") or key.endswith("_set"):
             continue
         val = str(v) if v is not None else ""
+        if key in SECRET_SETTING_KEYS:
+            if settings.get(f"{key}_redacted") or settings.get(f"{key}_set") or val == MASK_BULLETS or is_masked_display(val) or not val.strip():
+                continue
         if key == "telegram_bot_token":
             val = normalize_telegram_bot_token(val)
         db.set_setting(key, val)
