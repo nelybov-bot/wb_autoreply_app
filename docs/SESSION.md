@@ -1,12 +1,48 @@
 # SESSION — текущее состояние разработки
 
-> Обновлено: 2026-06-06
+> Обновлено: 2026-06-16
 
 ## Активная ветка
 
-- `main` — production, auto-deploy Render
-- Последний commit кода: `73aefbc` — Fix card-links loading bar, catalog bundle order, and attach pools
-- Документация: полный аудит `docs/` выполнен (см. Handoff ниже), **не закоммичено**
+- Локально: fx-widgets (лампа, корова, loading, свечи на логине) + UI-фиксы
+
+---
+
+## Handoff (2026-06-16) — fx-widgets
+
+### Сделано
+
+- Лампочка справа: шнур переключает `theme-dark` (синхрон с настройками)
+- Корова: полноэкран при потере соединения (Failed to fetch), кнопки Повторить / Закрыть
+- Loading: точка по тексту в progress-барах
+- Логин: свечи → затем POST `/api/auth/login`
+
+### Файлы
+
+- `app/web/static/fx-widgets.css`, `fx-widgets.js`
+- `index.html`, `login.html`, `app.js?v=42`
+
+---
+
+## Handoff (2026-06-16) — аудит и исправление UI
+
+### Сделано
+
+- Восстановлены отступы в `server.py` (SyntaxError блокировал запуск сервера)
+- Сохранён `sort_catalog_rows` в API каталога card-links (WB/Ozon)
+- `app.js`: dev-журнал `join('\n')`, импорт настроек обновляет магазины на активной вкладке, маска секретов после сохранения (`loadSettings`), фильтр `log-level`, скрытие Dev без `view_log`, подсветка вкладок card-links
+- `styles.css`: `.card-links-catalog-filter[hidden]`
+- Кэш-бастинг: `app.js?v=41`, `styles.css?v=23`
+
+### Осталось
+
+- Закоммитить изменения по запросу пользователя
+- Верификация на production (card-links, журнал Dev)
+- T-000b: закоммитить `docs/` если ещё не в git
+
+### Следующий шаг
+
+Ручная проверка: запуск `python3 run_web.py`, журнал Dev, импорт настроек на вкладке «Магазины», сохранение OpenAI-ключа.
 
 ---
 

@@ -4033,6 +4033,10 @@ body.theme-dark .card-links-cand-header td {
   margin: 0.5rem 0 0.75rem;
 }
 
+.card-links-catalog-filter[hidden] {
+  display: none !important;
+}
+
 .card-links-catalog-unlinked-label {
   display: inline-flex;
   align-items: center;

@@ -42,6 +42,21 @@
     } catch (_) {}
   }
 
+  function toggleUiTheme() {
+    try {
+      const dark = localStorage.getItem(STORAGE_UI_THEME) === 'dark';
+      localStorage.setItem(STORAGE_UI_THEME, dark ? 'light' : 'dark');
+      applyUiPrefs();
+      const cb = document.getElementById('theme-dark');
+      if (cb) cb.checked = !dark;
+      document.dispatchEvent(new CustomEvent('marketai-theme-change', { detail: { dark: !dark } }));
+      if (window.MarketAIFx && window.MarketAIFx.syncLampVisual) {
+        window.MarketAIFx.syncLampVisual(document.getElementById('fx-lamp'));
+      }
+    } catch (_) {}
+  }
+  window.marketaiToggleTheme = toggleUiTheme;
+
   function confirmDanger(message) {
     const need = (localStorage.getItem(STORAGE_UI_CONFIRM_DANGER) || '1') === '1';
     if (!need) return true;
@@ -101,10 +116,16 @@
       if (e && e.name === 'AbortError') {
         throw new Error('Превышено время ожидания ответа сервера. На Render первый запрос после простоя может занять до минуты — подождите и нажмите «Обновить» ещё раз.');
       }
+      if (window.MarketAIFx && window.MarketAIFx.showCowOffline) {
+        window.MarketAIFx.showCowOffline('Соединение с сервером потеряно. Проверьте сеть или адрес API в настройках.');
+      }
       const baseHint = base ? `\nПроверь «Адрес API (ПК)»: сейчас = ${base}` : '';
       throw new Error('Не удалось подключиться к серверу (Failed to fetch).' + baseHint + '\nЧастые причины: неверный адрес API, CORS, смешанный контент (http/https), сервер спит на Render.');
     } finally {
       if (timer) clearTimeout(timer);
+    }
+    if (res.ok && window.MarketAIFx && window.MarketAIFx.hideCow) {
+      window.MarketAIFx.hideCow({ success: true });
     }
     if (!res.ok) {
       const text = await res.text();
@@ -217,6 +238,12 @@
     if (panelSettings) panelSettings.style.display = canSettings ? '' : 'none';
     if (panelAuto) panelAuto.style.display = canSettings ? '' : 'none';
     if (panelLog) panelLog.style.display = (canLog || canOpsLog) ? '' : 'none';
+    const logModeSel = document.getElementById('log-mode');
+    if (logModeSel) {
+      const devOpt = logModeSel.querySelector('option[value="dev"]');
+      if (devOpt) devOpt.hidden = !canLog;
+      if (!canLog && logModeSel.value === 'dev') logModeSel.value = 'ops';
+    }
   }
 
   let ozonChatsFilter = 'buyers';
@@ -712,7 +739,16 @@
     wrap.style.removeProperty('display');
     if (message) {
       const t = wrap.querySelector('.progress-text') || wrap.querySelector('.progress-label');
-      if (t) t.textContent = message;
+      if (t && window.MarketAIFx && window.MarketAIFx.setLoadingLabel) {
+        window.MarketAIFx.setLoadingLabel(t, message);
+      } else if (t) {
+        t.textContent = message;
+      }
+    } else if (visible) {
+      const t = wrap.querySelector('.progress-text') || wrap.querySelector('.progress-label');
+      if (t && window.MarketAIFx && window.MarketAIFx.setLoadingLabel) {
+        window.MarketAIFx.setLoadingLabel(t, 'Загрузка');
+      }
     }
   }
 
@@ -3256,6 +3292,9 @@
     const table = document.getElementById('card-links-table');
     const panel = document.getElementById('panel-card-links');
     if (panel) panel.setAttribute('data-cl-view', cardLinksView);
+    document.querySelectorAll('.card-links-tab').forEach(btn => {
+      btn.classList.toggle('active', btn.getAttribute('data-cl-view') === cardLinksView);
+    });
     if (!table) return;
     table.classList.toggle('card-links--candidates', cardLinksView === 'candidates' || cardLinksView === 'review');
     table.classList.toggle('card-links--catalog', cardLinksView === 'catalog');
@@ -4185,7 +4224,12 @@
         fill.style.width = pct + '%';
         const detail = (state.detail || '').trim();
         const base = state.status === 'running' ? 'Выполняется' : state.status === 'done' ? 'Готово' : state.status;
-        textEl.textContent = `${base} — ${pct}% (${cur}/${total})${detail ? ' · ' + detail : ''}`;
+        const line = `${base} — ${pct}% (${cur}/${total})${detail ? ' · ' + detail : ''}`;
+        if (window.MarketAIFx && window.MarketAIFx.setLoadingLabel) {
+          window.MarketAIFx.setLoadingLabel(textEl, line);
+        } else {
+          textEl.textContent = line;
+        }
         if (state.status === 'done') {
           clearInterval(wrap._interval);
           wrap._interval = null;
@@ -4749,7 +4793,14 @@
     if (uiDim) uiDim.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_DIM_BG, uiDim.checked ? '1' : '0'); applyUiPrefs(); });
     if (uiReduce) uiReduce.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_REDUCE_MOTION, uiReduce.checked ? '1' : '0'); applyUiPrefs(); });
     if (uiBgMotion) uiBgMotion.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_BG_MOTION, uiBgMotion.checked ? '1' : '0'); applyUiPrefs(); syncBgParallaxListener(); });
-    if (uiThemeDark) uiThemeDark.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_THEME, uiThemeDark.checked ? 'dark' : 'light'); applyUiPrefs(); });
+    if (uiThemeDark) uiThemeDark.addEventListener('change', () => {
+      localStorage.setItem(STORAGE_UI_THEME, uiThemeDark.checked ? 'dark' : 'light');
+      applyUiPrefs();
+      document.dispatchEvent(new CustomEvent('marketai-theme-change', { detail: { dark: uiThemeDark.checked } }));
+      if (window.MarketAIFx && window.MarketAIFx.syncLampVisual) {
+        window.MarketAIFx.syncLampVisual(document.getElementById('fx-lamp'));
+      }
+    });
     if (uiToast) uiToast.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_TOAST_MS, String(parseInt(uiToast.value || '4000', 10) || 4000)); });
     if (uiConfirm) uiConfirm.addEventListener('change', () => { localStorage.setItem(STORAGE_UI_CONFIRM_DANGER, uiConfirm.checked ? '1' : '0'); });
     if (uiReset) uiReset.addEventListener('click', () => {
@@ -4946,7 +4997,7 @@
           }
           await loadSettings();
           await reloadStoresIntoSelects();
-          if (document.getElementById('panel-stores') && !document.getElementById('panel-stores').hidden) {
+          if (document.getElementById('panel-stores')?.classList.contains('active')) {
             await loadStores();
           }
         } catch (err) {
@@ -5008,6 +5059,7 @@
     const tgToken = (document.getElementById('setting-telegram_bot_token')?.value || '').trim();
     if (tgToken) body.telegram_bot_token = tgToken;
     await api('/settings', { method: 'POST', body: JSON.stringify(body) });
+    await loadSettings();
     toast('Сохранено');
   }
 
@@ -5257,7 +5309,7 @@
     try {
       if (mode === 'dev') {
         const data = await api('/log/dev?limit=600' + (level ? '&level=' + encodeURIComponent(level) : '') + (action ? '&action=' + encodeURIComponent(action) : '') + (q ? '&q=' + encodeURIComponent(q) : ''));
-        devPre.textContent = (data.lines || []).join('\\n');
+        devPre.textContent = (data.lines || []).join('\n');
         return;
       }
 
@@ -5560,7 +5612,7 @@
   document.getElementById('card-errors-status')?.addEventListener('change', () => { void loadCardErrors(); });
 
   document.getElementById('btn-refresh-log').addEventListener('click', loadLog);
-  ['log-mode', 'log-action', 'log-store'].forEach(id => {
+  ['log-mode', 'log-action', 'log-store', 'log-level'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('change', () => { void loadLog(); });
   });
@@ -5620,8 +5672,6 @@
     window.location.href = '/login';
   }
 
-  const btnLogout = document.getElementById('btn-logout');
-  if (btnLogout) btnLogout.addEventListener('click', doLogout);
   const btnLogoutHeader = document.getElementById('btn-logout-header');
   if (btnLogoutHeader) btnLogoutHeader.addEventListener('click', doLogout);
 

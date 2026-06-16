@@ -99,6 +99,7 @@ from app.core.card_links import (
     suggest_combine_candidates,
     suggest_link_candidates,
     suggest_review_linked_groups,
+    sort_catalog_rows,
     wb_disconnect_cards,
     wb_merge_cards,
     wb_merge_error_message,
@@ -3406,6 +3407,7 @@ async def api_card_links_wb_catalog(
         raise _card_links_http_error("wb", e) from e
     groups = group_wb_rows(rows)
     apply_link_status(rows, groups)
+    rows = sort_catalog_rows(rows, marketplace="wb")
     candidates = suggest_link_candidates(rows, marketplace="wb")
     attach = group_attach_suggestions(
         suggest_attach_to_groups(rows, groups, marketplace="wb"),
@@ -3455,6 +3457,7 @@ async def api_card_links_ozon_catalog(
         raise _card_links_http_error("ozon", e) from e
     groups = group_ozon_rows(rows)
     apply_link_status(rows, groups)
+    rows = sort_catalog_rows(rows, marketplace="ozon")
     candidates = suggest_link_candidates(rows, marketplace="ozon")
     attach = group_attach_suggestions(
         suggest_attach_to_groups(rows, groups, marketplace="ozon"),

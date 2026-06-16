@@ -11,7 +11,8 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
-  <link rel="stylesheet" href="/static/styles.css?v=22">
+  <link rel="stylesheet" href="/static/styles.css?v=23">
+  <link rel="stylesheet" href="/static/fx-widgets.css?v=2">
 </head>
 <body>
   <div class="bg-noise" aria-hidden="true"></div>
@@ -624,7 +625,7 @@
         </div>
         <div class="card-links-nav">
           <div class="segmented card-links-view-tabs" role="tablist" aria-label="Режим">
-            <button type="button" class="card-links-tab" data-cl-view="candidates" role="tab">Предложения</button>
+            <button type="button" class="card-links-tab active" data-cl-view="candidates" role="tab">Предложения</button>
             <button type="button" class="card-links-tab" data-cl-view="review" role="tab">Перепроверка <span id="card-links-review-badge" class="card-links-tab-badge" hidden></span></button>
             <button type="button" class="card-links-tab" data-cl-view="catalog" role="tab">Каталог</button>
           </div>
@@ -1216,6 +1217,37 @@
 
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
+  <div class="fx-lamp" id="fx-lamp" aria-label="Тема оформления">
+    <div class="fx-lamp__wire" aria-hidden="true"></div>
+    <button type="button" class="fx-lamp__cord-hit" id="fx-lamp-cord" aria-label="Потянуть за шнур — сменить тему" title="Потянуть за шнур — сменить тему"></button>
+    <div class="fx-lamp__bulb-wrap" aria-hidden="true">
+      <div class="fx-lamp__glow"></div>
+      <div class="fx-lamp__bulb">
+        <div class="fx-lamp__filament"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="fx-cow-screen" id="fx-cow-screen" role="alertdialog" aria-modal="true" aria-labelledby="fx-cow-screen-title">
+    <div class="fx-cow-screen__inner">
+      <div class="fx-cow-screen__copy">
+        <p class="fx-cow-screen__code" aria-hidden="true">—</p>
+        <h2 class="fx-cow-screen__title" id="fx-cow-screen-title">Нет соединения</h2>
+        <p class="fx-cow-screen__text" id="fx-cow-screen-text">Не удалось связаться с сервером.</p>
+        <div class="fx-cow-screen__actions">
+          <button type="button" class="btn btn-primary fx-cow-screen__retry" id="fx-cow-retry">Повторить</button>
+          <button type="button" class="btn btn-secondary fx-cow-screen__close" id="fx-cow-close">Закрыть</button>
+        </div>
+      </div>
+      <div class="fx-cow-screen__cow" aria-hidden="true">
+        <div class="fx-cow-screen__horn fx-cow-screen__horn--l"></div>
+        <div class="fx-cow-screen__horn fx-cow-screen__horn--r"></div>
+        <div class="fx-cow-screen__head"></div>
+        <div class="fx-cow-screen__shadow"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Модальное окно редактирования магазина -->
   <div id="modal-store" class="modal-backdrop">
     <div class="modal">
@@ -1249,6 +1281,7 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=40"></script>
+  <script src="/static/fx-widgets.js?v=2"></script>
+  <script src="/static/app.js?v=43"></script>
 </body>
 </html>
