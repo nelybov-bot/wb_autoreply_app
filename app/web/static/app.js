@@ -739,16 +739,10 @@
     wrap.style.removeProperty('display');
     if (message) {
       const t = wrap.querySelector('.progress-text') || wrap.querySelector('.progress-label');
-      if (t && window.MarketAIFx && window.MarketAIFx.setLoadingLabel) {
-        window.MarketAIFx.setLoadingLabel(t, message);
-      } else if (t) {
-        t.textContent = message;
-      }
+      if (t) t.textContent = message;
     } else if (visible) {
       const t = wrap.querySelector('.progress-text') || wrap.querySelector('.progress-label');
-      if (t && window.MarketAIFx && window.MarketAIFx.setLoadingLabel) {
-        window.MarketAIFx.setLoadingLabel(t, 'Загрузка');
-      }
+      if (t) t.textContent = 'Загрузка';
     }
   }
 
@@ -4225,11 +4219,7 @@
         const detail = (state.detail || '').trim();
         const base = state.status === 'running' ? 'Выполняется' : state.status === 'done' ? 'Готово' : state.status;
         const line = `${base} — ${pct}% (${cur}/${total})${detail ? ' · ' + detail : ''}`;
-        if (window.MarketAIFx && window.MarketAIFx.setLoadingLabel) {
-          window.MarketAIFx.setLoadingLabel(textEl, line);
-        } else {
-          textEl.textContent = line;
-        }
+        textEl.textContent = line;
         if (state.status === 'done') {
           clearInterval(wrap._interval);
           wrap._interval = null;

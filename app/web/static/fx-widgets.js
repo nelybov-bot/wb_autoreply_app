@@ -100,50 +100,9 @@
     if (close) close.addEventListener('click', hideCow);
   }
 
-  function renderDotLoading(el, text) {
-    if (!el) return;
-    const safe = String(text || 'Загрузка');
-    el.innerHTML = `<span class="fx-dot-loading" role="status"><span class="fx-dot-loading__word">${escapeHtml(safe)}</span></span>`;
-  }
-
-  function escapeHtml(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
-
-  function setLoadingLabel(el, text) {
-    if (!el) return;
-    if (el.querySelector('.fx-dot-loading')) {
-      const w = el.querySelector('.fx-dot-loading__word');
-      if (w) w.textContent = String(text || 'Загрузка');
-      return;
-    }
-    renderDotLoading(el, text);
-  }
-
-  function playLoginCandles() {
-    return new Promise((resolve) => {
-      const stage = document.getElementById('fx-candles');
-      if (!stage) {
-        resolve();
-        return;
-      }
-      stage.classList.remove('fx-candles--blow');
-      void stage.offsetWidth;
-      stage.classList.add('fx-candles--blow');
-      const reduced = document.body.classList.contains('ui-reduce-motion');
-      setTimeout(resolve, reduced ? 120 : 720);
-    });
-  }
-
   window.MarketAIFx = {
     showCowOffline,
     hideCow,
-    setLoadingLabel,
-    renderDotLoading,
-    playLoginCandles,
     syncLampVisual,
   };
 

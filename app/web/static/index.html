@@ -12,7 +12,7 @@
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <link rel="stylesheet" href="/static/styles.css?v=23">
-  <link rel="stylesheet" href="/static/fx-widgets.css?v=2">
+  <link rel="stylesheet" href="/static/fx-widgets.css?v=5">
 </head>
 <body>
   <div class="bg-noise" aria-hidden="true"></div>
@@ -33,6 +33,23 @@
       <div class="header-user" title="Текущий пользователь">
         <div class="header-user-name" id="auth-user-label-header">—</div>
         <div class="header-user-sub">Session</div>
+      </div>
+      <div class="fx-lamp fx-lamp--header" id="fx-lamp" aria-label="Тема оформления">
+        <div class="fx-lamp__wire" aria-hidden="true"></div>
+        <button type="button" class="fx-lamp__cord-hit" id="fx-lamp-cord" aria-label="Потянуть за шнур — сменить тему" title="Потянуть за шнур — сменить тему"></button>
+        <svg class="fx-lamp__svg" viewBox="0 0 40 52" width="36" height="46" aria-hidden="true">
+          <ellipse class="fx-lamp__glow-el" cx="20" cy="22" rx="18" ry="20" fill="url(#fxLampGlow)"/>
+          <path class="fx-lamp__glass" d="M20 8 C12 8 8 16 8 24 C8 32 12 38 20 40 C28 38 32 32 32 24 C32 16 28 8 20 8 Z" fill="currentColor"/>
+          <path class="fx-lamp__base" d="M14 40 H26 V44 H14 Z" fill="currentColor" opacity="0.85"/>
+          <rect class="fx-lamp__socket" x="16" y="44" width="8" height="4" rx="1" fill="currentColor" opacity="0.7"/>
+          <path class="fx-lamp__filament-el" d="M17 26 Q20 20 23 26 Q20 32 17 26" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <defs>
+            <radialGradient id="fxLampGlow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#fbbf24" stop-opacity="0.55"/>
+              <stop offset="100%" stop-color="#fbbf24" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+        </svg>
       </div>
       <button type="button" class="btn btn-secondary btn-sm" id="btn-logout-header">Выйти</button>
     </div>
@@ -1217,21 +1234,10 @@
 
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <div class="fx-lamp" id="fx-lamp" aria-label="Тема оформления">
-    <div class="fx-lamp__wire" aria-hidden="true"></div>
-    <button type="button" class="fx-lamp__cord-hit" id="fx-lamp-cord" aria-label="Потянуть за шнур — сменить тему" title="Потянуть за шнур — сменить тему"></button>
-    <div class="fx-lamp__bulb-wrap" aria-hidden="true">
-      <div class="fx-lamp__glow"></div>
-      <div class="fx-lamp__bulb">
-        <div class="fx-lamp__filament"></div>
-      </div>
-    </div>
-  </div>
-
   <div class="fx-cow-screen" id="fx-cow-screen" role="alertdialog" aria-modal="true" aria-labelledby="fx-cow-screen-title">
     <div class="fx-cow-screen__inner">
       <div class="fx-cow-screen__copy">
-        <p class="fx-cow-screen__code" aria-hidden="true">—</p>
+        <p class="fx-cow-screen__code" aria-hidden="true">···</p>
         <h2 class="fx-cow-screen__title" id="fx-cow-screen-title">Нет соединения</h2>
         <p class="fx-cow-screen__text" id="fx-cow-screen-text">Не удалось связаться с сервером.</p>
         <div class="fx-cow-screen__actions">
@@ -1239,11 +1245,46 @@
           <button type="button" class="btn btn-secondary fx-cow-screen__close" id="fx-cow-close">Закрыть</button>
         </div>
       </div>
-      <div class="fx-cow-screen__cow" aria-hidden="true">
-        <div class="fx-cow-screen__horn fx-cow-screen__horn--l"></div>
-        <div class="fx-cow-screen__horn fx-cow-screen__horn--r"></div>
-        <div class="fx-cow-screen__head"></div>
-        <div class="fx-cow-screen__shadow"></div>
+      <div class="fx-cow-screen__art" aria-hidden="true">
+        <svg class="fx-cow-screen__svg" viewBox="0 0 220 190" xmlns="http://www.w3.org/2000/svg">
+          <ellipse class="fx-cow-shadow" cx="110" cy="176" rx="62" ry="9" fill="rgba(0,0,0,0.22)"/>
+          <g class="fx-cow-wifi">
+            <path d="M90 22 Q110 4 130 22" fill="none" stroke="rgba(255,255,255,0.45)" stroke-width="3.5" stroke-linecap="round"/>
+            <path d="M82 32 Q110 12 138 32" fill="none" stroke="rgba(255,255,255,0.55)" stroke-width="3.5" stroke-linecap="round"/>
+            <path d="M74 42 Q110 22 146 42" fill="none" stroke="rgba(255,255,255,0.7)" stroke-width="3.5" stroke-linecap="round"/>
+            <line x1="72" y1="18" x2="148" y2="46" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+          </g>
+          <path class="fx-cow-tail" d="M158 108 C178 98, 188 78, 182 58 C180 50, 172 48, 168 56 C164 66, 170 78, 162 92 Z" fill="#f8fafc" stroke="#1a1a1a" stroke-width="2"/>
+          <ellipse cx="108" cy="128" rx="54" ry="36" fill="#fff" stroke="#1a1a1a" stroke-width="2.5"/>
+          <ellipse cx="88" cy="118" rx="16" ry="13" fill="#1a1a1a"/>
+          <ellipse cx="128" cy="122" rx="12" ry="10" fill="#1a1a1a"/>
+          <rect x="78" y="148" width="16" height="26" rx="5" fill="#fff" stroke="#1a1a1a" stroke-width="2"/>
+          <rect x="98" y="148" width="16" height="26" rx="5" fill="#fff" stroke="#1a1a1a" stroke-width="2"/>
+          <rect x="118" y="148" width="16" height="26" rx="5" fill="#fff" stroke="#1a1a1a" stroke-width="2"/>
+          <rect x="138" y="148" width="16" height="26" rx="5" fill="#fff" stroke="#1a1a1a" stroke-width="2"/>
+          <ellipse class="fx-cow-ear fx-cow-ear--l" cx="62" cy="72" rx="12" ry="16" fill="#fff" stroke="#1a1a1a" stroke-width="2"/>
+          <ellipse class="fx-cow-ear fx-cow-ear--r" cx="156" cy="72" rx="12" ry="16" fill="#fff" stroke="#1a1a1a" stroke-width="2"/>
+          <ellipse cx="62" cy="74" rx="6" ry="9" fill="#fecdd3"/>
+          <ellipse cx="156" cy="74" rx="6" ry="9" fill="#fecdd3"/>
+          <ellipse cx="110" cy="88" rx="46" ry="40" fill="#fff" stroke="#1a1a1a" stroke-width="2.5"/>
+          <ellipse cx="84" cy="82" rx="15" ry="17" fill="#1a1a1a"/>
+          <ellipse cx="136" cy="82" rx="15" ry="17" fill="#1a1a1a"/>
+          <g class="fx-cow-eyes">
+            <ellipse cx="84" cy="84" rx="9" ry="10" fill="#fff"/>
+            <ellipse cx="136" cy="84" rx="9" ry="10" fill="#fff"/>
+            <circle class="fx-cow-pupil" cx="86" cy="86" r="4.5" fill="#1a1a1a"/>
+            <circle class="fx-cow-pupil" cx="138" cy="86" r="4.5" fill="#1a1a1a"/>
+            <circle cx="88" cy="83" r="1.8" fill="#fff"/>
+            <circle cx="140" cy="83" r="1.8" fill="#fff"/>
+          </g>
+          <path d="M72 52 L66 30 L80 48 Z" fill="#fef3c7" stroke="#1a1a1a" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M148 52 L154 30 L140 48 Z" fill="#fef3c7" stroke="#1a1a1a" stroke-width="2" stroke-linejoin="round"/>
+          <ellipse cx="110" cy="104" rx="24" ry="17" fill="#fda4af"/>
+          <ellipse cx="100" cy="106" rx="5" ry="6" fill="#9f1239"/>
+          <ellipse cx="120" cy="106" rx="5" ry="6" fill="#9f1239"/>
+          <path d="M110 112 Q102 118 96 116" stroke="#9f1239" stroke-width="2" fill="none" stroke-linecap="round"/>
+          <path d="M110 112 Q118 118 124 116" stroke="#9f1239" stroke-width="2" fill="none" stroke-linecap="round"/>
+        </svg>
       </div>
     </div>
   </div>
@@ -1281,7 +1322,7 @@
     </div>
   </div>
 
-  <script src="/static/fx-widgets.js?v=2"></script>
-  <script src="/static/app.js?v=43"></script>
+  <script src="/static/fx-widgets.js?v=4"></script>
+  <script src="/static/app.js?v=44"></script>
 </body>
 </html>

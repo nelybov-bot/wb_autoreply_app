@@ -8,7 +8,6 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="stylesheet" href="/static/styles.css">
-  <link rel="stylesheet" href="/static/fx-widgets.css?v=1">
   <style>
     body.login-page { display: block; overflow: auto; }
     body.login-page::after { opacity: 0.38; animation: loginBgDrift 28s ease-in-out infinite alternate; }
@@ -357,24 +356,6 @@
         </div>
       </div>
 
-      <div class="fx-candles" id="fx-candles" aria-hidden="true">
-        <div class="fx-candle fx-candle--short">
-          <div class="fx-candle__flame"></div>
-          <div class="fx-candle__eyes">
-            <span class="fx-candle__eye"></span>
-            <span class="fx-candle__eye"></span>
-          </div>
-        </div>
-        <div class="fx-candle fx-candle--tall">
-          <div class="fx-candle__flame"></div>
-          <div class="fx-candle__eyes">
-            <span class="fx-candle__eye"></span>
-            <span class="fx-candle__eye"></span>
-          </div>
-          <div class="fx-candle__mouth"></div>
-        </div>
-      </div>
-
       <div class="login-card">
         <div class="login-title">
           <h1>Market<span class="title-gradient">AI</span></h1>
@@ -400,7 +381,6 @@
     </div>
   </div>
 
-  <script src="/static/fx-widgets.js?v=1"></script>
   <script>
     (function () {
       var mascot = document.getElementById('mascot');
@@ -437,8 +417,6 @@
         errEl.textContent = msg || 'Ошибка';
         errEl.classList.add('visible');
         setState('away');
-        var candles = document.getElementById('fx-candles');
-        if (candles) candles.classList.remove('fx-candles--blow');
       }
 
       function doLogin() {
@@ -452,32 +430,24 @@
         btnEl.disabled = true;
         btnEl.textContent = 'Входим…';
 
-        var afterCandles = function () {
-          fetch('/api/auth/login', {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: username, password: password })
+        fetch('/api/auth/login', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: username, password: password })
+        })
+          .then(function (res) {
+            if (res.ok) {
+              window.location.href = '/app';
+              return;
+            }
+            return res.json().then(function (j) { return Promise.reject(j.detail || res.statusText); });
           })
-            .then(function (res) {
-              if (res.ok) {
-                window.location.href = '/app';
-                return;
-              }
-              return res.json().then(function (j) { return Promise.reject(j.detail || res.statusText); });
-            })
-            .catch(function (msg) {
-              showError(typeof msg === 'string' ? msg : 'Ошибка входа');
-              btnEl.disabled = false;
-              btnEl.textContent = 'Войти';
-            });
-        };
-
-        if (window.MarketAIFx && window.MarketAIFx.playLoginCandles) {
-          window.MarketAIFx.playLoginCandles().then(afterCandles);
-        } else {
-          afterCandles();
-        }
+          .catch(function (msg) {
+            showError(typeof msg === 'string' ? msg : 'Ошибка входа');
+            btnEl.disabled = false;
+            btnEl.textContent = 'Войти';
+          });
       }
 
       btnEl.addEventListener('click', doLogin);
