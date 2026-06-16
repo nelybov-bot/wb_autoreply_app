@@ -879,14 +879,16 @@ def group_wb_rows(rows: List[dict]) -> List[dict]:
     groups: List[dict] = []
     for imt, items in sorted(buckets.items(), key=lambda x: -len(x[1])):
         linked = len(items) > 1
+        cat_label = _candidate_label(items, marketplace="wb")
+        group_label = f"{cat_label} · imtID {imt}" if cat_label else f"imtID {imt}"
         for it in items:
             it["linked"] = linked
             it["link_group_id"] = imt
-            it["link_group_label"] = f"imtID {imt}"
+            it["link_group_label"] = group_label
         groups.append(
             {
                 "group_id": str(imt),
-                "group_label": f"imtID {imt}",
+                "group_label": group_label,
                 "marketplace": "wb",
                 "linked": linked,
                 "count": len(items),
@@ -914,14 +916,16 @@ def group_ozon_rows(rows: List[dict]) -> List[dict]:
     groups: List[dict] = []
     for model, items in sorted(by_model.items(), key=lambda x: -len(x[1])):
         linked = len(items) > 1 or any(len(x.get("related_skus") or []) > 1 for x in items)
+        cat_label = str(items[0].get("category_label") or "").strip()
+        group_label = f"{cat_label} · {model}" if cat_label else model
         for it in items:
             it["linked"] = linked
             it["link_group_id"] = model
-            it["link_group_label"] = model
+            it["link_group_label"] = group_label
         groups.append(
             {
                 "group_id": model,
-                "group_label": model,
+                "group_label": group_label,
                 "marketplace": "ozon",
                 "linked": linked,
                 "count": len(items),
@@ -1194,7 +1198,13 @@ def suggest_attach_to_groups(
                 entry["suggested_model_name"] = str(g.get("group_label") or "").strip()
                 entry["category_key"] = u.get("category_key")
             out.append(entry)
-    out.sort(key=lambda x: (x.get("target_group_label") or "", x.get("items", [{}])[0].get("title") or ""))
+    out.sort(
+        key=lambda x: (
+            str(x.get("category_label") or "").lower(),
+            str(x.get("target_group_label") or "").lower(),
+            str((x.get("items") or [{}])[0].get("title") or "").lower(),
+        )
+    )
     return out[:120]
 
 
@@ -1276,8 +1286,9 @@ def group_attach_suggestions(suggestions: List[dict], *, marketplace: str) -> Li
     out.extend(batches)
     out.sort(
         key=lambda x: (
+            str(x.get("category_label") or "").lower(),
             0 if (x.get("kind") or "") == "attach_batch" else 1,
-            x.get("target_group_label") or "",
+            str(x.get("target_group_label") or "").lower(),
             -(x.get("count") or 0),
         )
     )

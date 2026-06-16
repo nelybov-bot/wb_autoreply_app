@@ -2461,10 +2461,49 @@
 
   function cardLinksCanBulkApplyCandidate(c) {
     const kind = c?.kind || '';
+    const n = (c?.items || []).length || Number(c?.count || 0);
     if (['attach', 'attach_batch', 'new_link', 'combine_suggestions', 'merge_groups', 'relocate'].includes(kind)) {
-      return (c.items || []).length > 0;
+      return n > 0;
     }
-    return !!(c?.ai && (c.items || []).length);
+    return !!(c?.ai && n > 0);
+  }
+
+  function cardLinkItemCategory(it, mp) {
+    if (!it) return '';
+    if (mp === 'wb') {
+      const parent = String(it.parent_name || '').trim();
+      const subject = String(it.subject_name || '').trim();
+      if (parent && subject) return `${parent} → ${subject}`;
+      return subject || parent || (it.subject_id ? `subjectID ${it.subject_id}` : '');
+    }
+    return String(it.category_label || it.category_key || '').trim();
+  }
+
+  function cardLinksCandidateKindOrder(kind) {
+    const order = {
+      attach_batch: 0,
+      attach: 1,
+      combine_suggestions: 2,
+      new_link: 3,
+      merge_groups: 4,
+      relocate: 5,
+    };
+    return order[kind] ?? 9;
+  }
+
+  function sortCardLinksCandidates(list) {
+    return [...(list || [])].sort((a, b) => {
+      const catA = String(a?.category_label || '').toLowerCase();
+      const catB = String(b?.category_label || '').toLowerCase();
+      if (catA !== catB) return catA.localeCompare(catB, 'ru');
+      const kindA = cardLinksCandidateKindOrder(a?.kind || '');
+      const kindB = cardLinksCandidateKindOrder(b?.kind || '');
+      if (kindA !== kindB) return kindA - kindB;
+      const tgtA = String(a?.target_group_label || a?.suggested_model_name || '').toLowerCase();
+      const tgtB = String(b?.target_group_label || b?.suggested_model_name || '').toLowerCase();
+      if (tgtA !== tgtB) return tgtA.localeCompare(tgtB, 'ru');
+      return Number(b?.count || 0) - Number(a?.count || 0);
+    });
   }
 
   function cardLinksCanCombineCandidate(c) {
@@ -2812,9 +2851,12 @@
   function cardLinkItemLineHtml(it, mp) {
     const article = mp === 'wb' ? (it.vendor_code || '—') : (it.offer_id || '—');
     const mpId = mp === 'wb' ? (it.nm_id || '—') : (it.sku || '—');
+    const cat = cardLinkItemCategory(it, mp);
+    const catHtml = cat ? `<span class="card-links-picker-item-cat">${escapeHtml(cat)}</span>` : '';
     return `<div class="card-links-picker-item">
       ${cardLinkPhotoCell(it.photo_url)}
       <div class="card-links-picker-item-text">
+        ${catHtml}
         <span class="card-links-picker-item-title">${escapeHtml((it.title || '').slice(0, 80))}</span>
         <span class="card-links-picker-item-meta">${escapeHtml(article)} · ${escapeHtml(String(mpId))}</span>
       </div>
@@ -2975,8 +3017,9 @@
     if (c.kind === 'attach_batch') {
       const samples = c.sample_items || [];
       const n = c.count || items.length;
+      const catSuffix = c.category_label ? ` · ${escapeHtml(c.category_label)}` : '';
       return `<div class="card-links-cand-source">
-        <div class="card-links-cand-source-label">Добавить ${n} товаров</div>
+        <div class="card-links-cand-source-label">Добавить ${n} товаров${catSuffix}</div>
         ${items.map((it) => cardLinkItemLineHtml(it, mp)).join('')}
       </div>
       <div class="card-links-cand-source card-links-cand-source--target">
@@ -3171,7 +3214,7 @@
     table.classList.toggle('card-links--candidates', cardLinksView === 'candidates' || cardLinksView === 'review');
     table.classList.toggle('card-links--catalog', cardLinksView === 'catalog');
     const thead = table.querySelector('thead');
-    if (thead) thead.hidden = cardLinksView === 'candidates' || cardLinksView === 'review';
+    if (thead) thead.hidden = false;
     syncCardLinksMergeBarVisibility();
     syncCardLinksCheckAllState();
     syncCardLinksCatalogFilterBar();
@@ -3188,9 +3231,12 @@
   }
 
   function cardLinkCandidateTitle(c, mp) {
-    const cat = c.category_label || '';
-    const meta = cardLinkCandidateMeta(c, mp);
-    return cat ? `${cat} ${meta}` : meta;
+    return cardLinkCandidateMeta(c, mp);
+  }
+
+  function cardLinkCandidateCategoryBadge(c) {
+    const cat = String(c?.category_label || '').trim();
+    return cat ? `<span class="card-links-cand-cat">${escapeHtml(cat)}</span>` : '';
   }
 
   function cardLinksReviewGroups() {
@@ -3218,17 +3264,18 @@
     const attach = cardLinksData.attach_suggestions || [];
     const fresh = (cardLinksData.candidates || []).filter((c) => !consumed.has(String(c.candidate_id || '')));
     const ai = (cardLinksData.ai_suggestions || []).filter((c) => !consumed.has(String(c.candidate_id || '')));
-    return [...combine, ...attach, ...fresh, ...ai];
+    return sortCardLinksCandidates([...combine, ...attach, ...fresh, ...ai]);
   }
 
   function cardLinksTableCandidateGroups() {
-    if (cardLinksView === 'review') return cardLinksReviewGroups();
+    if (cardLinksView === 'review') return sortCardLinksCandidates(cardLinksReviewGroups());
     return cardLinksCandidateGroups();
   }
 
   function cardLinkRowHtml(r, mp, idx, meta) {
     const article = mp === 'wb' ? (r.vendor_code || '—') : (r.offer_id || '—');
     const mpId = mp === 'wb' ? (r.nm_id || '—') : (r.sku || '—');
+    const category = cardLinkItemCategory(r, mp) || '—';
     const group = r.link_group_label || (r._group && r._group.group_label) || meta.groupLabel || '—';
     const linkedCls = r.linked ? ' linked' : '';
     const rowKey = mp === 'wb' ? `nm:${r.nm_id || idx}` : `off:${r.offer_id || idx}`;
@@ -3251,6 +3298,7 @@
       <td>${cardLinkPhotoCell(r.photo_url)}</td>
       <td>${escapeHtml(article)}</td>
       <td>${escapeHtml(String(mpId))}</td>
+      <td class="card-links-col-cat">${escapeHtml(category)}</td>
       <td>${escapeHtml((r.title || '').slice(0, 120))}</td>
       <td><span class="card-links-group-badge${linkedCls}">${escapeHtml(group)}</span></td>
     </tr>`;
@@ -3268,9 +3316,9 @@
       const allRows = (cardLinksData.items || []).map(it => ({ item: it, meta: {} }));
       const rows = cardLinksCatalogFilterRows(allRows.map((r) => r.item)).map((it) => ({ item: it, meta: {} }));
       if (!allRows.length) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty-cell">Нет данных — нажмите «Загрузить».</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">Нет данных — нажмите «Загрузить».</td></tr>';
       } else if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty-cell">Ничего не найдено — измените поиск или снимите фильтр «Только без связки».</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">Ничего не найдено — измените поиск или снимите фильтр «Только без связки».</td></tr>';
       } else {
         html = rows.map((row, idx) => cardLinkRowHtml(row.item, mp, idx, row.meta)).join('');
         tbody.innerHTML = html;
@@ -3281,9 +3329,15 @@
         const emptyMsg = cardLinksView === 'review'
           ? 'Нет перепривязок — все товары уже в оптимальных связках или загрузите полный каталог.'
           : 'Нет предложений. Загрузите каталог или нажмите «ИИ».';
-        tbody.innerHTML = `<tr><td colspan="6" class="empty-cell">${emptyMsg}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="empty-cell">${emptyMsg}</td></tr>`;
       } else {
+        let lastCat = '';
         for (const c of groups) {
+          const catLabel = String(c.category_label || '').trim();
+          if (catLabel && catLabel !== lastCat) {
+            lastCat = catLabel;
+            html += `<tr class="card-links-cat-divider"><td colspan="7">${escapeHtml(catLabel)}</td></tr>`;
+          }
           const kind = c.kind || 'new_link';
           const badge = cardLinkCandidateBadge(c);
           const cid = escapeHtml(String(c.candidate_id || ''));
@@ -3331,17 +3385,19 @@
             const overLimit = itemN > MAX_LINK_ITEMS;
             actionBtn = `<button type="button" class="btn btn-primary btn-sm card-links-merge-group" data-candidate-id="${cid}"${overLimit ? ' disabled title="Более 30 товаров"' : ''}>Связать</button>`;
           }
-          const rowCheck = canSelect
-            ? `<label class="card-links-cand-check-wrap" title="Выбрать для пакетного применения">
-                <input type="checkbox" class="card-links-row-check" data-candidate-id="${cid}"${rowChecked ? ' checked' : ''}>
-              </label>`
-            : '';
-          html += `<tr class="card-links-cand-header"><td colspan="6">
+          const rowCheckCell = canSelect
+            ? `<td class="col-check card-links-cand-check-cell">
+                <label class="card-links-cand-check-wrap" title="Выбрать для пакетного применения">
+                  <input type="checkbox" class="card-links-row-check" data-candidate-id="${cid}"${rowChecked ? ' checked' : ''}>
+                </label>
+              </td>`
+            : '<td class="col-check card-links-cand-check-cell"></td>';
+          html += `<tr class="card-links-cand-header">${rowCheckCell}<td colspan="6">
             <div class="card-links-cand-block">
               <div class="card-links-cand-row">
                 <div class="card-links-cand-head">
-                  ${rowCheck}
                   <span class="card-links-cand-badge card-links-cand-badge--${badge.cls}">${escapeHtml(badge.text)}</span>
+                  ${cardLinkCandidateCategoryBadge(c)}
                   <span class="card-links-cand-title">${escapeHtml(title)}</span>
                 </div>
                 <div class="card-links-cand-actions">
