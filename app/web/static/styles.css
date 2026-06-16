@@ -3752,8 +3752,72 @@ body.theme-dark .card-links-picker-menu {
 .card-links-cand-row {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem 0.75rem;
+}
+
+.card-links-cand-head {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem 0.75rem;
+  gap: 0.5rem 0.65rem;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.card-links-cand-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem 0.65rem;
+  flex: 1 1 280px;
+  max-width: 100%;
+}
+
+.card-links-cand-actions .card-links-picker {
+  flex: 1 1 240px;
+  min-width: 200px;
+  max-width: 100%;
+}
+
+#panel-card-links .card-links-cand-actions .btn-primary {
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2);
+  transform: none;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+#panel-card-links .card-links-cand-actions .btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(37, 99, 235, 0.22);
+}
+
+#panel-card-links .card-links-cand-actions .btn-primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+#panel-card-links .card-links-review-wrap .btn-primary,
+#panel-card-links .card-links-combine-wrap .btn-primary {
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2);
+  transform: none;
+}
+
+#panel-card-links .card-links-review-wrap .btn-primary:hover:not(:disabled),
+#panel-card-links .card-links-combine-wrap .btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(37, 99, 235, 0.22);
+}
+
+#panel-card-links[data-cl-view="candidates"] #card-links-review-bar,
+#panel-card-links[data-cl-view="catalog"] #card-links-review-bar {
+  display: none !important;
+}
+
+#panel-card-links[data-cl-view="review"] #card-links-combine-bar,
+#panel-card-links[data-cl-view="catalog"] #card-links-combine-bar {
+  display: none !important;
 }
 
 .card-links-cand-badge {
@@ -3797,10 +3861,10 @@ body.theme-dark .card-links-picker-menu {
 }
 
 .card-links-cand-title {
-  flex: 1 1 200px;
   font-size: 0.9rem;
   font-weight: 600;
   min-width: 0;
+  line-height: 1.35;
 }
 
 .card-links-cand-count {
@@ -3849,9 +3913,6 @@ body.theme-dark .card-links-cand-header td {
   gap: 0.35rem;
   font-size: 0.9rem;
   white-space: nowrap;
-}
-
-  margin-top: 0.75rem;
 }
 
 .card-links-qty-actions {

@@ -1198,6 +1198,92 @@ def suggest_attach_to_groups(
     return out[:120]
 
 
+def group_attach_suggestions(suggestions: List[dict], *, marketplace: str) -> List[dict]:
+    """Несколько attach в одну связку — один пул товаров."""
+    by_target: Dict[str, List[dict]] = {}
+    for c in suggestions:
+        if (c.get("kind") or "") != "attach":
+            continue
+        if marketplace == "wb":
+            key = str(c.get("target_group_id") or c.get("suggested_target_imt") or "")
+        else:
+            key = str(c.get("target_group_label") or c.get("suggested_model_name") or "")
+        if not key:
+            continue
+        by_target.setdefault(key, []).append(c)
+
+    consumed: set[str] = set()
+    batches: List[dict] = []
+    seq = 0
+    for _key, group in by_target.items():
+        if len(group) < 2:
+            continue
+        items: List[dict] = []
+        seen: set[str] = set()
+        source_ids: List[str] = []
+        for c in group:
+            cid = str(c.get("candidate_id") or "")
+            if cid:
+                source_ids.append(cid)
+                consumed.add(cid)
+            for it in c.get("items") or []:
+                if marketplace == "wb":
+                    uid = str(it.get("nm_id") or it.get("vendor_code") or "")
+                else:
+                    uid = str(it.get("offer_id") or "")
+                if not uid or uid in seen:
+                    continue
+                seen.add(uid)
+                items.append(it)
+        if len(items) < 2:
+            continue
+        ref = group[0]
+        seq += 1
+        label = str(ref.get("target_group_label") or "")
+        tgt_n = int(ref.get("target_group_count") or 0)
+        cat_label = str(ref.get("category_label") or _candidate_label(items, marketplace=marketplace))
+        entry: Dict[str, Any] = {
+            "candidate_id": f"attach-batch-{marketplace}-{seq}",
+            "kind": "attach_batch",
+            "marketplace": marketplace,
+            "category_label": cat_label,
+            "count": len(items),
+            "target_group_count": tgt_n,
+            "target_group_id": ref.get("target_group_id"),
+            "target_group_label": label,
+            "source_candidate_ids": source_ids,
+            "hint": f"Добавить {len(items)} товаров в «{label}» ({tgt_n} шт.)",
+            "items": items,
+            "sample_items": ref.get("sample_items") or [],
+        }
+        if marketplace == "wb":
+            entry["suggested_target_imt"] = int(ref.get("suggested_target_imt") or ref.get("target_group_id") or 0)
+            entry["subject_id"] = ref.get("subject_id")
+        else:
+            entry["suggested_model_name"] = str(ref.get("suggested_model_name") or label).strip()
+            entry["category_key"] = ref.get("category_key")
+        batches.append(entry)
+
+    if not batches:
+        return list(suggestions)
+
+    out: List[dict] = []
+    for c in suggestions:
+        cid = str(c.get("candidate_id") or "")
+        if cid and cid in consumed:
+            continue
+        out.append(c)
+    out.extend(batches)
+    out.sort(
+        key=lambda x: (
+            0 if (x.get("kind") or "") == "attach_batch" else 1,
+            x.get("target_group_label") or "",
+            -(x.get("count") or 0),
+        )
+    )
+    return out[:120]
+
+
 def _titles_similar(base_a: str, base_b: str) -> bool:
     if not base_a or not base_b:
         return False

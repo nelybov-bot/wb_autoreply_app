@@ -94,6 +94,7 @@ from app.core.card_links import (
     link_ozon_tms_qty_groups,
     parse_ozon_tms_qty_table,
     parse_articles_csv,
+    group_attach_suggestions,
     suggest_attach_to_groups,
     suggest_combine_candidates,
     suggest_link_candidates,
@@ -3406,7 +3407,10 @@ async def api_card_links_wb_catalog(
     groups = group_wb_rows(rows)
     apply_link_status(rows, groups)
     candidates = suggest_link_candidates(rows, marketplace="wb")
-    attach = suggest_attach_to_groups(rows, groups, marketplace="wb")
+    attach = group_attach_suggestions(
+        suggest_attach_to_groups(rows, groups, marketplace="wb"),
+        marketplace="wb",
+    )
     review = suggest_review_linked_groups(groups, marketplace="wb")
     combine = suggest_combine_candidates(candidates, marketplace="wb")
     linked_groups = sum(1 for g in groups if g.get("linked"))
@@ -3452,7 +3456,10 @@ async def api_card_links_ozon_catalog(
     groups = group_ozon_rows(rows)
     apply_link_status(rows, groups)
     candidates = suggest_link_candidates(rows, marketplace="ozon")
-    attach = suggest_attach_to_groups(rows, groups, marketplace="ozon")
+    attach = group_attach_suggestions(
+        suggest_attach_to_groups(rows, groups, marketplace="ozon"),
+        marketplace="ozon",
+    )
     review = suggest_review_linked_groups(groups, marketplace="ozon")
     combine = suggest_combine_candidates(candidates, marketplace="ozon")
     linked_groups = sum(1 for g in groups if g.get("linked") and g.get("group_id") != "__unlinked__")

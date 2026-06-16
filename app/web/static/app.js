@@ -2467,6 +2467,7 @@
   function cardLinksCandidateAddCount(c) {
     const kind = c?.kind || '';
     if (kind === 'attach' || kind === 'relocate') return 1;
+    if (kind === 'attach_batch') return (c?.items || []).length;
     if (kind === 'merge_groups' || kind === 'combine_suggestions') return (c?.items || []).length;
     return 0;
   }
@@ -2709,9 +2710,9 @@
     const sameCat = cands.length >= 2 && cardLinksCandidatesSameCategory(cands);
     const sizeErr = sameCat ? cardLinksValidateLinkSize(items.length, 0) : '';
     if (!cands.length) {
-      label.textContent = `Можно объединить ${available.length} предложений — отметьте или нажмите «Все»`;
+      label.textContent = `Можно объединить ${available.length} предложений «Новая» — отметьте чекбоксом или «Все»`;
     } else if (cands.length < 2) {
-      label.textContent = `Выбрано 1 — отметьте ещё одно предложение той же категории`;
+      label.textContent = `Выбрано 1 — отметьте ещё одно предложение «Новая» той же категории`;
     } else if (!sameCat) {
       label.textContent = 'Разные категории — выберите предложения одной категории';
     } else {
@@ -2915,6 +2916,18 @@
         ${samples.map((it) => cardLinkItemLineHtml(it, mp)).join('')}
       </div>`;
     }
+    if (c.kind === 'attach_batch') {
+      const samples = c.sample_items || [];
+      const n = c.count || items.length;
+      return `<div class="card-links-cand-source">
+        <div class="card-links-cand-source-label">Добавить ${n} товаров</div>
+        ${items.map((it) => cardLinkItemLineHtml(it, mp)).join('')}
+      </div>
+      <div class="card-links-cand-source card-links-cand-source--target">
+        <div class="card-links-cand-source-label">В связку «${escapeHtml(c.target_group_label || '—')}» (${c.target_group_count || '—'} шт.)</div>
+        ${samples.map((it) => cardLinkItemLineHtml(it, mp)).join('')}
+      </div>`;
+    }
     if (c.kind === 'relocate') {
       const samples = c.sample_items || [];
       return `<div class="card-links-cand-source">
@@ -2944,6 +2957,12 @@
       }
       const m = c.suggested_model_name || c.target_group_label || '—';
       return `→ модель «${m}»`;
+    }
+    if (kind === 'attach_batch') {
+      const n = c.count || (c.items || []).length;
+      const label = c.target_group_label || (mp === 'wb' ? `imtID ${c.suggested_target_imt || c.target_group_id || '—'}` : (c.suggested_model_name || '—'));
+      const tgtN = c.target_group_count;
+      return tgtN ? `пул ${n} товаров → «${label}» (${tgtN} шт.)` : `пул ${n} товаров → «${label}»`;
     }
     if (kind === 'relocate') {
       const srcN = c.source_group_count || '—';
@@ -3090,6 +3109,8 @@
 
   function syncCardLinksTableMode() {
     const table = document.getElementById('card-links-table');
+    const panel = document.getElementById('panel-card-links');
+    if (panel) panel.setAttribute('data-cl-view', cardLinksView);
     if (!table) return;
     table.classList.toggle('card-links--candidates', cardLinksView === 'candidates' || cardLinksView === 'review');
     table.classList.toggle('card-links--catalog', cardLinksView === 'catalog');
@@ -3103,6 +3124,7 @@
   function cardLinkCandidateBadge(c) {
     if (c.ai) return { cls: 'ai', text: 'ИИ' };
     if (c.kind === 'combine_suggestions') return { cls: 'combine', text: 'Соединить' };
+    if (c.kind === 'attach_batch') return { cls: 'attach', text: 'Пул' };
     if (c.kind === 'relocate') return { cls: 'relocate', text: 'Перепривязать' };
     if (c.kind === 'merge_groups') return { cls: 'merge', text: 'Объединить' };
     if (c.kind === 'attach') return { cls: 'attach', text: 'В связку' };
@@ -3217,7 +3239,7 @@
           const canBulkReview = cardLinksCanBulkReview(c);
           const candChecked = cardLinksSelectedCandidates.has(String(c.candidate_id || ''));
           const reviewChecked = cardLinksSelectedReview.has(String(c.candidate_id || ''));
-          const needsPicker = kind === 'attach' || kind === 'relocate' || kind === 'merge_groups';
+          const needsPicker = kind === 'attach' || kind === 'attach_batch' || kind === 'relocate' || kind === 'merge_groups';
           const defaultTarget = needsPicker
             ? String(c.suggested_target_imt || c.target_group_id || c.suggested_model_name || c.target_group_label || '')
             : '';
@@ -3241,6 +3263,9 @@
           let actionBtn = '';
           if (kind === 'attach') {
             actionBtn = `<button type="button" class="btn btn-primary btn-sm card-links-attach-btn" data-candidate-id="${cid}"${canAct ? '' : ' disabled'}>Связать</button>`;
+          } else if (kind === 'attach_batch') {
+            const n = c.count || (c.items || []).length;
+            actionBtn = `<button type="button" class="btn btn-primary btn-sm card-links-attach-btn" data-candidate-id="${cid}"${canAct ? '' : ' disabled'}>Связать все (${n})</button>`;
           } else if (kind === 'relocate') {
             actionBtn = `<button type="button" class="btn btn-primary btn-sm card-links-attach-btn" data-candidate-id="${cid}"${canAct ? '' : ' disabled'}>Переместить</button>`;
           } else if (kind === 'merge_groups') {
@@ -3251,7 +3276,7 @@
             actionBtn = `<button type="button" class="btn btn-primary btn-sm card-links-merge-group" data-candidate-id="${cid}"${overLimit ? ' disabled title="Более 30 товаров"' : ''}>Связать</button>`;
           }
           const combineCheck = (cardLinksView === 'candidates' && canCombine)
-            ? `<label class="card-links-cand-check-wrap" title="Выбрать для объединения с другим предложением">
+            ? `<label class="card-links-cand-check-wrap" title="Выбрать для объединения предложений «Новая» в одну связку">
                 <input type="checkbox" class="card-links-cand-check" data-candidate-id="${cid}"${candChecked ? ' checked' : ''}>
               </label>`
             : '';
@@ -3263,11 +3288,15 @@
           html += `<tr class="card-links-cand-header"><td colspan="6">
             <div class="card-links-cand-block">
               <div class="card-links-cand-row">
-                ${reviewCheck || combineCheck}
-                <span class="card-links-cand-badge card-links-cand-badge--${badge.cls}">${escapeHtml(badge.text)}</span>
-                <span class="card-links-cand-title">${escapeHtml(title)}</span>
-                ${needsPicker ? pickerHtml : ''}
-                ${actionBtn}
+                <div class="card-links-cand-head">
+                  ${reviewCheck || combineCheck}
+                  <span class="card-links-cand-badge card-links-cand-badge--${badge.cls}">${escapeHtml(badge.text)}</span>
+                  <span class="card-links-cand-title">${escapeHtml(title)}</span>
+                </div>
+                <div class="card-links-cand-actions">
+                  ${needsPicker ? pickerHtml : ''}
+                  ${actionBtn}
+                </div>
               </div>
               ${cardLinkCandidateSourceHtml(c, mp)}
             </div>
@@ -3489,8 +3518,14 @@
     }
     const kind = candidate?.kind || checked[0]?.getAttribute('data-candidate-kind') || '';
     if (!checked.length && candidate && (candidate.items || []).length) {
-      if ((kind === 'attach' || kind === 'relocate') && candidate.items.length !== 1) {
-        return fail(kind === 'relocate' ? '«Перепривязать» — ровно один товар' : '«В связку» — ровно один товар');
+      if (kind === 'relocate' && candidate.items.length !== 1) {
+        return fail('«Перепривязать» — ровно один товар');
+      }
+      if (kind === 'attach' && candidate.items.length !== 1) {
+        return fail('«В связку» — ровно один товар');
+      }
+      if (kind === 'attach_batch' && candidate.items.length < 1) {
+        return fail('Пул пуст');
       }
       if ((kind === 'new_link' || kind === 'combine_suggestions') && candidate.items.length < 2) {
         return fail('Новая связка — минимум 2 товара');
@@ -3503,11 +3538,11 @@
       if (valErr) return fail(valErr);
     }
     if (checked.length) applySuggestedLinkFields(checked);
-    const linkKind = kind === 'combine_suggestions' ? 'new_link' : kind;
+    const linkKind = kind === 'combine_suggestions' ? 'new_link' : (kind === 'attach_batch' ? 'attach' : kind);
     const minCount = (linkKind === 'attach' || linkKind === 'relocate') ? 1 : (linkKind === 'merge_groups' ? 1 : 2);
     const itemCount = checked.length || (candidate?.items || []).length;
     if (!storeId || itemCount < minCount) {
-      const msg = (kind === 'attach' || kind === 'relocate')
+      const msg = (kind === 'attach' || kind === 'attach_batch' || kind === 'relocate')
         ? 'Выберите один товар'
         : (kind === 'merge_groups' ? 'Нет товаров для объединения' : 'Выберите минимум 2 карточки');
       return fail(msg);
@@ -3540,13 +3575,13 @@
         if (first) targetImt = Number(first.imt_id || 0);
         else if (checked[0]) targetImt = Number(checked[0].getAttribute('data-imt-id') || 0);
       }
-      if (kind === 'attach' && !targetImt) return fail('Выберите целевую связку');
+      if ((kind === 'attach' || kind === 'attach_batch') && !targetImt) return fail('Выберите целевую связку');
       if (kind === 'relocate' && !targetImt) return fail('Выберите связку для перепривязки');
       if (kind === 'merge_groups' && !targetImt) return fail('Выберите целевую связку');
-      if (kind !== 'attach' && kind !== 'relocate' && kind !== 'merge_groups' && nmIds.length < 2) {
+      if (kind !== 'attach' && kind !== 'attach_batch' && kind !== 'relocate' && kind !== 'merge_groups' && nmIds.length < 2) {
         return fail('Новая связка — минимум 2 карточки');
       }
-      if ((kind === 'attach' || kind === 'relocate') && nmIds.length < 1) return fail('Нет товара для связки');
+      if ((kind === 'attach' || kind === 'attach_batch' || kind === 'relocate') && nmIds.length < 1) return fail('Нет товара для связки');
       if (kind === 'merge_groups' && nmIds.length < 1) return fail('Нет товаров для объединения');
       const targetSize = cardLinksTargetGroupSize(targetImt, null);
       let sizeErr = '';
@@ -3562,7 +3597,9 @@
         ? `Переместить ${nmIds.length} карточку в imtID ${targetImt}?`
         : (kind === 'merge_groups'
           ? `Объединить ${nmIds.length} карточек в imtID ${targetImt}?`
-          : `Объединить ${nmIds.length} карточек WB в imtID ${targetImt}?`);
+          : (kind === 'attach_batch'
+            ? `Добавить ${nmIds.length} карточек в imtID ${targetImt}?`
+            : `Объединить ${nmIds.length} карточек WB в imtID ${targetImt}?`));
       const catalogRows = checked.length
         ? buildMergeCatalogRows(checked, { candidate, targetImt })
         : buildMergeCatalogRows([], { candidate, targetImt });
