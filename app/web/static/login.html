@@ -33,109 +33,115 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 0;
     }
 
-    /* —— Зайчик —— */
-    .bunny-stage {
-      width: 200px;
-      height: 148px;
+    /* —— Кот —— */
+    .mascot-stage {
+      width: 196px;
+      height: 118px;
       position: relative;
-      margin-bottom: -6px;
+      margin-bottom: -18px;
       z-index: 2;
-      filter: drop-shadow(0 10px 18px rgba(79, 70, 229, 0.14));
+      filter: drop-shadow(0 8px 16px rgba(15, 23, 42, 0.12));
     }
 
-    .bunny {
+    .mascot {
       width: 100%;
       height: 100%;
-      animation: bunnyFloat 4.2s ease-in-out infinite;
+      animation: mascotBob 3.8s ease-in-out infinite;
     }
 
-    @keyframes bunnyFloat {
+    @keyframes mascotBob {
       0%, 100% { transform: translateY(0); }
-      50% { transform: translateY(-7px); }
+      50% { transform: translateY(-5px); }
     }
 
-    .bunny svg { width: 100%; height: 100%; overflow: visible; }
+    .mascot svg { width: 100%; height: 100%; overflow: visible; display: block; }
 
-    .bunny-head {
-      transform-origin: 100px 118px;
-      transition: transform 0.55s cubic-bezier(0.34, 1.35, 0.64, 1);
+    .cat-head {
+      transform-origin: 98px 108px;
+      transition: transform 0.5s cubic-bezier(0.34, 1.3, 0.64, 1);
     }
 
-    .bunny-ear {
+    .cat-ear {
       transform-origin: center bottom;
-      transition: transform 0.45s cubic-bezier(0.34, 1.2, 0.64, 1);
+      transition: transform 0.4s ease;
     }
 
-    .bunny-ear--l { animation: earWiggleL 5s ease-in-out infinite; }
-    .bunny-ear--r { animation: earWiggleR 5.6s ease-in-out infinite 0.4s; }
+    .cat-ear--l { animation: earTwitchL 4.5s ease-in-out infinite; }
+    .cat-ear--r { animation: earTwitchR 5.2s ease-in-out infinite 0.3s; }
 
-    @keyframes earWiggleL {
-      0%, 88%, 100% { transform: rotate(0deg); }
-      92% { transform: rotate(-6deg); }
-      96% { transform: rotate(2deg); }
+    @keyframes earTwitchL {
+      0%, 92%, 100% { transform: rotate(0deg); }
+      95% { transform: rotate(-5deg); }
     }
-    @keyframes earWiggleR {
+    @keyframes earTwitchR {
       0%, 90%, 100% { transform: rotate(0deg); }
-      94% { transform: rotate(7deg); }
-      98% { transform: rotate(-2deg); }
+      94% { transform: rotate(6deg); }
     }
 
-    .bunny-pupil {
-      transition: transform 0.4s cubic-bezier(0.34, 1.2, 0.64, 1);
+    .cat-iris {
+      transition: transform 0.38s cubic-bezier(0.34, 1.2, 0.64, 1);
     }
 
-    .bunny-paw {
+    .cat-paw {
       opacity: 0;
-      transform: translateY(28px);
-      transition: opacity 0.35s ease, transform 0.45s cubic-bezier(0.34, 1.35, 0.64, 1);
+      transform: translateY(22px);
+      transition: opacity 0.3s ease, transform 0.42s cubic-bezier(0.34, 1.35, 0.64, 1);
     }
 
-    .bunny-blush { transition: opacity 0.35s ease; }
+    .cat-eyes-open { transition: opacity 0.22s ease; }
 
-    /* Состояния */
-    .bunny[data-state="away"] .bunny-head {
-      transform: rotate(-22deg) translateX(-10px);
+    .cat-tail {
+      transform-origin: 168px 108px;
+      animation: tailSwish 2.8s ease-in-out infinite;
     }
-    .bunny[data-state="away"] .bunny-pupil--l { transform: translate(-5px, 0); }
-    .bunny[data-state="away"] .bunny-pupil--r { transform: translate(-5px, 0); }
-    .bunny[data-state="away"] .bunny-ear--l { transform: rotate(-8deg); }
-    .bunny[data-state="away"] .bunny-ear--r { transform: rotate(-14deg); }
 
-    .bunny[data-state="user"] .bunny-head {
-      transform: rotate(-4deg) translateY(-2px);
+    @keyframes tailSwish {
+      0%, 100% { transform: rotate(0deg); }
+      50% { transform: rotate(8deg); }
     }
-    .bunny[data-state="user"] .bunny-pupil--l { transform: translate(-1px, -3px); }
-    .bunny[data-state="user"] .bunny-pupil--r { transform: translate(1px, -3px); }
 
-    .bunny[data-state="watch"] .bunny-head {
-      transform: rotate(14deg) translateY(6px);
+    /* idle — смотрит в сторону */
+    .mascot[data-state="away"] .cat-head {
+      transform: rotate(-16deg) translateX(-8px);
     }
-    .bunny[data-state="watch"] .bunny-pupil--l { transform: translate(2px, 7px) scale(1.15); }
-    .bunny[data-state="watch"] .bunny-pupil--r { transform: translate(2px, 7px) scale(1.15); }
-    .bunny[data-state="watch"] .bunny-ear--l { transform: rotate(6deg); }
-    .bunny[data-state="watch"] .bunny-ear--r { transform: rotate(10deg); }
-    .bunny[data-state="watch"] .bunny-blush { opacity: 1; }
+    .mascot[data-state="away"] .cat-iris--l { transform: translate(-5px, 1px); }
+    .mascot[data-state="away"] .cat-iris--r { transform: translate(-5px, 1px); }
+    .mascot[data-state="away"] .cat-ear--l { transform: rotate(-6deg); }
+    .mascot[data-state="away"] .cat-ear--r { transform: rotate(-10deg); }
 
-    .bunny[data-state="shy"] .bunny-head { transform: rotate(0deg) translateY(2px); }
-    .bunny[data-state="shy"] .bunny-paw { opacity: 1; transform: translateY(0); }
-    .bunny[data-state="shy"] .bunny-eye-open { opacity: 0; }
-    .bunny[data-state="shy"] .bunny-blush { opacity: 1; }
+    /* логин */
+    .mascot[data-state="user"] .cat-head {
+      transform: rotate(-6deg) translateY(-4px);
+    }
+    .mascot[data-state="user"] .cat-iris--l { transform: translate(0, -4px); }
+    .mascot[data-state="user"] .cat-iris--r { transform: translate(0, -4px); }
 
-    .bunny-eye-open { transition: opacity 0.25s ease; }
+    /* пароль — подглядывает */
+    .mascot[data-state="watch"] .cat-head {
+      transform: rotate(10deg) translateY(5px) scale(1.03);
+    }
+    .mascot[data-state="watch"] .cat-iris--l { transform: translate(1px, 6px) scale(1.12); }
+    .mascot[data-state="watch"] .cat-iris--r { transform: translate(1px, 6px) scale(1.12); }
+    .mascot[data-state="watch"] .cat-ear--l { transform: rotate(8deg); }
+    .mascot[data-state="watch"] .cat-ear--r { transform: rotate(12deg); }
+
+    /* ввод пароля — закрывает глаза лапами */
+    .mascot[data-state="shy"] .cat-head { transform: rotate(0deg) translateY(2px); }
+    .mascot[data-state="shy"] .cat-paw { opacity: 1; transform: translateY(0); }
+    .mascot[data-state="shy"] .cat-eyes-open { opacity: 0; }
 
     /* —— Карточка —— */
     .login-card {
       width: 100%;
-      background: rgba(255, 255, 255, 0.82);
+      background: rgba(255, 255, 255, 0.84);
       border: 1px solid rgba(226, 232, 240, 0.95);
       border-radius: 20px;
       box-shadow:
         0 20px 50px rgba(79, 70, 229, 0.1),
         0 4px 16px rgba(15, 23, 42, 0.06);
-      padding: 26px 28px 24px;
+      padding: 28px 28px 24px;
       backdrop-filter: blur(14px);
       -webkit-backdrop-filter: blur(14px);
       position: relative;
@@ -156,21 +162,13 @@
       to { background-position: 200% 0; }
     }
 
-    .login-title { text-align: center; margin: 4px 0 6px; }
+    .login-title { text-align: center; margin: 0 0 22px; }
     .login-title h1 {
       margin: 0;
       font-size: 1.65rem;
       color: #0f172a;
       font-family: var(--font-heading, system-ui);
       letter-spacing: -0.03em;
-    }
-
-    .login-sub {
-      color: #64748b;
-      font-size: 0.88rem;
-      margin: 0 0 22px;
-      line-height: 1.45;
-      text-align: center;
     }
 
     .login-card .form-group { margin-bottom: 14px; }
@@ -181,7 +179,6 @@
       font-weight: 600;
       color: #475569;
       margin-bottom: 6px;
-      letter-spacing: 0.01em;
     }
 
     .login-card .form-group input {
@@ -196,9 +193,7 @@
       transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
     }
 
-    .login-card .form-group input:hover {
-      border-color: #cbd5e1;
-    }
+    .login-card .form-group input:hover { border-color: #cbd5e1; }
 
     .login-card .form-group input:focus {
       outline: none;
@@ -208,8 +203,8 @@
     }
 
     .login-card .form-group--pass input:focus {
-      border-color: #ec4899;
-      box-shadow: 0 0 0 4px rgba(236, 72, 153, 0.16);
+      border-color: #f97316;
+      box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.15);
     }
 
     .login-actions {
@@ -225,16 +220,13 @@
     .login-actions .btn-primary {
       background: linear-gradient(135deg, #2563eb 0%, #6366f1 55%, #7c3aed 100%);
       box-shadow: 0 8px 20px rgba(79, 70, 229, 0.28);
-      transition: transform 0.15s ease, box-shadow 0.2s ease, filter 0.2s ease;
+      transition: transform 0.15s ease, box-shadow 0.2s ease;
     }
 
     .login-actions .btn-primary:hover:not(:disabled) {
       transform: translateY(-1px);
       box-shadow: 0 10px 24px rgba(79, 70, 229, 0.34);
-      filter: brightness(1.03);
     }
-
-    .login-actions .btn-primary:active:not(:disabled) { transform: translateY(0); }
 
     .login-actions .btn-secondary {
       background: rgba(15, 23, 42, 0.05);
@@ -245,14 +237,11 @@
       font-size: 0.88rem;
     }
 
-    .login-actions .btn-secondary:hover { background: rgba(15, 23, 42, 0.08); }
-
     .login-hint {
       margin-top: 14px;
       font-size: 0.8rem;
       color: #94a3b8;
       text-align: center;
-      line-height: 1.4;
     }
 
     .login-hint a { color: #6366f1; text-decoration: none; }
@@ -283,15 +272,12 @@
 
     @media (prefers-reduced-motion: reduce) {
       body.login-page::after,
-      .bunny,
-      .bunny-ear--l,
-      .bunny-ear--r,
+      .mascot,
+      .cat-ear--l,
+      .cat-ear--r,
+      .cat-tail,
       .login-card::before { animation: none; }
-      .bunny-head,
-      .bunny-pupil,
-      .bunny-paw,
-      .bunny-blush,
-      .bunny-eye-open { transition: none; }
+      .cat-head, .cat-iris, .cat-paw, .cat-eyes-open { transition: none; }
     }
   </style>
 </head>
@@ -299,68 +285,71 @@
   <div class="bg-noise" aria-hidden="true"></div>
   <div class="login-wrap">
     <div class="login-panel">
-      <div class="bunny-stage" aria-hidden="true">
-        <div class="bunny" id="bunny" data-state="away">
-          <svg viewBox="0 0 200 148" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <!-- тело -->
-            <ellipse cx="100" cy="128" rx="52" ry="22" fill="#e8d5c4"/>
-            <ellipse cx="100" cy="118" rx="44" ry="36" fill="#f5ebe0"/>
-            <ellipse cx="100" cy="122" rx="28" ry="22" fill="#fff8f2" opacity="0.85"/>
+      <div class="mascot-stage" aria-hidden="true">
+        <div class="mascot" id="mascot" data-state="away">
+          <svg viewBox="0 0 196 118" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <!-- хвост -->
+            <path class="cat-tail" d="M158 98 C178 78, 188 58, 182 38 C180 32, 174 30, 170 36 C168 42, 172 50, 168 58 C164 72, 156 86, 148 96 Z" fill="#e8954a" stroke="#c9732f" stroke-width="2"/>
 
-            <g class="bunny-head">
+            <g class="cat-head">
               <!-- уши -->
-              <g class="bunny-ear bunny-ear--l">
-                <ellipse cx="62" cy="42" rx="16" ry="38" fill="#f5ebe0" transform="rotate(-12 62 42)"/>
-                <ellipse cx="62" cy="44" rx="9" ry="26" fill="#ffc9d9" transform="rotate(-12 62 44)"/>
+              <g class="cat-ear cat-ear--l">
+                <path d="M48 52 L62 8 L78 48 Z" fill="#e8954a" stroke="#c9732f" stroke-width="2" stroke-linejoin="round"/>
+                <path d="M54 48 L62 22 L72 46 Z" fill="#ffb8a8"/>
               </g>
-              <g class="bunny-ear bunny-ear--r">
-                <ellipse cx="138" cy="42" rx="16" ry="38" fill="#f5ebe0" transform="rotate(12 138 42)"/>
-                <ellipse cx="138" cy="44" rx="9" ry="26" fill="#ffc9d9" transform="rotate(12 138 44)"/>
+              <g class="cat-ear cat-ear--r">
+                <path d="M118 48 L134 8 L150 52 Z" fill="#e8954a" stroke="#c9732f" stroke-width="2" stroke-linejoin="round"/>
+                <path d="M124 46 L134 22 L144 48 Z" fill="#ffb8a8"/>
               </g>
 
-              <!-- голова -->
-              <circle cx="100" cy="88" r="46" fill="#f5ebe0"/>
-              <ellipse cx="100" cy="96" rx="30" ry="24" fill="#fff8f2" opacity="0.7"/>
+              <!-- мордочка -->
+              <ellipse cx="98" cy="72" rx="54" ry="48" fill="#f0a85c"/>
+              <ellipse cx="98" cy="80" rx="36" ry="30" fill="#ffd4a8"/>
 
-              <!-- румянец -->
-              <g class="bunny-blush" opacity="0.55">
-                <ellipse cx="68" cy="96" rx="10" ry="6" fill="#ffb8c9"/>
-                <ellipse cx="132" cy="96" rx="10" ry="6" fill="#ffb8c9"/>
-              </g>
+              <!-- полоски -->
+              <path d="M98 38 L98 52" stroke="#c9732f" stroke-width="3" stroke-linecap="round" opacity="0.35"/>
+              <path d="M82 42 L86 54" stroke="#c9732f" stroke-width="2.5" stroke-linecap="round" opacity="0.3"/>
+              <path d="M114 42 L110 54" stroke="#c9732f" stroke-width="2.5" stroke-linecap="round" opacity="0.3"/>
 
               <!-- глаза -->
-              <g class="bunny-eye-open">
-                <ellipse cx="78" cy="82" rx="11" ry="13" fill="#fff"/>
-                <ellipse cx="122" cy="82" rx="11" ry="13" fill="#fff"/>
-                <circle class="bunny-pupil bunny-pupil--l" cx="80" cy="84" r="5.5" fill="#2d2640"/>
-                <circle class="bunny-pupil bunny-pupil--r" cx="124" cy="84" r="5.5" fill="#2d2640"/>
-                <circle cx="82" cy="81" r="2" fill="#fff" opacity="0.9"/>
-                <circle cx="126" cy="81" r="2" fill="#fff" opacity="0.9"/>
+              <g class="cat-eyes-open">
+                <!-- левый -->
+                <ellipse cx="72" cy="68" rx="14" ry="16" fill="#fff" stroke="#c9732f" stroke-width="1.5"/>
+                <g class="cat-iris cat-iris--l">
+                  <circle cx="72" cy="70" r="9" fill="#4ade80"/>
+                  <circle cx="72" cy="70" r="5" fill="#1a1a2e"/>
+                  <circle cx="75" cy="67" r="2.2" fill="#fff"/>
+                </g>
+                <!-- правый -->
+                <ellipse cx="124" cy="68" rx="14" ry="16" fill="#fff" stroke="#c9732f" stroke-width="1.5"/>
+                <g class="cat-iris cat-iris--r">
+                  <circle cx="124" cy="70" r="9" fill="#4ade80"/>
+                  <circle cx="124" cy="70" r="5" fill="#1a1a2e"/>
+                  <circle cx="127" cy="67" r="2.2" fill="#fff"/>
+                </g>
               </g>
 
-              <!-- нос и рот -->
-              <ellipse cx="100" cy="98" rx="5" ry="4" fill="#f4a5b8"/>
-              <path d="M100 102 Q94 108 90 106" stroke="#c4a99a" stroke-width="2" stroke-linecap="round" fill="none"/>
-              <path d="M100 102 Q106 108 110 106" stroke="#c4a99a" stroke-width="2" stroke-linecap="round" fill="none"/>
+              <!-- нос, рот, усы -->
+              <path d="M98 82 L92 88 L104 88 Z" fill="#e879a9" stroke="#c9732f" stroke-width="1"/>
+              <path d="M98 88 Q92 94 88 92" stroke="#8b5a2b" stroke-width="2" fill="none" stroke-linecap="round"/>
+              <path d="M98 88 Q104 94 108 92" stroke="#8b5a2b" stroke-width="2" fill="none" stroke-linecap="round"/>
+              <path d="M52 78 H28" stroke="#8b5a2b" stroke-width="1.5" stroke-linecap="round" opacity="0.55"/>
+              <path d="M52 84 H24" stroke="#8b5a2b" stroke-width="1.5" stroke-linecap="round" opacity="0.45"/>
+              <path d="M144 78 H168" stroke="#8b5a2b" stroke-width="1.5" stroke-linecap="round" opacity="0.55"/>
+              <path d="M144 84 H172" stroke="#8b5a2b" stroke-width="1.5" stroke-linecap="round" opacity="0.45"/>
 
-              <!-- усы -->
-              <path d="M58 94 H38" stroke="#c4a99a" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
-              <path d="M58 100 H34" stroke="#c4a99a" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
-              <path d="M142 94 H162" stroke="#c4a99a" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
-              <path d="M142 100 H166" stroke="#c4a99a" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
-
-              <!-- лапки (закрывают глаза) -->
-              <g class="bunny-paw bunny-paw--l">
-                <ellipse cx="76" cy="80" rx="18" ry="14" fill="#f5ebe0" stroke="#e8d5c4" stroke-width="2"/>
-                <circle cx="70" cy="78" r="2.5" fill="#ffc9d9" opacity="0.7"/>
-                <circle cx="78" cy="76" r="2.5" fill="#ffc9d9" opacity="0.7"/>
-                <circle cx="86" cy="78" r="2.5" fill="#ffc9d9" opacity="0.7"/>
+              <!-- лапы — закрывают глаза -->
+              <g class="cat-paw cat-paw--l">
+                <ellipse cx="70" cy="66" rx="20" ry="15" fill="#f0a85c" stroke="#c9732f" stroke-width="2"/>
+                <ellipse cx="62" cy="64" rx="4" ry="3" fill="#ffb8a8"/>
+                <ellipse cx="70" cy="62" rx="4" ry="3" fill="#ffb8a8"/>
+                <ellipse cx="78" cy="64" rx="4" ry="3" fill="#ffb8a8"/>
               </g>
-              <g class="bunny-paw bunny-paw--r">
-                <ellipse cx="124" cy="80" rx="18" ry="14" fill="#f5ebe0" stroke="#e8d5c4" stroke-width="2"/>
-                <circle cx="118" cy="78" r="2.5" fill="#ffc9d9" opacity="0.7"/>
-                <circle cx="126" cy="76" r="2.5" fill="#ffc9d9" opacity="0.7"/>
-                <circle cx="134" cy="78" r="2.5" fill="#ffc9d9" opacity="0.7"/>
+              <g class="cat-paw cat-paw--r">
+                <ellipse cx="126" cy="66" rx="20" ry="15" fill="#f0a85c" stroke="#c9732f" stroke-width="2"/>
+                <ellipse cx="118" cy="64" rx="4" ry="3" fill="#ffb8a8"/>
+                <ellipse cx="126" cy="62" rx="4" ry="3" fill="#ffb8a8"/>
+                <ellipse cx="134" cy="64" rx="4" ry="3" fill="#ffb8a8"/>
               </g>
             </g>
           </svg>
@@ -371,7 +360,6 @@
         <div class="login-title">
           <h1>Market<span class="title-gradient">AI</span></h1>
         </div>
-        <p class="login-sub">Привет! Зайчик пропустит только своих.</p>
 
         <div class="form-group">
           <label for="login-username">Логин</label>
@@ -395,52 +383,40 @@
 
   <script>
     (function () {
-      var bunny = document.getElementById('bunny');
+      var mascot = document.getElementById('mascot');
       var errEl = document.getElementById('login-err');
       var userEl = document.getElementById('login-username');
       var passEl = document.getElementById('login-password');
       var btnEl = document.getElementById('btn-login');
       var passHover = false;
 
-      function setBunnyState(state) {
-        if (bunny) bunny.setAttribute('data-state', state);
+      function setState(state) {
+        if (mascot) mascot.setAttribute('data-state', state);
       }
 
-      function refreshBunny() {
+      function refreshMascot() {
         var passFocused = document.activeElement === passEl;
         var userFocused = document.activeElement === userEl;
         var hasPass = (passEl.value || '').length > 0;
 
-        if (passFocused && hasPass) {
-          setBunnyState('shy');
-        } else if (passFocused || passHover) {
-          setBunnyState('watch');
-        } else if (userFocused) {
-          setBunnyState('user');
-        } else {
-          setBunnyState('away');
-        }
+        if (passFocused && hasPass) setState('shy');
+        else if (passFocused || passHover) setState('watch');
+        else if (userFocused) setState('user');
+        else setState('away');
       }
 
-      passEl.addEventListener('mouseenter', function () {
-        passHover = true;
-        refreshBunny();
-      });
-      passEl.addEventListener('mouseleave', function () {
-        passHover = false;
-        refreshBunny();
-      });
-      passEl.addEventListener('focus', refreshBunny);
-      passEl.addEventListener('blur', refreshBunny);
-      passEl.addEventListener('input', refreshBunny);
-
-      userEl.addEventListener('focus', refreshBunny);
-      userEl.addEventListener('blur', refreshBunny);
+      passEl.addEventListener('mouseenter', function () { passHover = true; refreshMascot(); });
+      passEl.addEventListener('mouseleave', function () { passHover = false; refreshMascot(); });
+      passEl.addEventListener('focus', refreshMascot);
+      passEl.addEventListener('blur', refreshMascot);
+      passEl.addEventListener('input', refreshMascot);
+      userEl.addEventListener('focus', refreshMascot);
+      userEl.addEventListener('blur', refreshMascot);
 
       function showError(msg) {
         errEl.textContent = msg || 'Ошибка';
         errEl.classList.add('visible');
-        setBunnyState('away');
+        setState('away');
       }
 
       function doLogin() {
@@ -461,7 +437,6 @@
         })
           .then(function (res) {
             if (res.ok) {
-              setBunnyState('user');
               window.location.href = '/app';
               return;
             }
@@ -474,10 +449,10 @@
           });
       }
 
-      if (btnEl) btnEl.addEventListener('click', doLogin);
+      btnEl.addEventListener('click', doLogin);
       passEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
       userEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') passEl.focus(); });
-      setTimeout(function () { userEl.focus(); refreshBunny(); }, 120);
+      setTimeout(function () { userEl.focus(); refreshMascot(); }, 120);
     })();
   </script>
 </body>
