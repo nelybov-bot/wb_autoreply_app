@@ -2513,6 +2513,51 @@
     };
   }
 
+  function cardLinksCombinableCandidates() {
+    return cardLinksCandidateGroups().filter((c) => cardLinksCanCombineCandidate(c));
+  }
+
+  function cardLinksPruneSelectionSets() {
+    const combinable = new Set(
+      cardLinksCombinableCandidates().map((c) => String(c.candidate_id || '')).filter(Boolean),
+    );
+    for (const id of [...cardLinksSelectedCandidates]) {
+      if (!combinable.has(id)) cardLinksSelectedCandidates.delete(id);
+    }
+    const reviewable = new Set(
+      cardLinksReviewGroups()
+        .filter((c) => cardLinksCanBulkReview(c))
+        .map((c) => String(c.candidate_id || ''))
+        .filter(Boolean),
+    );
+    for (const id of [...cardLinksSelectedReview]) {
+      if (!reviewable.has(id)) cardLinksSelectedReview.delete(id);
+    }
+  }
+
+  function cardLinksResolvedSelectedCandidates() {
+    cardLinksPruneSelectionSets();
+    return [...cardLinksSelectedCandidates]
+      .map((id) => findCardLinksCandidate(id))
+      .filter((c) => c && cardLinksCanCombineCandidate(c));
+  }
+
+  function cardLinksResolvedSelectedReview() {
+    cardLinksPruneSelectionSets();
+    return [...cardLinksSelectedReview]
+      .map((id) => findCardLinksCandidate(id))
+      .filter((c) => c && cardLinksCanBulkReview(c));
+  }
+
+  function cardLinksSelectAllCombinable() {
+    cardLinksSelectedCandidates.clear();
+    for (const c of cardLinksCombinableCandidates()) {
+      const id = String(c.candidate_id || '').trim();
+      if (id) cardLinksSelectedCandidates.add(id);
+    }
+    renderCardLinksTable();
+  }
+
   function cardLinksCanBulkReview(c) {
     const kind = c?.kind || '';
     return kind === 'merge_groups' || kind === 'relocate';
@@ -2522,18 +2567,20 @@
     const bar = document.getElementById('card-links-review-bar');
     const label = document.getElementById('card-links-review-label');
     if (!bar || !label) return;
-    const ids = [...cardLinksSelectedReview];
-    if (cardLinksView !== 'review' || !ids.length) {
+    const available = cardLinksReviewGroups().filter((c) => cardLinksCanBulkReview(c));
+    if (cardLinksView !== 'review' || !available.length) {
       bar.hidden = true;
       return;
     }
-    const cands = ids.map((id) => findCardLinksCandidate(id)).filter((c) => c && cardLinksCanBulkReview(c));
+    const cands = cardLinksResolvedSelectedReview();
     const mergeN = cands.filter((c) => c.kind === 'merge_groups').length;
     const relocN = cands.filter((c) => c.kind === 'relocate').length;
     const parts = [];
     if (mergeN) parts.push(`${mergeN} объединений`);
     if (relocN) parts.push(`${relocN} перепривязок`);
-    label.textContent = `Выбрано ${cands.length}: ${parts.join(', ') || 'операции'}`;
+    label.textContent = cands.length
+      ? `Выбрано ${cands.length}: ${parts.join(', ') || 'операции'}`
+      : `Доступно ${available.length} — отметьте или нажмите «Все»`;
     const btn = document.getElementById('btn-card-links-review-apply');
     if (btn) btn.disabled = cands.length < 1;
     bar.hidden = false;
@@ -2542,25 +2589,28 @@
   function cardLinksSelectAllReview() {
     cardLinksSelectedReview.clear();
     for (const c of cardLinksReviewGroups()) {
-      if (cardLinksCanBulkReview(c)) {
-        cardLinksSelectedReview.add(String(c.candidate_id || ''));
-      }
+      if (!cardLinksCanBulkReview(c)) continue;
+      const id = String(c.candidate_id || '').trim();
+      if (id) cardLinksSelectedReview.add(id);
     }
     renderCardLinksTable();
   }
 
   async function runBulkReviewActions() {
     if (_cardLinksActionBusy) return;
-    const cands = [...cardLinksSelectedReview]
-      .map((id) => findCardLinksCandidate(id))
-      .filter((c) => c && cardLinksCanBulkReview(c));
+    const cands = cardLinksResolvedSelectedReview();
     cands.sort((a, b) => {
       const pa = a.kind === 'merge_groups' ? 0 : 1;
       const pb = b.kind === 'merge_groups' ? 0 : 1;
       return pa - pb || (b.target_group_count || 0) - (a.target_group_count || 0);
     });
     if (!cands.length) {
-      toast('Выберите объединения или перепривязки', 'error');
+      toast(
+        cardLinksSelectedReview.size
+          ? 'Выбранные пункты устарели — обновите каталог и выберите снова'
+          : 'Выберите объединения или перепривязки',
+        'error',
+      );
       return;
     }
     const pauseSec = Math.ceil(CARD_LINKS_ACTION_COOLDOWN_MS / 1000);
@@ -2610,18 +2660,24 @@
     const bar = document.getElementById('card-links-combine-bar');
     const label = document.getElementById('card-links-combine-label');
     if (!bar || !label) return;
-    const ids = [...cardLinksSelectedCandidates];
-    if (cardLinksView !== 'candidates' || ids.length < 2) {
+    const available = cardLinksCombinableCandidates();
+    if (cardLinksView !== 'candidates' || !available.length) {
       bar.hidden = true;
       return;
     }
-    const cands = ids.map((id) => findCardLinksCandidate(id)).filter(Boolean);
+    const cands = cardLinksResolvedSelectedCandidates();
     const items = cardLinksMergeCandidateItems(cands);
-    const sameCat = cardLinksCandidatesSameCategory(cands);
-    const sizeErr = cardLinksValidateLinkSize(items.length, 0);
-    label.textContent = sameCat
-      ? `Выбрано ${cands.length} предложения · ${items.length} товаров (макс. ${MAX_LINK_ITEMS})`
-      : `Разные категории — выберите предложения одной категории`;
+    const sameCat = cands.length >= 2 && cardLinksCandidatesSameCategory(cands);
+    const sizeErr = sameCat ? cardLinksValidateLinkSize(items.length, 0) : '';
+    if (!cands.length) {
+      label.textContent = `Можно объединить ${available.length} предложений — отметьте или нажмите «Все»`;
+    } else if (cands.length < 2) {
+      label.textContent = `Выбрано 1 — отметьте ещё одно предложение той же категории`;
+    } else if (!sameCat) {
+      label.textContent = 'Разные категории — выберите предложения одной категории';
+    } else {
+      label.textContent = `Выбрано ${cands.length} предложения · ${items.length} товаров (макс. ${MAX_LINK_ITEMS})`;
+    }
     const btn = document.getElementById('btn-card-links-combine-candidates');
     if (btn) btn.disabled = !sameCat || !!sizeErr;
     bar.hidden = false;
@@ -2967,6 +3023,32 @@
     mergeBar.hidden = cardLinksView !== 'catalog' || !hasData || !selected;
   }
 
+  function syncCardLinksCheckAllState() {
+    const checkAll = document.getElementById('card-links-check-all');
+    if (!checkAll) return;
+    if (cardLinksView === 'candidates') {
+      const available = cardLinksCombinableCandidates();
+      const selected = available.filter((c) => cardLinksSelectedCandidates.has(String(c.candidate_id || '')));
+      checkAll.disabled = !available.length;
+      checkAll.checked = available.length > 0 && selected.length === available.length;
+      checkAll.indeterminate = selected.length > 0 && selected.length < available.length;
+      return;
+    }
+    if (cardLinksView === 'review') {
+      const available = cardLinksReviewGroups().filter((c) => cardLinksCanBulkReview(c));
+      const selected = available.filter((c) => cardLinksSelectedReview.has(String(c.candidate_id || '')));
+      checkAll.disabled = !available.length;
+      checkAll.checked = available.length > 0 && selected.length === available.length;
+      checkAll.indeterminate = selected.length > 0 && selected.length < available.length;
+      return;
+    }
+    const all = document.querySelectorAll('.card-links-check');
+    const checked = document.querySelectorAll('.card-links-check:checked');
+    checkAll.disabled = !all.length;
+    checkAll.checked = all.length > 0 && checked.length === all.length;
+    checkAll.indeterminate = checked.length > 0 && checked.length < all.length;
+  }
+
   function syncCardLinksTableMode() {
     const table = document.getElementById('card-links-table');
     if (!table) return;
@@ -2974,9 +3056,8 @@
     table.classList.toggle('card-links--catalog', cardLinksView === 'catalog');
     const thead = table.querySelector('thead');
     if (thead) thead.hidden = cardLinksView === 'candidates' || cardLinksView === 'review';
-    const checkAll = document.getElementById('card-links-check-all');
-    if (checkAll) checkAll.disabled = cardLinksView === 'candidates' || cardLinksView === 'review';
     syncCardLinksMergeBarVisibility();
+    syncCardLinksCheckAllState();
   }
 
   function cardLinkCandidateBadge(c) {
@@ -3060,6 +3141,7 @@
   function renderCardLinksTable() {
     const tbody = document.getElementById('card-links-tbody');
     if (!tbody) return;
+    cardLinksPruneSelectionSets();
     const mp = cardLinksMarketplace();
     syncCardLinksTableMode();
     let html = '';
@@ -3673,10 +3755,9 @@
     document.getElementById('btn-card-links-merge')?.addEventListener('click', () => { void mergeSelectedCardLinks(); });
     document.getElementById('btn-card-links-disconnect')?.addEventListener('click', () => { void disconnectSelectedCardLinks(); });
     document.getElementById('btn-card-links-combine-candidates')?.addEventListener('click', () => {
-      const ids = [...cardLinksSelectedCandidates];
-      const cands = ids.map((id) => findCardLinksCandidate(id)).filter(Boolean);
+      const cands = cardLinksResolvedSelectedCandidates();
       if (cands.length < 2) {
-        toast('Выберите минимум 2 предложения', 'error');
+        toast('Выберите минимум 2 предложения одной категории', 'error');
         return;
       }
       if (!cardLinksCandidatesSameCategory(cands)) {
@@ -3695,6 +3776,7 @@
       }
       void mergeSelectedCardLinks({ candidate: combined });
     });
+    document.getElementById('btn-card-links-combine-select-all')?.addEventListener('click', () => { cardLinksSelectAllCombinable(); });
     document.getElementById('btn-card-links-combine-clear')?.addEventListener('click', () => {
       cardLinksSelectedCandidates.clear();
       renderCardLinksTable();
@@ -3712,6 +3794,7 @@
         if (e.target.checked) cardLinksSelectedReview.add(id);
         else cardLinksSelectedReview.delete(id);
         syncCardLinksReviewBar();
+        syncCardLinksCheckAllState();
         return;
       }
       if (e.target.matches('.card-links-cand-check')) {
@@ -3720,6 +3803,7 @@
         if (e.target.checked) cardLinksSelectedCandidates.add(id);
         else cardLinksSelectedCandidates.delete(id);
         syncCardLinksCombineBar();
+        syncCardLinksCheckAllState();
         return;
       }
       if (e.target.matches('.card-links-check')) {
@@ -3744,11 +3828,27 @@
       }
     });
     document.getElementById('card-links-check-all')?.addEventListener('change', (e) => {
-      if (cardLinksView === 'candidates' || cardLinksView === 'review') return;
       const on = !!e.target.checked;
+      if (cardLinksView === 'candidates') {
+        if (on) cardLinksSelectAllCombinable();
+        else {
+          cardLinksSelectedCandidates.clear();
+          renderCardLinksTable();
+        }
+        return;
+      }
+      if (cardLinksView === 'review') {
+        if (on) cardLinksSelectAllReview();
+        else {
+          cardLinksSelectedReview.clear();
+          renderCardLinksTable();
+        }
+        return;
+      }
       document.querySelectorAll('.card-links-check').forEach(el => { el.checked = on; });
       renderCardLinksMergePickers();
       syncCardLinksMergeBarVisibility();
+      syncCardLinksCheckAllState();
     });
     document.querySelectorAll('.card-links-tab').forEach(btn => {
       btn.addEventListener('click', () => {
