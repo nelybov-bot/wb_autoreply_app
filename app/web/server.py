@@ -85,6 +85,7 @@ from app.core.ozon_client import OzonClient
 from app.core.card_links import (
     ai_suggest_card_links,
     apply_link_status,
+    build_wb_catalog_payload,
     fetch_ozon_catalog,
     fetch_wb_catalog,
     group_ozon_rows,
@@ -3385,6 +3386,9 @@ def _card_links_http_error(marketplace: str, e: HttpStatusError) -> HTTPExceptio
     return HTTPException(e.status, f"{mp} API {e.status}: {body or 'ошибка'}")
 
 
+CARD_LINKS_CATALOG_TIMEOUT_SEC = 600.0
+
+
 @app.get("/api/card-links/wb/{store_id}/catalog")
 async def api_card_links_wb_catalog(
     store_id: int,
@@ -3396,42 +3400,25 @@ async def api_card_links_wb_catalog(
 ):
     s = _require_wb_store_for_chats(db, store_id)
     vendor_codes = parse_articles_csv(articles)
-    try:
+
+    async def _load() -> dict:
         rows, catalog_meta = await fetch_wb_catalog(
             s.api_key,
             vendor_codes=vendor_codes or None,
             text_search=(q or "").strip() or None,
             max_pages=max_pages,
         )
+        return build_wb_catalog_payload(rows, catalog_meta, store_id=store_id)
+
+    try:
+        return await asyncio.wait_for(_load(), timeout=CARD_LINKS_CATALOG_TIMEOUT_SEC)
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            504,
+            "Загрузка каталога WB превысила 10 минут — уменьшите «Страниц каталога» или повторите позже.",
+        ) from None
     except HttpStatusError as e:
         raise _card_links_http_error("wb", e) from e
-    groups = group_wb_rows(rows)
-    apply_link_status(rows, groups)
-    rows = sort_catalog_rows(rows, marketplace="wb")
-    candidates = suggest_link_candidates(rows, marketplace="wb")
-    attach = group_attach_suggestions(
-        suggest_attach_to_groups(rows, groups, marketplace="wb"),
-        marketplace="wb",
-    )
-    review = suggest_review_linked_groups(groups, marketplace="wb")
-    combine = suggest_combine_candidates(candidates, marketplace="wb")
-    linked_groups = sum(1 for g in groups if g.get("linked"))
-    unlinked_count = sum(1 for r in rows if not r.get("linked"))
-    return {
-        "store_id": store_id,
-        "marketplace": "wb",
-        "count": len(rows),
-        "unlinked_count": unlinked_count,
-        "linked_groups": linked_groups,
-        "max_link_items": 30,
-        "items": rows,
-        "groups": groups,
-        "candidates": candidates,
-        "attach_suggestions": attach,
-        "review_suggestions": review,
-        "combine_suggestions": combine,
-        "catalog_meta": catalog_meta,
-    }
 
 
 @app.get("/api/card-links/ozon/{store_id}/catalog")

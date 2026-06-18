@@ -3589,7 +3589,9 @@
     if (!opts.quiet) setPanelLoading('card-links-loading', true, loadingText);
     if (!opts.quiet) setCardLinksStatus('');
     try {
-      const data = await api(`/card-links/${mp}/${storeId}/catalog?${qs.toString()}`);
+      const data = await api(`/card-links/${mp}/${storeId}/catalog?${qs.toString()}`, {
+        timeoutMs: 600000,
+      });
       cardLinksSelectedApply.clear();
       cardLinksSelectedReview.clear();
       cardLinksData = {

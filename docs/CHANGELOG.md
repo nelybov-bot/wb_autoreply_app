@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-06-18 — WB каталог >1000 карточек
+
+### Backend
+- `wb_content_client.list_cards_all`: корректная пагинация по размеру страницы (не `cursor.total`), дедуп nmID, одна HTTP-сессия на весь каталог
+- `card_links`: ускорены эвристики предложений на больших каталогах (лимиты O(n²) кластеризации и attach/review)
+- `build_wb_catalog_payload`, таймаут 10 мин на `/api/card-links/wb/.../catalog`
+
+### Frontend
+- Загрузка каталога card-links: `timeoutMs: 600000` (`app.js?v=45`)
+
+---
+
 ## 2026-06-16 — Корова: SVG вместо CSS
 
 ### Frontend

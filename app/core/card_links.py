@@ -60,6 +60,12 @@ _PACK_RE = re.compile(
 )
 
 MAX_LINK_ITEMS = 30
+# Эвристики предложений: O(n²) по названиям — ограничиваем на больших каталогах
+_CLUSTER_TITLE_SIMILARITY_MAX = 120
+_ATTACH_SUGGEST_LIMIT = 200
+_ATTACH_UNLINKED_SCAN_CAP = 1000
+_ATTACH_TARGET_GROUP_CAP = 150
+_REVIEW_MULTI_GROUP_CAP = 120
 
 _TITLE_STOP_WORDS = frozenset(
     {
@@ -1003,6 +1009,14 @@ def _cluster_items_by_title(items: List[dict]) -> List[List[dict]]:
     """Группирует товары с похожими названиями (для Ozon и мягкой эвристики)."""
     if len(items) < 2:
         return []
+    if len(items) > _CLUSTER_TITLE_SIMILARITY_MAX:
+        buckets: Dict[str, List[dict]] = {}
+        for it in items:
+            base = _title_base_key(it.get("title") or "")
+            if not base:
+                continue
+            buckets.setdefault(base, []).append(it)
+        return [grp for grp in buckets.values() if len(grp) >= 2]
     n = len(items)
     parent = list(range(n))
 
@@ -1146,6 +1160,13 @@ def suggest_attach_to_groups(
     if not unlinked:
         return []
     multi = [g for g in groups if g.get("linked") and len(g.get("items") or []) > 1]
+    if len(multi) > _ATTACH_TARGET_GROUP_CAP:
+        multi = sorted(multi, key=lambda g: -len(g.get("items") or []))[:_ATTACH_TARGET_GROUP_CAP]
+    unlinked_scan = (
+        unlinked[:_ATTACH_UNLINKED_SCAN_CAP]
+        if len(unlinked) > _ATTACH_UNLINKED_SCAN_CAP
+        else unlinked
+    )
     out: List[dict] = []
     seq = 0
     seen: set[str] = set()
@@ -1156,7 +1177,7 @@ def suggest_attach_to_groups(
         if len(ref_items) >= MAX_LINK_ITEMS:
             continue
         ref = ref_items[0]
-        for u in unlinked:
+        for u in unlinked_scan:
             if marketplace == "wb":
                 u_pid = int(u.get("parent_id") or 0)
                 g_pid = int(g.get("parent_id") or ref.get("parent_id") or 0)
@@ -1199,6 +1220,10 @@ def suggest_attach_to_groups(
                 entry["suggested_model_name"] = str(g.get("group_label") or "").strip()
                 entry["category_key"] = u.get("category_key")
             out.append(entry)
+            if len(out) >= _ATTACH_SUGGEST_LIMIT:
+                break
+        if len(out) >= _ATTACH_SUGGEST_LIMIT:
+            break
     out.sort(
         key=lambda x: (
             str(x.get("category_label") or "").lower(),
@@ -1206,7 +1231,7 @@ def suggest_attach_to_groups(
             str((x.get("items") or [{}])[0].get("title") or "").lower(),
         )
     )
-    return out[:200]
+    return out[:_ATTACH_SUGGEST_LIMIT]
 
 
 def group_attach_suggestions(suggestions: List[dict], *, marketplace: str) -> List[dict]:
@@ -1427,6 +1452,8 @@ def suggest_review_linked_groups(
 ) -> List[dict]:
     """Перепроверка существующих связок: перепривязка и объединение двух групп."""
     multi = _linked_groups(groups)
+    if len(multi) > _REVIEW_MULTI_GROUP_CAP:
+        multi = sorted(multi, key=lambda g: -len(g.get("items") or []))[:_REVIEW_MULTI_GROUP_CAP]
     if len(multi) < 1:
         return []
 
@@ -1988,6 +2015,42 @@ async def fetch_wb_catalog(
         rows.append(row)
     catalog_meta["count"] = len(rows)
     return rows, catalog_meta
+
+
+def build_wb_catalog_payload(
+    rows: List[dict],
+    catalog_meta: dict,
+    *,
+    store_id: int,
+) -> dict:
+    """Каталог WB + предложения связок (синхронная обработка после fetch_wb_catalog)."""
+    groups = group_wb_rows(rows)
+    apply_link_status(rows, groups)
+    rows = sort_catalog_rows(rows, marketplace="wb")
+    candidates = suggest_link_candidates(rows, marketplace="wb")
+    attach = group_attach_suggestions(
+        suggest_attach_to_groups(rows, groups, marketplace="wb"),
+        marketplace="wb",
+    )
+    review = suggest_review_linked_groups(groups, marketplace="wb")
+    combine = suggest_combine_candidates(candidates, marketplace="wb")
+    linked_groups = sum(1 for g in groups if g.get("linked"))
+    unlinked_count = sum(1 for r in rows if not r.get("linked"))
+    return {
+        "store_id": store_id,
+        "marketplace": "wb",
+        "count": len(rows),
+        "unlinked_count": unlinked_count,
+        "linked_groups": linked_groups,
+        "max_link_items": MAX_LINK_ITEMS,
+        "items": rows,
+        "groups": groups,
+        "candidates": candidates,
+        "attach_suggestions": attach,
+        "review_suggestions": review,
+        "combine_suggestions": combine,
+        "catalog_meta": catalog_meta,
+    }
 
 
 def _ozon_attrs_page_cursor(page: dict) -> Tuple[str, bool]:

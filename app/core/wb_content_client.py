@@ -14,6 +14,7 @@ from .net import HttpStatusError, RateLimiter, USER_AGENT
 log = logging.getLogger("wb.content")
 
 BASE = "https://content-api.wildberries.ru"
+_PAGE_LIMIT = 100
 
 
 class WbContentClient:
@@ -127,7 +128,7 @@ class WbContentClient:
         elif nm_ids and len(nm_ids) == 1:
             # nmID в filter не работает — ищем по vendorCode через textSearch снаружи
             pass
-        cursor: Dict[str, Any] = {"limit": min(max(int(limit), 1), 100)}
+        cursor: Dict[str, Any] = {"limit": min(max(int(limit), 1), _PAGE_LIMIT)}
         if cursor_updated_at:
             cursor["updatedAt"] = cursor_updated_at
         if cursor_nm_id is not None:
@@ -140,6 +141,49 @@ class WbContentClient:
             }
         }
         data = await self._request("POST", "/content/v2/get/cards/list", json_body=body)
+        return data if isinstance(data, dict) else {}
+
+    async def _list_cards_with_session(
+        self,
+        session: aiohttp.ClientSession,
+        *,
+        limit: int = _PAGE_LIMIT,
+        text_search: Optional[str] = None,
+        vendor_codes: Optional[List[str]] = None,
+        cursor_updated_at: Optional[str] = None,
+        cursor_nm_id: Optional[int] = None,
+    ) -> dict:
+        """POST /content/v2/get/cards/list — одна страница (общая сессия для пагинации)."""
+        filt: Dict[str, Any] = {"withPhoto": -1}
+        if text_search:
+            filt["textSearch"] = str(text_search).strip()
+        if vendor_codes:
+            filt["textSearch"] = ",".join(v.strip() for v in vendor_codes if v and str(v).strip())
+        cursor: Dict[str, Any] = {"limit": min(max(int(limit), 1), _PAGE_LIMIT)}
+        if cursor_updated_at:
+            cursor["updatedAt"] = cursor_updated_at
+        if cursor_nm_id is not None:
+            cursor["nmID"] = int(cursor_nm_id)
+        body = {
+            "settings": {
+                "sort": {"ascending": False},
+                "filter": filt,
+                "cursor": cursor,
+            }
+        }
+        url = BASE + "/content/v2/get/cards/list"
+        await self._read_limiter.wait()
+        async with session.request("POST", url, headers=self._headers(), json=body) as resp:
+            txt = await resp.text()
+            if resp.status >= 400:
+                raise HttpStatusError(resp.status, txt)
+            if not txt:
+                return {}
+            try:
+                data = json.loads(txt)
+            except Exception as e:
+                log.warning("WB Content API invalid JSON: %s", e)
+                raise HttpStatusError(502, f"Invalid JSON: {str(e)[:200]}") from e
         return data if isinstance(data, dict) else {}
 
     async def list_cards_all(
@@ -170,37 +214,63 @@ class WbContentClient:
             return out
 
         rows: List[dict] = []
+        seen_nm: set[int] = set()
         updated_at: Optional[str] = None
         nm_id: Optional[int] = None
         pages_fetched = 0
         last_batch_size = 0
         truncated = False
-        for _ in range(max_p):
-            page = await self.list_cards(
-                limit=100,
-                text_search=text_search,
-                cursor_updated_at=updated_at,
-                cursor_nm_id=nm_id,
-            )
-            pages_fetched += 1
-            batch = page.get("cards") or []
-            if not isinstance(batch, list) or not batch:
-                break
-            last_batch_size = len(batch)
-            for card in batch:
-                if isinstance(card, dict):
-                    rows.append(card)
-            cur = page.get("cursor") or {}
-            if not isinstance(cur, dict):
-                break
-            total = int(cur.get("total") or 0)
-            updated_at = str(cur.get("updatedAt") or "") or None
-            nm_id = int(cur.get("nmID") or 0) or None
-            if total < 100 or not updated_at or not nm_id:
-                break
-            if pages_fetched >= max_p:
-                truncated = last_batch_size >= 100
-                break
+        bulk_timeout = aiohttp.ClientTimeout(
+            connect=15,
+            total=max(120.0, float(getattr(self.timeout, "total", None) or 45.0)),
+        )
+        connector = aiohttp.TCPConnector(force_close=True, family=socket.AF_INET)
+        async with connector:
+            async with aiohttp.ClientSession(timeout=bulk_timeout, connector=connector) as session:
+                for _ in range(max_p):
+                    page = await self._list_cards_with_session(
+                        session,
+                        limit=_PAGE_LIMIT,
+                        text_search=text_search,
+                        cursor_updated_at=updated_at,
+                        cursor_nm_id=nm_id,
+                    )
+                    pages_fetched += 1
+                    batch = page.get("cards") or []
+                    if not isinstance(batch, list) or not batch:
+                        break
+                    last_batch_size = len(batch)
+                    for card in batch:
+                        if not isinstance(card, dict):
+                            continue
+                        try:
+                            nid = int(card.get("nmID") or card.get("nmId") or 0)
+                        except (TypeError, ValueError):
+                            nid = 0
+                        if nid:
+                            if nid in seen_nm:
+                                continue
+                            seen_nm.add(nid)
+                        rows.append(card)
+                    cur = page.get("cursor") or {}
+                    if not isinstance(cur, dict):
+                        break
+                    updated_at = str(cur.get("updatedAt") or "").strip() or None
+                    nm_raw = cur.get("nmID")
+                    if nm_raw is None:
+                        next_nm_id = None
+                    else:
+                        try:
+                            next_nm_id = int(nm_raw)
+                        except (TypeError, ValueError):
+                            next_nm_id = None
+                    # cursor.total — общее число карточек в кабинете; ориентир — размер страницы
+                    if last_batch_size < _PAGE_LIMIT or not updated_at or next_nm_id is None:
+                        break
+                    nm_id = next_nm_id
+                    if pages_fetched >= max_p:
+                        truncated = last_batch_size >= _PAGE_LIMIT
+                        break
         if meta_out is not None:
             meta_out.update(
                 {
@@ -208,6 +278,7 @@ class WbContentClient:
                     "max_pages": max_p,
                     "truncated": truncated,
                     "last_batch_size": last_batch_size,
+                    "page_size": _PAGE_LIMIT,
                     "count": len(rows),
                 }
             )
