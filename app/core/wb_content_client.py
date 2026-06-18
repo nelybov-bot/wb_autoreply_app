@@ -199,6 +199,7 @@ class WbContentClient:
         if vendor_codes:
             out: List[dict] = []
             seen: set[int] = set()
+            allowed = {str(v).strip().casefold() for v in vendor_codes if str(v).strip()}
             for vc in vendor_codes:
                 v = (vc or "").strip()
                 if not v:
@@ -207,10 +208,25 @@ class WbContentClient:
                 for card in page.get("cards") or []:
                     if not isinstance(card, dict):
                         continue
+                    card_vc = str(card.get("vendorCode") or card.get("supplierVendorCode") or "").strip().casefold()
+                    if allowed and card_vc and card_vc not in allowed:
+                        continue
                     nid = int(card.get("nmID") or 0)
                     if nid and nid not in seen:
                         seen.add(nid)
                         out.append(card)
+            if meta_out is not None:
+                meta_out.update(
+                    {
+                        "pages_fetched": len(vendor_codes),
+                        "max_pages": max_p,
+                        "truncated": False,
+                        "last_batch_size": len(out),
+                        "page_size": _PAGE_LIMIT,
+                        "count": len(out),
+                        "scope": "articles_only",
+                    }
+                )
             return out
 
         rows: List[dict] = []

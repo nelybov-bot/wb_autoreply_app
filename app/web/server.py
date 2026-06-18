@@ -86,6 +86,7 @@ from app.core.card_links import (
     ai_suggest_card_links,
     apply_link_status,
     build_wb_catalog_payload,
+    build_ozon_catalog_payload,
     fetch_ozon_catalog,
     fetch_wb_catalog,
     group_ozon_rows,
@@ -3395,11 +3396,14 @@ async def api_card_links_wb_catalog(
     articles: Optional[str] = Query(None, description="Артикулы через запятую или с новой строки"),
     q: Optional[str] = Query(None, description="Поиск по названию/артикулу"),
     max_pages: int = Query(100, ge=1, le=150),
+    articles_only: bool = Query(False, description="Только карточки из списка артикулов"),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):
     s = _require_wb_store_for_chats(db, store_id)
     vendor_codes = parse_articles_csv(articles)
+    if articles_only and not vendor_codes:
+        raise HTTPException(400, "Укажите список артикулов продавца (vendor_code)")
 
     async def _load() -> dict:
         rows, catalog_meta = await fetch_wb_catalog(
@@ -3407,8 +3411,14 @@ async def api_card_links_wb_catalog(
             vendor_codes=vendor_codes or None,
             text_search=(q or "").strip() or None,
             max_pages=max_pages,
+            articles_only=articles_only,
         )
-        return build_wb_catalog_payload(rows, catalog_meta, store_id=store_id)
+        return build_wb_catalog_payload(
+            rows,
+            catalog_meta,
+            store_id=store_id,
+            articles_only=articles_only,
+        )
 
     try:
         return await asyncio.wait_for(_load(), timeout=CARD_LINKS_CATALOG_TIMEOUT_SEC)
@@ -3426,11 +3436,14 @@ async def api_card_links_ozon_catalog(
     store_id: int,
     articles: Optional[str] = Query(None, description="offer_id через запятую или с новой строки"),
     max_pages: int = Query(30, ge=1, le=100),
+    articles_only: bool = Query(False, description="Только карточки из списка артикулов"),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):
     s = _require_ozon_store_for_chats(db, store_id)
     offer_ids = parse_articles_csv(articles)
+    if articles_only and not offer_ids:
+        raise HTTPException(400, "Укажите список артикулов продавца (offer_id)")
     catalog_meta: dict = {}
     try:
         rows = await fetch_ozon_catalog(
@@ -3439,36 +3452,18 @@ async def api_card_links_ozon_catalog(
             offer_ids=offer_ids or None,
             max_pages=max_pages,
             meta_out=catalog_meta,
+            articles_only=articles_only,
         )
     except HttpStatusError as e:
         raise _card_links_http_error("ozon", e) from e
-    groups = group_ozon_rows(rows)
-    apply_link_status(rows, groups)
-    rows = sort_catalog_rows(rows, marketplace="ozon")
-    candidates = suggest_link_candidates(rows, marketplace="ozon")
-    attach = group_attach_suggestions(
-        suggest_attach_to_groups(rows, groups, marketplace="ozon"),
-        marketplace="ozon",
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return build_ozon_catalog_payload(
+        rows,
+        catalog_meta,
+        store_id=store_id,
+        articles_only=articles_only,
     )
-    review = suggest_review_linked_groups(groups, marketplace="ozon")
-    combine = suggest_combine_candidates(candidates, marketplace="ozon")
-    linked_groups = sum(1 for g in groups if g.get("linked") and g.get("group_id") != "__unlinked__")
-    unlinked_count = sum(1 for r in rows if not r.get("linked"))
-    return {
-        "store_id": store_id,
-        "marketplace": "ozon",
-        "count": len(rows),
-        "unlinked_count": unlinked_count,
-        "linked_groups": linked_groups,
-        "max_link_items": 30,
-        "items": rows,
-        "groups": groups,
-        "candidates": candidates,
-        "attach_suggestions": attach,
-        "review_suggestions": review,
-        "combine_suggestions": combine,
-        "catalog_meta": catalog_meta,
-    }
 
 
 @app.post("/api/card-links/wb/{store_id}/merge")
@@ -3710,6 +3705,7 @@ async def api_card_links_wb_ai_suggest(
     store_id: int,
     articles: Optional[str] = Query(None),
     max_pages: int = Query(20, ge=1, le=100),
+    articles_only: bool = Query(False),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):
@@ -3718,8 +3714,15 @@ async def api_card_links_wb_ai_suggest(
     if not key:
         raise HTTPException(400, "Не задан OpenAI ключ в настройках")
     vendor_codes = parse_articles_csv(articles)
+    if articles_only and not vendor_codes:
+        raise HTTPException(400, "Укажите список артикулов продавца (vendor_code)")
     try:
-        rows, _catalog_meta = await fetch_wb_catalog(s.api_key, vendor_codes=vendor_codes or None, max_pages=max_pages)
+        rows, _catalog_meta = await fetch_wb_catalog(
+            s.api_key,
+            vendor_codes=vendor_codes or None,
+            max_pages=max_pages,
+            articles_only=articles_only,
+        )
     except HttpStatusError as e:
         raise _card_links_http_error("wb", e) from e
     groups = group_wb_rows(rows)
@@ -3736,6 +3739,7 @@ async def api_card_links_ozon_ai_suggest(
     store_id: int,
     articles: Optional[str] = Query(None),
     max_pages: int = Query(15, ge=1, le=50),
+    articles_only: bool = Query(False),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):
@@ -3744,16 +3748,21 @@ async def api_card_links_ozon_ai_suggest(
     if not key:
         raise HTTPException(400, "Не задан OpenAI ключ в настройках")
     offer_ids = parse_articles_csv(articles)
+    if articles_only and not offer_ids:
+        raise HTTPException(400, "Укажите список артикулов продавца (offer_id)")
     try:
         rows = await fetch_ozon_catalog(
             s.client_id or "",
             s.api_key,
             offer_ids=offer_ids or None,
             max_pages=max_pages,
+            articles_only=articles_only,
         )
     except HttpStatusError as e:
         raise _card_links_http_error("ozon", e) from e
-    groups = group_ozon_rows(rows)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    groups = group_ozon_rows(rows, articles_only=articles_only)
     apply_link_status(rows, groups)
     try:
         ai_rows = await ai_suggest_card_links(rows, groups, marketplace="ozon", openai_key=key)

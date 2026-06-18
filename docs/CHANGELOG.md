@@ -5,6 +5,31 @@
 
 ---
 
+## 2026-06-18 — Фильтры бренда и категории (Связки)
+
+### Backend
+- Предложения `new_link` и `attach` учитывают бренд внутри категории
+
+### Frontend
+- Панель фильтров: бренд, категория, скрытие категорий, одиночки, мелкие связки
+- Колонка «Бренд», валидация ручной связки по бренду
+- `app.js?v=47`, `styles.css?v=25`
+
+---
+
+## 2026-06-18 — Режим «только по списку артикулов» (Связки)
+
+### Backend
+- `articles_only` в `/api/card-links/{wb|ozon}/.../catalog` и `ai-suggest`
+- Фильтр `filter_rows_by_articles`, мета `scope` / `missing_articles`
+- Ozon: без related_sku вне списка; WB: точное совпадение vendor_code
+
+### Frontend
+- Чекбокс, textarea, загрузка из файла, localStorage
+- `app.js?v=46`, `styles.css?v=24`
+
+---
+
 ## 2026-06-18 — WB каталог >1000 карточек
 
 ### Backend

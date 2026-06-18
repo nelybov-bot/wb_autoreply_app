@@ -102,6 +102,51 @@ def parse_articles_csv(raw: Optional[str]) -> List[str]:
     return out
 
 
+def _norm_article_key(value: Optional[str]) -> str:
+    return str(value or "").strip().casefold()
+
+
+def filter_rows_by_articles(
+    rows: List[dict],
+    articles: List[str],
+    *,
+    marketplace: str,
+) -> Tuple[List[dict], List[str]]:
+    """Оставляет только карточки из списка артикулов; возвращает (rows, missing)."""
+    if not articles:
+        return rows, []
+    allowed = {_norm_article_key(a): a for a in articles if str(a).strip()}
+    if not allowed:
+        return rows, []
+    found: set[str] = set()
+    out: List[dict] = []
+    mp = (marketplace or "").strip().lower()
+    for r in rows:
+        if mp == "wb":
+            key = _norm_article_key(r.get("vendor_code"))
+        else:
+            key = _norm_article_key(r.get("offer_id"))
+        if key and key in allowed:
+            found.add(key)
+            out.append(r)
+    missing = [allowed[k] for k in allowed if k not in found]
+    return out, missing
+
+
+def _apply_articles_scope_meta(
+    catalog_meta: dict,
+    *,
+    articles: List[str],
+    rows: List[dict],
+    missing: List[str],
+) -> None:
+    catalog_meta["scope"] = "articles_only"
+    catalog_meta["requested_articles"] = len(articles)
+    catalog_meta["found_articles"] = len(rows)
+    catalog_meta["missing_articles"] = missing[:50]
+    catalog_meta["missing_count"] = len(missing)
+
+
 _TMS_QTY_CELL_RE = re.compile(r"^\d{4,12}$")
 
 
@@ -931,7 +976,7 @@ def group_wb_rows(rows: List[dict]) -> List[dict]:
     return groups
 
 
-def group_ozon_rows(rows: List[dict]) -> List[dict]:
+def group_ozon_rows(rows: List[dict], *, articles_only: bool = False) -> List[dict]:
     """Группы по «Название модели» или кластеру related_sku."""
     by_model: Dict[str, List[dict]] = {}
     orphan: List[dict] = []
@@ -944,7 +989,9 @@ def group_ozon_rows(rows: List[dict]) -> List[dict]:
 
     groups: List[dict] = []
     for model, items in sorted(by_model.items(), key=lambda x: -len(x[1])):
-        linked = len(items) > 1 or any(len(x.get("related_skus") or []) > 1 for x in items)
+        linked = len(items) > 1 or (
+            not articles_only and any(len(x.get("related_skus") or []) > 1 for x in items)
+        )
         cat_label = str(items[0].get("category_label") or "").strip()
         group_label = f"{cat_label} · {model}" if cat_label else model
         for it in items:
@@ -964,12 +1011,13 @@ def group_ozon_rows(rows: List[dict]) -> List[dict]:
             }
         )
 
-    # Одиночные без model_name — по related_skus
+    # Одиночные без model_name — по related_skus (только полный каталог)
     rel_map: Dict[Tuple[int, ...], List[dict]] = {}
-    for r in orphan:
-        rel = tuple(sorted(set(r.get("related_skus") or [])))
-        if len(rel) > 1:
-            rel_map.setdefault(rel, []).append(r)
+    if not articles_only:
+        for r in orphan:
+            rel = tuple(sorted(set(r.get("related_skus") or [])))
+            if len(rel) > 1:
+                rel_map.setdefault(rel, []).append(r)
 
     for rel, items in rel_map.items():
         label = f"связка SKU {', '.join(str(x) for x in rel[:5])}"
@@ -990,7 +1038,11 @@ def group_ozon_rows(rows: List[dict]) -> List[dict]:
             }
         )
 
-    singles = [r for r in orphan if len(r.get("related_skus") or []) <= 1]
+    singles = (
+        list(orphan)
+        if articles_only
+        else [r for r in orphan if len(r.get("related_skus") or []) <= 1]
+    )
     if singles:
         groups.append(
             {
@@ -1137,8 +1189,13 @@ def suggest_link_candidates(rows: List[dict], *, marketplace: str) -> List[dict]
         by_cat.setdefault(key, []).append(r)
 
     for cat_items in by_cat.values():
-        for items in _cluster_items_by_title(cat_items):
-            seq = _append_new_link_candidate(out, seq=seq, items=items, marketplace=marketplace)
+        by_brand: Dict[str, List[dict]] = {}
+        for r in cat_items:
+            b = (r.get("brand") or "").strip().lower() or "__no_brand__"
+            by_brand.setdefault(b, []).append(r)
+        for brand_items in by_brand.values():
+            for items in _cluster_items_by_title(brand_items):
+                seq = _append_new_link_candidate(out, seq=seq, items=items, marketplace=marketplace)
 
     out.sort(
         key=lambda x: (
@@ -1193,6 +1250,10 @@ def suggest_attach_to_groups(
                 uid = str(u.get("offer_id") or "")
                 target_imt = None
             if not _item_matches_group_attach(u, g):
+                continue
+            u_brand = (u.get("brand") or "").strip().lower()
+            g_brand = (ref.get("brand") or "").strip().lower()
+            if u_brand and g_brand and u_brand != g_brand:
                 continue
             dedupe = f"{uid}:{g.get('group_id')}"
             if dedupe in seen:
@@ -1996,14 +2057,18 @@ async def fetch_wb_catalog(
     vendor_codes: Optional[List[str]] = None,
     text_search: Optional[str] = None,
     max_pages: int = 100,
+    articles_only: bool = False,
 ) -> Tuple[List[dict], dict]:
     client = WbContentClient(api_key)
     subject_map = await _wb_subject_map(api_key)
-    catalog_meta: dict = {}
+    catalog_meta: dict = {"scope": "articles_only" if articles_only else "full"}
+    codes = [str(v).strip() for v in (vendor_codes or []) if str(v).strip()]
+    if articles_only and not codes:
+        raise ValueError("articles_only: список артикулов пуст")
     raw = await client.list_cards_all(
         max_pages=max_pages,
-        text_search=text_search,
-        vendor_codes=vendor_codes,
+        text_search=None if articles_only else text_search,
+        vendor_codes=codes or None,
         meta_out=catalog_meta,
     )
     rows: List[dict] = []
@@ -2013,32 +2078,45 @@ async def fetch_wb_catalog(
         row = normalize_wb_card(c)
         _enrich_wb_row(row, subject_map)
         rows.append(row)
+    if codes:
+        rows, missing = filter_rows_by_articles(rows, codes, marketplace="wb")
+        if articles_only:
+            _apply_articles_scope_meta(catalog_meta, articles=codes, rows=rows, missing=missing)
+        elif missing:
+            catalog_meta["missing_articles"] = missing[:50]
+            catalog_meta["missing_count"] = len(missing)
     catalog_meta["count"] = len(rows)
     return rows, catalog_meta
 
 
-def build_wb_catalog_payload(
+def build_catalog_payload(
     rows: List[dict],
     catalog_meta: dict,
     *,
     store_id: int,
+    marketplace: str,
+    articles_only: bool = False,
 ) -> dict:
-    """Каталог WB + предложения связок (синхронная обработка после fetch_wb_catalog)."""
-    groups = group_wb_rows(rows)
+    """Каталог + предложения связок после fetch_*_catalog."""
+    mp = (marketplace or "wb").strip().lower()
+    if mp == "wb":
+        groups = group_wb_rows(rows)
+    else:
+        groups = group_ozon_rows(rows, articles_only=articles_only)
     apply_link_status(rows, groups)
-    rows = sort_catalog_rows(rows, marketplace="wb")
-    candidates = suggest_link_candidates(rows, marketplace="wb")
+    rows = sort_catalog_rows(rows, marketplace=mp)
+    candidates = suggest_link_candidates(rows, marketplace=mp)
     attach = group_attach_suggestions(
-        suggest_attach_to_groups(rows, groups, marketplace="wb"),
-        marketplace="wb",
+        suggest_attach_to_groups(rows, groups, marketplace=mp),
+        marketplace=mp,
     )
-    review = suggest_review_linked_groups(groups, marketplace="wb")
-    combine = suggest_combine_candidates(candidates, marketplace="wb")
+    review = suggest_review_linked_groups(groups, marketplace=mp) if not articles_only else []
+    combine = suggest_combine_candidates(candidates, marketplace=mp)
     linked_groups = sum(1 for g in groups if g.get("linked"))
     unlinked_count = sum(1 for r in rows if not r.get("linked"))
     return {
         "store_id": store_id,
-        "marketplace": "wb",
+        "marketplace": mp,
         "count": len(rows),
         "unlinked_count": unlinked_count,
         "linked_groups": linked_groups,
@@ -2051,6 +2129,38 @@ def build_wb_catalog_payload(
         "combine_suggestions": combine,
         "catalog_meta": catalog_meta,
     }
+
+
+def build_wb_catalog_payload(
+    rows: List[dict],
+    catalog_meta: dict,
+    *,
+    store_id: int,
+    articles_only: bool = False,
+) -> dict:
+    return build_catalog_payload(
+        rows,
+        catalog_meta,
+        store_id=store_id,
+        marketplace="wb",
+        articles_only=articles_only,
+    )
+
+
+def build_ozon_catalog_payload(
+    rows: List[dict],
+    catalog_meta: dict,
+    *,
+    store_id: int,
+    articles_only: bool = False,
+) -> dict:
+    return build_catalog_payload(
+        rows,
+        catalog_meta,
+        store_id=store_id,
+        marketplace="ozon",
+        articles_only=articles_only,
+    )
 
 
 def _ozon_attrs_page_cursor(page: dict) -> Tuple[str, bool]:
@@ -2139,16 +2249,20 @@ async def fetch_ozon_catalog(
     offer_ids: Optional[List[str]] = None,
     max_pages: int = 30,
     meta_out: Optional[dict] = None,
+    articles_only: bool = False,
 ) -> List[dict]:
     client = OzonClient(client_id, api_key, timeout_s=60.0)
     list_meta: dict = {}
+    codes = [str(x).strip() for x in (offer_ids or []) if str(x).strip()]
+    if articles_only and not codes:
+        raise ValueError("articles_only: список артикулов пуст")
     listed = await client.list_products_all(
         max_pages=max_pages,
-        offer_ids=offer_ids,
+        offer_ids=codes or None,
         meta_out=list_meta,
     )
-    if offer_ids:
-        oids = [str(x).strip() for x in offer_ids if str(x).strip()]
+    if codes:
+        oids = codes
     else:
         oids = []
         for it in listed:
@@ -2171,6 +2285,7 @@ async def fetch_ozon_catalog(
     attrs_by_offer = await _fetch_ozon_attributes_by_offers(client, oids)
 
     skus: List[int] = []
+    sku_set: set[int] = set()
     for info in info_by_oid.values():
         try:
             s = int(info.get("sku") or 0)
@@ -2178,25 +2293,30 @@ async def fetch_ozon_catalog(
             s = 0
         if s:
             skus.append(s)
+            sku_set.add(s)
 
     related_by_sku: Dict[int, List[int]] = {}
-    for i in range(0, len(skus), 200):
-        batch = skus[i : i + 200]
-        rel_items = await client.product_related_sku_get(batch)
-        for ri in rel_items:
-            try:
-                sku = int(ri.get("sku") or 0)
-            except (TypeError, ValueError):
-                continue
-            rel = ri.get("related_sku") or ri.get("related_skus") or ri.get("skus") or []
-            parsed: List[int] = []
-            for x in rel if isinstance(rel, list) else []:
+    if not articles_only:
+        for i in range(0, len(skus), 200):
+            batch = skus[i : i + 200]
+            rel_items = await client.product_related_sku_get(batch)
+            for ri in rel_items:
                 try:
-                    parsed.append(int(x))
+                    sku = int(ri.get("sku") or 0)
                 except (TypeError, ValueError):
-                    pass
-            if sku:
-                related_by_sku[sku] = sorted(set(parsed))
+                    continue
+                rel = ri.get("related_sku") or ri.get("related_skus") or ri.get("skus") or []
+                parsed: List[int] = []
+                for x in rel if isinstance(rel, list) else []:
+                    try:
+                        parsed.append(int(x))
+                    except (TypeError, ValueError):
+                        pass
+                if sku:
+                    related_by_sku[sku] = sorted(set(parsed))
+    else:
+        for sku in sku_set:
+            related_by_sku[sku] = [sku]
 
     rows: List[dict] = []
     dropped = 0
@@ -2209,21 +2329,34 @@ async def fetch_ozon_catalog(
             sku = int(info.get("sku") or 0)
         except (TypeError, ValueError):
             sku = 0
+        rel = related_by_sku.get(sku)
+        if articles_only and sku:
+            rel = [x for x in (rel or []) if x in sku_set] or [sku]
         rows.append(
             normalize_ozon_product(
                 info,
                 attrs=attrs_by_offer.get(oid),
-                related_skus=related_by_sku.get(sku),
+                related_skus=rel,
             )
         )
     _enrich_ozon_model_from_peers(rows)
+    if codes:
+        rows, missing = filter_rows_by_articles(rows, codes, marketplace="ozon")
+    else:
+        missing = []
     if meta_out is not None:
         meta_out.update(list_meta)
+        meta_out["scope"] = "articles_only" if articles_only else "full"
         meta_out["listed_count"] = len(oids)
         meta_out["info_count"] = len(info_by_oid)
         meta_out["recovered_from_list"] = recovered_from_list
         meta_out["dropped_count"] = dropped
         meta_out["count"] = len(rows)
+        if articles_only and codes:
+            _apply_articles_scope_meta(meta_out, articles=codes, rows=rows, missing=missing)
+        elif missing:
+            meta_out["missing_articles"] = missing[:50]
+            meta_out["missing_count"] = len(missing)
     return rows
 
 

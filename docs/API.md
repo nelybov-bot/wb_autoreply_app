@@ -201,8 +201,10 @@
 | POST | `/api/card-links/ozon/{store_id}/ai-suggest` | ИИ-подсказки Ozon |
 
 Query-параметры каталога:
-- WB: `articles`, `q` (поиск), `max_pages` (default 100, max 150)
-- Ozon: `articles`, `max_pages` (default 30, max 100)
+- WB: `articles`, `q` (поиск), `max_pages` (default 100, max 150), `articles_only` (bool)
+- Ozon: `articles`, `max_pages` (default 30, max 100), `articles_only` (bool)
+
+`articles_only=1` — загрузить только карточки из `articles`; предложения связок строятся только внутри этого списка (без перепроверки внешних групп Ozon/WB).
 
 Ответ каталога: `items`, `groups`, `candidates`, `attach_suggestions`, `combine_suggestions`, `review_suggestions`, `catalog_meta`, счётчики (`count`, `unlinked_count`, `linked_groups`, `max_link_items`).
 

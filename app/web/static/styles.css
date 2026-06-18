@@ -3534,6 +3534,51 @@ body.theme-dark .quality-cell--danger { color: #f87171; background: rgba(239, 68
   resize: vertical;
 }
 
+.card-links-scope {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(241, 245, 249, 0.45);
+}
+
+body.theme-dark .card-links-scope {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.card-links-scope-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.card-links-articles-wrap {
+  margin-top: 10px;
+}
+
+.card-links-articles-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.card-links-file-btn {
+  cursor: pointer;
+  margin: 0;
+}
+
+.card-links-full-only[hidden] {
+  display: none !important;
+}
+
+.card-links-max-pages-label[hidden] {
+  display: none !important;
+}
+
 .card-links-nav {
   display: flex;
   flex-wrap: wrap;
@@ -4023,6 +4068,79 @@ body.theme-dark .card-links-cand-header td {
   margin-top: 0.5rem;
   padding-top: 0.5rem;
   border-top: 1px dashed var(--border, #e5e7eb);
+}
+
+.card-links-work-filter {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(37, 99, 235, 0.04);
+}
+
+body.theme-dark .card-links-work-filter {
+  background: rgba(96, 165, 250, 0.06);
+}
+
+.card-links-work-filter[hidden] {
+  display: none !important;
+}
+
+.card-links-work-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+}
+
+.card-links-work-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 140px;
+}
+
+.card-links-work-filter-field--grow {
+  flex: 1 1 220px;
+  min-width: 200px;
+}
+
+.card-links-work-filter-toggles {
+  align-items: center;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.card-links-work-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.88rem;
+  white-space: nowrap;
+}
+
+.card-links-exclude-multi {
+  min-height: 4.5rem;
+  width: 100%;
+}
+
+.card-links-filter-stats {
+  margin-left: auto;
+  text-align: right;
+}
+
+.form-hint-inline {
+  font-weight: 400;
+  font-size: 0.78rem;
+  opacity: 0.75;
+}
+
+.card-links-col-brand {
+  max-width: 120px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .card-links-catalog-filter {

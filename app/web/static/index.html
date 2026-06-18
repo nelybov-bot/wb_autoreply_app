@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
-  <link rel="stylesheet" href="/static/styles.css?v=23">
+  <link rel="stylesheet" href="/static/styles.css?v=25">
   <link rel="stylesheet" href="/static/fx-widgets.css?v=5">
 </head>
 <body>
@@ -618,9 +618,27 @@
             <button type="button" class="btn btn-secondary" id="btn-card-links-ai" title="Нужен OpenAI ключ в настройках">ИИ</button>
           </div>
         </div>
+        <div class="card-links-scope">
+          <label class="card-links-scope-toggle">
+            <input type="checkbox" id="card-links-articles-only">
+            Только по списку артикулов продавца
+          </label>
+          <div id="card-links-articles-wrap" class="card-links-articles-wrap" hidden>
+            <div class="card-links-articles-toolbar">
+              <span class="toolbar-label">Артикулы</span>
+              <label class="btn btn-secondary btn-sm card-links-file-btn">
+                Загрузить из файла
+                <input type="file" id="card-links-articles-file" accept=".txt,.csv,.tsv,text/plain" hidden>
+              </label>
+            </div>
+            <textarea id="card-links-articles" class="card-links-articles-input" rows="6" placeholder="ART-001&#10;ART-002&#10;или через запятую"></textarea>
+            <p class="form-hint">Связки и предложения только между загруженными карточками. WB: vendor_code, Ozon: offer_id.</p>
+          </div>
+        </div>
         <details class="card-links-more">
-          <summary>Фильтр по артикулам и глубина загрузки</summary>
-          <textarea id="card-links-articles" class="card-links-articles-input" rows="2" placeholder="ART-001, ART-002 или по одному в строке"></textarea>
+          <summary>Дополнительно: фильтр без режима списка и глубина загрузки</summary>
+          <textarea id="card-links-articles-optional" class="card-links-articles-input card-links-full-only" rows="2" placeholder="Опционально: сузить полный каталог по артикулам"></textarea>
+          <p class="form-hint card-links-full-only">Необязательный фильтр при загрузке всего каталога.</p>
           <label class="card-links-max-pages-label" for="card-links-max-pages">
             <span id="card-links-max-pages-caption">Страниц каталога (×100 карточек)</span>
             <select id="card-links-max-pages" class="select-md"></select>
@@ -647,7 +665,29 @@
             <button type="button" class="card-links-tab" data-cl-view="catalog" role="tab">Каталог</button>
           </div>
         </div>
-        <div id="card-links-review-bar" class="card-links-review-wrap" hidden>
+        <div id="card-links-work-filter" class="card-links-work-filter" hidden>
+          <div class="card-links-work-filter-row">
+            <label class="card-links-work-filter-field">
+              <span class="toolbar-label">Бренд</span>
+              <select id="card-links-filter-brand" class="select-md"><option value="">Все бренды</option></select>
+            </label>
+            <label class="card-links-work-filter-field">
+              <span class="toolbar-label">Категория</span>
+              <select id="card-links-filter-category" class="select-md"><option value="">Все категории</option></select>
+            </label>
+            <label class="card-links-work-filter-field card-links-work-filter-field--grow">
+              <span class="toolbar-label">Скрыть категории <span class="form-hint-inline">(Ctrl+клик)</span></span>
+              <select id="card-links-filter-exclude-categories" class="select-md card-links-exclude-multi" multiple size="3"></select>
+            </label>
+          </div>
+          <div class="card-links-work-filter-row card-links-work-filter-toggles">
+            <label class="card-links-work-toggle"><input type="checkbox" id="card-links-filter-unlinked-only"> Только без связки</label>
+            <label class="card-links-work-toggle"><input type="checkbox" id="card-links-filter-singles-only"> Только одиночки</label>
+            <label class="card-links-work-toggle"><input type="checkbox" id="card-links-filter-hide-small-bundles"> Скрыть мелкие связки (2 шт.)</label>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-filter-reset">Сбросить фильтры</button>
+            <span id="card-links-filter-stats" class="card-links-filter-stats form-hint"></span>
+          </div>
+        </div>
           <span id="card-links-review-label" class="card-links-combine-label"></span>
           <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-review-select-all">Все</button>
           <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-review-apply">Применить выбранные</button>
@@ -676,9 +716,6 @@
         </div>
         <div id="card-links-catalog-filter" class="card-links-catalog-filter" hidden>
           <input type="search" id="card-links-catalog-search" class="input-grow" placeholder="Поиск по названию или артикулу в каталоге" autocomplete="off">
-          <label class="card-links-catalog-unlinked-label">
-            <input type="checkbox" id="card-links-catalog-unlinked-only"> Только без связки
-          </label>
         </div>
         <div class="table-scroll">
           <table class="items-table card-links-table card-links--candidates" id="card-links-table">
@@ -688,6 +725,7 @@
                 <th class="col-photo">Фото</th>
                 <th>Артикул</th>
                 <th>ID МП</th>
+                <th class="card-links-col-brand">Бренд</th>
                 <th class="card-links-col-cat">Категория</th>
                 <th>Название</th>
                 <th>Связка</th>
@@ -1323,6 +1361,6 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=45"></script>
+  <script src="/static/app.js?v=47"></script>
 </body>
 </html>
