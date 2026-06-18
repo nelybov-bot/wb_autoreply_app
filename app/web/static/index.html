@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
-  <link rel="stylesheet" href="/static/styles.css?v=25">
+  <link rel="stylesheet" href="/static/styles.css?v=27">
   <link rel="stylesheet" href="/static/fx-widgets.css?v=5">
 </head>
 <body>
@@ -615,7 +615,7 @@
           </div>
           <div class="toolbar-group toolbar-group--actions">
             <button type="button" class="btn btn-primary" id="btn-card-links-load">Загрузить</button>
-            <button type="button" class="btn btn-secondary" id="btn-card-links-ai" title="Нужен OpenAI ключ в настройках">ИИ</button>
+            <button type="button" class="btn btn-secondary" id="btn-card-links-refresh" title="Обновить каталог после связки (вручную)">Обновить</button>
           </div>
         </div>
         <div class="card-links-scope">
@@ -652,6 +652,40 @@
               <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-qty-link">Связать все строки</button>
             </div>
           </div>
+          <details class="card-links-ai-settings" id="card-links-ai-settings">
+            <summary>Настройки ИИ-связок</summary>
+            <div class="card-links-ai-settings-grid">
+              <label class="card-links-work-toggle"><input type="checkbox" id="card-links-ai-include-linked" checked> Анализировать уже связанные (пересборка связок)</label>
+              <label class="card-links-work-filter-field">
+                <span class="toolbar-label">Охват</span>
+                <select id="card-links-ai-scope" class="select-md">
+                  <option value="all">Весь каталог (по фильтрам)</option>
+                  <option value="unlinked">Только без связки</option>
+                  <option value="linked">Только уже в связках</option>
+                </select>
+              </label>
+              <label class="card-links-work-filter-field">
+                <span class="toolbar-label">Товаров за запрос ИИ</span>
+                <select id="card-links-ai-batch-size" class="select-md">
+                  <option value="30">30</option>
+                  <option value="45" selected>45</option>
+                  <option value="60">60</option>
+                </select>
+              </label>
+              <label class="card-links-work-filter-field">
+                <span class="toolbar-label">Макс. товаров всего</span>
+                <select id="card-links-ai-max-products" class="select-md">
+                  <option value="200">200</option>
+                  <option value="400" selected>400</option>
+                  <option value="800">800</option>
+                  <option value="1500">1500</option>
+                </select>
+              </label>
+              <label class="card-links-work-toggle"><input type="checkbox" id="card-links-ai-deterministic-packs" checked> Авто: фасовки 1/2/3 шт (без ИИ)</label>
+              <label class="card-links-work-toggle"><input type="checkbox" id="card-links-ai-split-oversized" checked> Делить связки &gt;30</label>
+            </div>
+            <p class="form-hint">ИИ читает названия, бренд, категорию и текущие связки. Решение можно править перед применением.</p>
+          </details>
         </details>
         <div id="card-links-status" class="form-hint card-links-status" role="status">Выберите магазин и нажмите «Загрузить».</div>
         <div class="progress-wrap" id="card-links-loading" aria-live="polite" hidden>
@@ -660,9 +694,10 @@
         </div>
         <div class="card-links-nav">
           <div class="segmented card-links-view-tabs" role="tablist" aria-label="Режим">
-            <button type="button" class="card-links-tab active" data-cl-view="candidates" role="tab">Предложения</button>
+            <button type="button" class="card-links-tab" data-cl-view="guide" role="tab">Справка</button>
+            <button type="button" class="card-links-tab" data-cl-view="ai" role="tab">ИИ <span id="card-links-ai-badge" class="card-links-tab-badge" hidden></span></button>
             <button type="button" class="card-links-tab" data-cl-view="review" role="tab">Перепроверка <span id="card-links-review-badge" class="card-links-tab-badge" hidden></span></button>
-            <button type="button" class="card-links-tab" data-cl-view="catalog" role="tab">Каталог</button>
+            <button type="button" class="card-links-tab active" data-cl-view="catalog" role="tab">Каталог</button>
           </div>
         </div>
         <div id="card-links-work-filter" class="card-links-work-filter" hidden>
@@ -688,10 +723,22 @@
             <span id="card-links-filter-stats" class="card-links-filter-stats form-hint"></span>
           </div>
         </div>
+        <div id="card-links-ai-bar" class="card-links-ai-wrap" hidden>
+          <span id="card-links-ai-label" class="card-links-combine-label"></span>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-run">Запустить ИИ</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-select-all">Все</button>
+          <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-ai-apply">Применить выбранные</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-clear">Снять</button>
+        </div>
+        <div id="card-links-review-bar" class="card-links-review-wrap" hidden>
           <span id="card-links-review-label" class="card-links-combine-label"></span>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-review-refresh">Запустить перепроверку</button>
           <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-review-select-all">Все</button>
           <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-review-apply">Применить выбранные</button>
           <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-review-clear">Снять</button>
+        </div>
+        <div id="card-links-guide-panel" class="card-links-guide-panel" hidden>
+          <div id="card-links-guide-content" class="card-links-guide-content"></div>
         </div>
         <div id="card-links-apply-bar" class="card-links-apply-wrap" hidden>
           <span id="card-links-apply-label" class="card-links-combine-label"></span>
@@ -717,8 +764,8 @@
         <div id="card-links-catalog-filter" class="card-links-catalog-filter" hidden>
           <input type="search" id="card-links-catalog-search" class="input-grow" placeholder="Поиск по названию или артикулу в каталоге" autocomplete="off">
         </div>
-        <div class="table-scroll">
-          <table class="items-table card-links-table card-links--candidates" id="card-links-table">
+        <div class="table-scroll" id="card-links-table-wrap">
+          <table class="items-table card-links-table card-links--catalog" id="card-links-table">
             <thead>
               <tr>
                 <th class="col-check"><input type="checkbox" id="card-links-check-all" title="Выбрать все"></th>
@@ -1361,6 +1408,6 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=47"></script>
+  <script src="/static/app.js?v=50"></script>
 </body>
 </html>

@@ -830,8 +830,8 @@ def validate_ozon_link_rows(
 ) -> None:
     """
     Правила Ozon перед объединением:
-    - одна категория и один бренд;
-    - qty_pack (TMS 1/2/3 шт): только категория и бренд; кол-во в упаковке выставится при связке;
+    - одна категория;
+    - qty_pack (TMS 1/2/3 шт): только категория; кол-во в упаковке выставится при связке;
     - иначе: все НЕ-вариативные характеристики совпадают (кроме артикула/TMS);
     - вариативные (is_aspect) должны отличаться между SKU.
     """
@@ -852,11 +852,7 @@ def validate_ozon_link_rows(
         if b:
             return b
         fp = row.get("attribute_fingerprint") or {}
-        return _ozon_brand_from_fingerprint(fp, brand_attr_ids)
-
-    brands = {_brand(r) for r in selected if _brand(r)}
-    if len(brands) > 1:
-        raise ValueError(f"Разные бренды: {', '.join(sorted(brands))}.")
+        return _ozon_brand_from_fingerprint(fp, brand_attr_ids        )
 
     if qty_pack:
         return
@@ -1189,13 +1185,8 @@ def suggest_link_candidates(rows: List[dict], *, marketplace: str) -> List[dict]
         by_cat.setdefault(key, []).append(r)
 
     for cat_items in by_cat.values():
-        by_brand: Dict[str, List[dict]] = {}
-        for r in cat_items:
-            b = (r.get("brand") or "").strip().lower() or "__no_brand__"
-            by_brand.setdefault(b, []).append(r)
-        for brand_items in by_brand.values():
-            for items in _cluster_items_by_title(brand_items):
-                seq = _append_new_link_candidate(out, seq=seq, items=items, marketplace=marketplace)
+        for items in _cluster_items_by_title(cat_items):
+            seq = _append_new_link_candidate(out, seq=seq, items=items, marketplace=marketplace)
 
     out.sort(
         key=lambda x: (
@@ -1250,10 +1241,6 @@ def suggest_attach_to_groups(
                 uid = str(u.get("offer_id") or "")
                 target_imt = None
             if not _item_matches_group_attach(u, g):
-                continue
-            u_brand = (u.get("brand") or "").strip().lower()
-            g_brand = (ref.get("brand") or "").strip().lower()
-            if u_brand and g_brand and u_brand != g_brand:
                 continue
             dedupe = f"{uid}:{g.get('group_id')}"
             if dedupe in seen:
@@ -1658,89 +1645,361 @@ def suggest_review_linked_groups(
     return out[:120]
 
 
-async def ai_suggest_card_links(
-    rows: List[dict],
+_IKEA_BRAND_RE = re.compile(r"\bikea\b|ике[яи]", re.I)
+_NO_NAME_BRAND_RE = re.compile(
+    r"ноунейм|no[\s-]?name|без\s*бренда|noname|нет\s*бренда|безымян",
+    re.I,
+)
+_VOLUME_RE = re.compile(
+    r"\b\d+[\.,]?\d*\s*(мл|ml|л|l|г|g|кг|kg|мм|mm|см|cm)\b",
+    re.I,
+)
+
+
+def _row_article(row: dict, marketplace: str) -> str:
+    mp = (marketplace or "").strip().lower()
+    if mp == "wb":
+        return str(row.get("vendor_code") or "").strip()
+    return str(row.get("offer_id") or "").strip()
+
+
+def _row_category_key(row: dict, marketplace: str) -> str:
+    mp = (marketplace or "").strip().lower()
+    if mp == "wb":
+        sid = int(row.get("subject_id") or 0)
+        pid = int(row.get("parent_id") or 0)
+        return f"wb:{sid}:{pid}"
+    return f"oz:{row.get('category_key') or '0:0'}"
+
+
+def _row_brand_extended(row: dict) -> str:
+    b = str(row.get("brand") or "").strip()
+    if b:
+        return b
+    title = str(row.get("title") or "")
+    m = re.search(r"^[\[\(]?([A-Za-zА-Яа-яёЁ0-9][\w\-]{1,30})", title)
+    return m.group(1) if m else ""
+
+
+def _brand_bucket(row: dict) -> str:
+    b = str(row.get("brand") or "").strip().lower()
+    t = (row.get("title") or "").lower()
+    if _IKEA_BRAND_RE.search(b) or _IKEA_BRAND_RE.search(t):
+        return "ikea"
+    if not b or _NO_NAME_BRAND_RE.search(b) or _NO_NAME_BRAND_RE.search(t):
+        return "noname"
+    return "named"
+
+
+def _items_brand_buckets_compatible(items: List[dict]) -> bool:
+    buckets = {_brand_bucket(x) for x in items}
+    if "ikea" in buckets and "noname" in buckets:
+        return False
+    if "noname" in buckets and "named" in buckets:
+        return False
+    return True
+
+
+def _items_same_category(items: List[dict], marketplace: str) -> bool:
+    if not items:
+        return False
+    mp = (marketplace or "").strip().lower()
+    if mp == "wb":
+        sids = {int(x.get("subject_id") or 0) for x in items}
+        sids.discard(0)
+        return len(sids) <= 1
+    cats = {str(x.get("category_key") or "") for x in items}
+    cats.discard("")
+    return len(cats) <= 1
+
+
+def _split_items_to_bundles(items: List[dict], max_size: int = MAX_LINK_ITEMS) -> List[List[dict]]:
+    if len(items) <= max_size:
+        return [items]
+    out: List[List[dict]] = []
+    chunk: List[dict] = []
+    for it in items:
+        chunk.append(it)
+        if len(chunk) >= max_size:
+            out.append(chunk)
+            chunk = []
+    if len(chunk) >= 2:
+        out.append(chunk)
+    elif chunk and out:
+        out[-1].extend(chunk)
+    return out
+
+
+def _compact_product_for_ai(row: dict, marketplace: str) -> dict:
+    mp = (marketplace or "").strip().lower()
+    art = _row_article(row, mp)
+    gid = str(row.get("link_group_id") or row.get("imt_id") or row.get("model_name") or "")
+    return {
+        "article": art,
+        "mp_id": row.get("nm_id") or row.get("sku"),
+        "title": (row.get("title") or "")[:120],
+        "brand": _row_brand_extended(row),
+        "brand_bucket": _brand_bucket(row),
+        "category": row.get("subject_name") or row.get("category_label") or row.get("category_key"),
+        "subject_id": row.get("subject_id"),
+        "linked": bool(row.get("linked")),
+        "current_group_id": gid or None,
+        "current_group_label": row.get("link_group_label") or gid or None,
+        "normalized_name": _title_base_key(row.get("title") or ""),
+    }
+
+
+def _compact_group_for_ai(g: dict, marketplace: str) -> dict:
+    items = g.get("items") or []
+    sample = items[0] if items else {}
+    return {
+        "group_id": g.get("group_id"),
+        "group_label": g.get("group_label"),
+        "category": g.get("subject_name") or g.get("category_label"),
+        "subject_id": g.get("subject_id") or sample.get("subject_id"),
+        "count": len(items),
+        "titles": [(x.get("title") or "")[:80] for x in items[:6]],
+        "articles": [_row_article(x, marketplace) for x in items[:8]],
+    }
+
+
+def _filter_rows_for_ai_scope(rows: List[dict], scope: str, marketplace: str) -> List[dict]:
+    sc = (scope or "all").strip().lower()
+    if sc == "unlinked":
+        return [r for r in rows if not r.get("linked")]
+    if sc == "linked":
+        return [r for r in rows if r.get("linked")]
+    return list(rows)
+
+
+def _ai_system_prompt(marketplace: str) -> str:
+    mp = (marketplace or "").strip().lower()
+    common = (
+        "ЖЁСТКИЕ ПРАВИЛА:\n"
+        "1) Одна категория на связку — не смешивать разные subject_id/category.\n"
+        f"2) Не более {MAX_LINK_ITEMS} товаров в одной связке; если больше — несколько связок (30+20).\n"
+        "3) Варианты одного товара (1 шт / 2 шт / 3 шт / набор / комплект / разный объём) — ВСЕГДА в одной связке.\n"
+        "4) Не смешивать разные продукты ради заполнения (лопатка ≠ шампунь, сухой шампунь ≠ обычный).\n"
+        "5) Бренд из колонки и названия; IKEA не смешивать с ноунейм; ноунейм не смешивать с именованными брендами.\n"
+        "6) IKEA и аксессуары-хранение (сумки, косметички, контейнеры) — можно разные SKU одного класса в одной связке.\n"
+        "7) Запчасти телефонов — группировать по модели устройства (iPhone 14, Samsung A54…).\n"
+        "8) Заполняй связки по максимуму внутри логической группы.\n"
+        "9) Анализируй ВСЕ товары, включая уже связанные — предлагай relocate/merge если текущая связка неоптимальна.\n"
+        "10) При сомнении — не объединяй.\n"
+    )
+    if mp == "wb":
+        return (
+            "Ты эксперт по связкам карточек Wildberries (WB). Связка = общий imtID.\n"
+            + common
+            + "Верни ТОЛЬКО JSON-массив без markdown. Элемент:\n"
+            '{"cluster_id":"c1","kind":"new_link"|"attach"|"relocate"|"merge_groups",'
+            '"article_ids":["vendor_code",...],"target_group_id":null|123456789,'
+            '"suggested_model_name":null,"normalized_product_name":"...","detected_brand":"...",'
+            '"confidence":"high"|"medium"|"low","reason":"кратко по-русски"}.\n'
+            "article_ids — vendor_code из списка. attach — 1 товар в существующую связку. "
+            "relocate — перенести в другую связку. merge_groups — объединить несколько в target imtID. "
+            "new_link — новая связка (target_group_id=null)."
+        )
+    return (
+        "Ты эксперт по связкам карточек Ozon. Связка = одно «Название модели».\n"
+        + common
+        + "Верни ТОЛЬКО JSON-массив без markdown. Элемент:\n"
+        '{"cluster_id":"c1","kind":"new_link"|"attach"|"relocate"|"merge_groups",'
+        '"article_ids":["offer_id",...],"target_group_id":null|"имя модели",'
+        '"suggested_model_name":"название модели","normalized_product_name":"...",'
+        '"detected_brand":"...","confidence":"high"|"medium"|"low","reason":"кратко по-русски"}.\n'
+        "article_ids — offer_id из списка."
+    )
+
+
+def _resolve_target_group_id(
+    cl: dict,
+    groups: List[dict],
+    marketplace: str,
+) -> Tuple[int, str]:
+    mp = (marketplace or "").strip().lower()
+    tgt_raw = cl.get("target_group_id") or cl.get("target_imt") or cl.get("target_group_label")
+    if mp == "wb":
+        tgt_imt = 0
+        if tgt_raw is not None:
+            try:
+                tgt_imt = int(tgt_raw)
+            except (TypeError, ValueError):
+                for g in groups:
+                    if str(g.get("group_label")) == str(tgt_raw):
+                        tgt_imt = int(g.get("group_id") or 0)
+                        break
+        return tgt_imt, f"imtID {tgt_imt}" if tgt_imt else ""
+    model = str(cl.get("suggested_model_name") or cl.get("target_group_id") or tgt_raw or "").strip()
+    return 0, model
+
+
+def _build_ai_candidate_entry(
+    cl: dict,
+    items: List[dict],
     groups: List[dict],
     *,
     marketplace: str,
+    seq: int,
+    source: str = "ai",
+) -> dict:
+    mp = (marketplace or "").strip().lower()
+    kind = str(cl.get("kind") or "new_link").strip()
+    if kind not in ("new_link", "attach", "relocate", "merge_groups"):
+        kind = "new_link"
+    tgt_imt, tgt_label = _resolve_target_group_id(cl, groups, mp)
+    group_by_id = {str(g.get("group_id")): g for g in groups if g.get("group_id")}
+    prefix = "pack" if source == "pack" else "ai"
+    entry: Dict[str, Any] = {
+        "candidate_id": f"{prefix}-{mp}-{seq}",
+        "kind": kind,
+        "marketplace": mp,
+        "category_label": _candidate_label(items, marketplace=mp),
+        "count": len(items),
+        "hint": str(cl.get("reason") or cl.get("hint") or "Подсказка ИИ")[:240],
+        "items": items,
+        "ai": True,
+        "ai_source": source,
+        "confidence": str(cl.get("confidence") or "medium").strip().lower(),
+        "normalized_product_name": str(cl.get("normalized_product_name") or "")[:120],
+        "detected_brand": str(cl.get("detected_brand") or _row_brand_extended(items[0]) if items else "")[:80],
+    }
+    if mp == "wb":
+        entry["subject_id"] = items[0].get("subject_id") if items else None
+        if kind in ("attach", "relocate", "merge_groups") and tgt_imt:
+            gref = group_by_id.get(str(tgt_imt)) or {}
+            entry["target_group_id"] = str(tgt_imt)
+            entry["target_group_label"] = tgt_label
+            entry["suggested_target_imt"] = tgt_imt
+            entry["sample_items"] = (gref.get("items") or [])[:3]
+            if kind == "relocate" and items:
+                src_gid = str(items[0].get("link_group_id") or items[0].get("imt_id") or "")
+                entry["source_group_id"] = src_gid
+                entry["source_group_label"] = items[0].get("link_group_label") or src_gid
+        else:
+            entry["suggested_target_imt"] = _wb_target_imt(items)
+    else:
+        entry["category_key"] = items[0].get("category_key") if items else None
+        model = str(cl.get("suggested_model_name") or tgt_label or "").strip()
+        if kind in ("attach", "relocate", "merge_groups") and model:
+            entry["target_group_label"] = model
+            entry["suggested_model_name"] = model
+            entry["sample_items"] = (group_by_id.get(model, {}).get("items") or [])[:3]
+        else:
+            entry["suggested_model_name"] = model or _suggested_model_name(items)
+    return entry
+
+
+def _validate_ai_cluster_items(items: List[dict], marketplace: str) -> Optional[str]:
+    if not items:
+        return "пусто"
+    if len(items) > MAX_LINK_ITEMS:
+        return f"более {MAX_LINK_ITEMS} товаров"
+    if not _items_same_category(items, marketplace):
+        return "разные категории"
+    if not _items_brand_buckets_compatible(items):
+        return "несовместимые бренды (IKEA/ноунейм)"
+    return None
+
+
+def deterministic_pack_suggestions(
+    rows: List[dict],
+    *,
+    marketplace: str,
+    split_oversized: bool = True,
+    start_seq: int = 0,
+) -> Tuple[List[dict], set[str], int]:
+    """Жёсткие связки по одинаковому базовому названию (фасовки 1/2/3 шт)."""
+    mp = (marketplace or "").strip().lower()
+    by_cat: Dict[str, List[dict]] = {}
+    for r in rows:
+        art = _row_article(r, mp)
+        if not art:
+            continue
+        by_cat.setdefault(_row_category_key(r, mp), []).append(r)
+
+    out: List[dict] = []
+    used: set[str] = set()
+    seq = start_seq
+
+    for cat_rows in by_cat.values():
+        by_base: Dict[str, List[dict]] = {}
+        for r in cat_rows:
+            base = _title_base_key(r.get("title") or "")
+            if len(base) < 6:
+                continue
+            by_base.setdefault(base, []).append(r)
+
+        for _base, items in by_base.items():
+            if len(items) < 2:
+                continue
+            arts = [_row_article(x, mp) for x in items]
+            if len(set(arts)) < 2:
+                continue
+            has_pack_hint = any(_PACK_RE.search(x.get("title") or "") for x in items)
+            if not has_pack_hint:
+                titles = [x.get("title") or "" for x in items]
+                if not all(_titles_related_enough(_title_base_key(titles[0]), _title_base_key(t)) for t in titles[1:]):
+                    continue
+            err = _validate_ai_cluster_items(items, mp)
+            if err:
+                continue
+            chunks = _split_items_to_bundles(items) if split_oversized else [items]
+            for chunk in chunks:
+                if len(chunk) < 2:
+                    continue
+                seq += 1
+                gids = [
+                    str(x.get("link_group_id") or x.get("imt_id") or x.get("model_name") or "")
+                    for x in chunk
+                ]
+                gids = [g for g in gids if g]
+                if gids and len(set(gids)) == 1 and all(x.get("linked") for x in chunk):
+                    continue
+                kind = "new_link"
+                cl: Dict[str, Any] = {
+                    "kind": kind,
+                    "reason": f"Один продукт, разная фасовка · {_candidate_label(chunk, marketplace=mp)}",
+                    "confidence": "high",
+                    "normalized_product_name": _base,
+                }
+                if len(set(gids)) == 1 and gids:
+                    cl["kind"] = "relocate"
+                    cl["target_group_id"] = gids[0]
+                    cl["reason"] = f"Собрать варианты упаковки в одной связке · {gids[0]}"
+                cand = _build_ai_candidate_entry(cl, chunk, [], marketplace=mp, seq=seq, source="pack")
+                out.append(cand)
+                for a in [_row_article(x, mp) for x in chunk]:
+                    if a:
+                        used.add(a)
+    return out, used, seq
+
+
+async def _ai_suggest_batch(
+    cat_rows: List[dict],
+    cat_groups: List[dict],
+    *,
+    marketplace: str,
     openai_key: str,
-    max_items: int = 60,
 ) -> List[dict]:
-    """ИИ-кластеризация несвязанных карточек (дополнение к эвристике)."""
     from app.core.openai_client import OpenAIClient
 
-    unlinked = [r for r in rows if not r.get("linked")][:max(2, min(int(max_items), 80))]
-    if len(unlinked) < 2:
-        return []
-    linked_samples = []
-    for g in groups:
-        if not g.get("linked") or len(g.get("items") or []) < 2:
-            continue
-        items = g.get("items") or []
-        sample = items[0] if items else {}
-        linked_samples.append(
-            {
-                "group_id": g.get("group_id"),
-                "group_label": g.get("group_label"),
-                "category": g.get("subject_name") or g.get("category_label"),
-                "subject_id": g.get("subject_id") or sample.get("subject_id"),
-                "sample_title": (sample.get("title") or "")[:80],
-                "sample_article": sample.get("vendor_code") or sample.get("offer_id"),
-                "count": len(items),
-                "titles": [(x.get("title") or "")[:80] for x in items[:4]],
-            }
-        )
-        if len(linked_samples) >= 15:
-            break
-
-    compact = []
-    for r in unlinked:
-        compact.append(
-            {
-                "article": r.get("vendor_code") or r.get("offer_id"),
-                "mp_id": r.get("nm_id") or r.get("sku"),
-                "title": (r.get("title") or "")[:120],
-                "category": r.get("subject_name") or r.get("category_label") or r.get("category_key"),
-                "subject_id": r.get("subject_id"),
-                "current_imt_id": r.get("imt_id"),
-            }
-        )
-
     mp = (marketplace or "").strip().lower()
-    if mp == "wb":
-        system = (
-            "Ты помощник по связкам карточек Wildberries (WB). "
-            "Это ТОЛЬКО WB: не упоминай Ozon, offer_id, «название модели». "
-            "Связка на WB — общий imtID (целое число). "
-            "Верни ТОЛЬКО JSON-массив без markdown. Каждый элемент: "
-            '{"cluster_id":"c1","kind":"new_link"|"attach","article_ids":["артикул продавца"],'
-            '"target_group_id":null|123456789,"reason":"кратко по-русски"}. '
-            "article_ids — vendor_code из списка. "
-            "Для attach: target_group_id = imtID из existing_linked_groups.group_id. "
-            "Для new_link: target_group_id = null, объединяй 2+ похожих товара одного subject_id. "
-            "Разные родительские категории и subject_id не смешивать."
-        )
-    else:
-        system = (
-            "Ты помощник по связкам карточек Ozon. "
-            "Это ТОЛЬКО Ozon: связка — одинаковое «Название модели». "
-            "Верни ТОЛЬКО JSON-массив без markdown. Каждый элемент: "
-            '{"cluster_id":"c1","kind":"new_link"|"attach","article_ids":["offer_id"],'
-            '"target_group_id":null|"имя модели","suggested_model_name":"название модели",'
-            '"reason":"кратко по-русски"}. '
-            "Для attach: target_group_id или suggested_model_name из existing_linked_groups. "
-            "Для new_link: предложи общее suggested_model_name. Одна категория на кластер."
-        )
+    by_art = {_row_article(r, mp): r for r in cat_rows if _row_article(r, mp)}
+    if len(by_art) < 2:
+        return []
+    products = [_compact_product_for_ai(r, mp) for r in cat_rows if _row_article(r, mp)]
+    linked_groups = [_compact_group_for_ai(g, mp) for g in cat_groups if (g.get("items") or [])][:20]
     user = json.dumps(
         {
-            "marketplace": marketplace,
-            "existing_linked_groups": linked_samples,
-            "unlinked_products": compact,
+            "marketplace": mp,
+            "existing_linked_groups": linked_groups,
+            "products": products,
         },
         ensure_ascii=False,
     )
     client = OpenAIClient(openai_key)
-    raw = await client.generate(system, user)
+    raw = await client.generate(_ai_system_prompt(mp), user)
     text = (raw or "").strip()
     if text.startswith("```"):
         text = re.sub(r"^```\w*\n?", "", text)
@@ -1752,72 +2011,123 @@ async def ai_suggest_card_links(
         return []
     if not isinstance(parsed, list):
         return []
-
-    by_id = {
-        str(r.get("vendor_code") or r.get("offer_id") or ""): r
-        for r in unlinked
-    }
-    group_by_id = {str(g.get("group_id")): g for g in groups if g.get("group_id")}
     out: List[dict] = []
-    for i, cl in enumerate(parsed):
+    for cl in parsed:
         if not isinstance(cl, dict):
             continue
         ids = [str(x).strip() for x in (cl.get("article_ids") or cl.get("ids") or []) if str(x).strip()]
-        items = [by_id[x] for x in ids if x in by_id]
-        if len(items) < 1:
+        items = [by_art[x] for x in ids if x in by_art]
+        if not items:
             continue
         kind = str(cl.get("kind") or "new_link").strip()
         if kind == "attach" and len(items) != 1:
             continue
-        if kind == "new_link" and len(items) < 2:
+        if kind in ("new_link", "merge_groups") and len(items) < 2:
             continue
-        if mp == "wb":
-            sids = {int(x.get("subject_id") or 0) for x in items}
-            if len(sids) > 1:
+        if kind == "relocate" and len(items) < 1:
+            continue
+        if str(cl.get("confidence") or "").lower() == "low":
+            continue
+        err = _validate_ai_cluster_items(items, mp)
+        if err:
+            continue
+        out.append({"cl": cl, "items": items})
+    return out
+
+
+async def ai_suggest_card_links(
+    rows: List[dict],
+    groups: List[dict],
+    *,
+    marketplace: str,
+    openai_key: str,
+    include_linked: bool = True,
+    scope: str = "all",
+    batch_size: int = 45,
+    max_products: int = 400,
+    deterministic_packs: bool = True,
+    split_oversized: bool = True,
+) -> Tuple[List[dict], dict]:
+    """
+    ИИ-кластеризация карточек (включая уже связанные).
+    Возвращает (предложения, meta).
+    """
+    mp = (marketplace or "").strip().lower()
+    meta: Dict[str, Any] = {"batches": 0, "ai_clusters": 0, "pack_clusters": 0}
+    pool = _filter_rows_for_ai_scope(rows, scope if include_linked else "unlinked", mp)
+    pool = pool[: max(2, min(int(max_products), 2000))]
+    if len(pool) < 2 and not deterministic_packs:
+        return [], meta
+
+    out: List[dict] = []
+    used_articles: set[str] = set()
+    seq = 0
+
+    if deterministic_packs:
+        pack_rows = pool if include_linked else [r for r in pool if not r.get("linked")]
+        packs, used_articles, seq = deterministic_pack_suggestions(
+            pack_rows,
+            marketplace=mp,
+            split_oversized=split_oversized,
+            start_seq=seq,
+        )
+        out.extend(packs)
+        meta["pack_clusters"] = len(packs)
+
+    ai_pool = [r for r in pool if _row_article(r, mp) not in used_articles]
+    if len(ai_pool) >= 2:
+        by_cat: Dict[str, List[dict]] = {}
+        groups_by_cat: Dict[str, List[dict]] = {}
+        for r in ai_pool:
+            ck = _row_category_key(r, mp)
+            by_cat.setdefault(ck, []).append(r)
+        for g in groups:
+            items = g.get("items") or []
+            if not items:
                 continue
-        else:
-            cats = {str(x.get("category_key") or "") for x in items}
-            if len(cats) > 1:
-                continue
-        seq = i + 1
-        entry: Dict[str, Any] = {
-            "candidate_id": f"ai-{mp}-{seq}",
-            "kind": kind,
-            "marketplace": mp,
-            "category_label": _candidate_label(items, marketplace=mp),
-            "count": len(items),
-            "hint": str(cl.get("reason") or "Подсказка ИИ")[:200],
-            "items": items,
-            "ai": True,
-        }
-        if mp == "wb":
-            tgt_raw = cl.get("target_group_id") or cl.get("target_imt") or cl.get("target_group_label")
-            tgt_imt = 0
-            if tgt_raw is not None:
+            ck = _row_category_key(items[0], mp)
+            groups_by_cat.setdefault(ck, []).append(g)
+
+        bs = max(10, min(int(batch_size), 80))
+        seen_clusters: set[frozenset] = set()
+        for ck, cat_rows in by_cat.items():
+            cat_groups = groups_by_cat.get(ck, [])
+            for i in range(0, len(cat_rows), bs):
+                batch = cat_rows[i : i + bs]
+                if len(batch) < 2:
+                    continue
+                meta["batches"] += 1
                 try:
-                    tgt_imt = int(tgt_raw)
-                except (TypeError, ValueError):
-                    for g in groups:
-                        if str(g.get("group_label")) == str(tgt_raw):
-                            tgt_imt = int(g.get("group_id") or 0)
-                            break
-            if kind == "attach" and tgt_imt:
-                gref = group_by_id.get(str(tgt_imt)) or {}
-                entry["target_group_id"] = str(tgt_imt)
-                entry["target_group_label"] = f"imtID {tgt_imt}"
-                entry["suggested_target_imt"] = tgt_imt
-                entry["sample_items"] = (gref.get("items") or [])[:3]
-            else:
-                entry["suggested_target_imt"] = _wb_target_imt(items)
-        else:
-            model = str(cl.get("suggested_model_name") or cl.get("target_group_id") or "").strip()
-            if kind == "attach":
-                entry["target_group_label"] = str(cl.get("target_group_id") or model)
-                entry["suggested_model_name"] = model or str(cl.get("target_group_id") or "")
-            else:
-                entry["suggested_model_name"] = model or _suggested_model_name(items)
-        out.append(entry)
-    return out[:40]
+                    batch_results = await _ai_suggest_batch(
+                        batch, cat_groups, marketplace=mp, openai_key=openai_key,
+                    )
+                except Exception as e:
+                    log.warning("AI batch failed (%s): %s", ck, e)
+                    continue
+                for br in batch_results:
+                    cl = br["cl"]
+                    items = br["items"]
+                    if split_oversized and len(items) > MAX_LINK_ITEMS:
+                        chunks = _split_items_to_bundles(items)
+                    else:
+                        chunks = [items]
+                    for chunk in chunks:
+                        if len(chunk) < 2 and cl.get("kind") in ("new_link", "merge_groups"):
+                            continue
+                        key = frozenset(_row_article(x, mp) for x in chunk)
+                        if key in seen_clusters:
+                            continue
+                        seen_clusters.add(key)
+                        err = _validate_ai_cluster_items(chunk, mp)
+                        if err:
+                            continue
+                        seq += 1
+                        out.append(
+                            _build_ai_candidate_entry(cl, chunk, groups, marketplace=mp, seq=seq, source="ai")
+                        )
+                        meta["ai_clusters"] += 1
+
+    return out[:120], meta
 
 
 def _enrich_wb_row(row: dict, subject_map: Dict[int, dict]) -> None:
@@ -2096,8 +2406,9 @@ def build_catalog_payload(
     store_id: int,
     marketplace: str,
     articles_only: bool = False,
+    suggestions: str = "none",
 ) -> dict:
-    """Каталог + предложения связок после fetch_*_catalog."""
+    """Каталог + опциональные предложения связок (suggestions: none | review | all)."""
     mp = (marketplace or "wb").strip().lower()
     if mp == "wb":
         groups = group_wb_rows(rows)
@@ -2105,13 +2416,21 @@ def build_catalog_payload(
         groups = group_ozon_rows(rows, articles_only=articles_only)
     apply_link_status(rows, groups)
     rows = sort_catalog_rows(rows, marketplace=mp)
-    candidates = suggest_link_candidates(rows, marketplace=mp)
-    attach = group_attach_suggestions(
-        suggest_attach_to_groups(rows, groups, marketplace=mp),
-        marketplace=mp,
-    )
-    review = suggest_review_linked_groups(groups, marketplace=mp) if not articles_only else []
-    combine = suggest_combine_candidates(candidates, marketplace=mp)
+    mode = (suggestions or "none").strip().lower()
+    candidates: List[dict] = []
+    attach: List[dict] = []
+    review: List[dict] = []
+    combine: List[dict] = []
+    if mode in ("all", "full"):
+        candidates = suggest_link_candidates(rows, marketplace=mp)
+        attach = group_attach_suggestions(
+            suggest_attach_to_groups(rows, groups, marketplace=mp),
+            marketplace=mp,
+        )
+        review = suggest_review_linked_groups(groups, marketplace=mp) if not articles_only else []
+        combine = suggest_combine_candidates(candidates, marketplace=mp)
+    elif mode == "review" and not articles_only:
+        review = suggest_review_linked_groups(groups, marketplace=mp)
     linked_groups = sum(1 for g in groups if g.get("linked"))
     unlinked_count = sum(1 for r in rows if not r.get("linked"))
     return {
@@ -2137,6 +2456,7 @@ def build_wb_catalog_payload(
     *,
     store_id: int,
     articles_only: bool = False,
+    suggestions: str = "none",
 ) -> dict:
     return build_catalog_payload(
         rows,
@@ -2144,6 +2464,7 @@ def build_wb_catalog_payload(
         store_id=store_id,
         marketplace="wb",
         articles_only=articles_only,
+        suggestions=suggestions,
     )
 
 
@@ -2153,6 +2474,7 @@ def build_ozon_catalog_payload(
     *,
     store_id: int,
     articles_only: bool = False,
+    suggestions: str = "none",
 ) -> dict:
     return build_catalog_payload(
         rows,
@@ -2160,6 +2482,7 @@ def build_ozon_catalog_payload(
         store_id=store_id,
         marketplace="ozon",
         articles_only=articles_only,
+        suggestions=suggestions,
     )
 
 
