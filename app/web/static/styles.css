@@ -2718,6 +2718,14 @@ body.theme-dark .toggle-row:hover {
   margin-top: 8px;
 }
 
+.progress-pct {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
 /* Ozon actions */
 .ozon-actions-layout .form-card-wide {
   border-radius: var(--radius-lg);

@@ -731,7 +731,50 @@
     setTimeout(() => { wbChatsSuppressSelectChange = false; }, 0);
   }
 
-  function setPanelLoading(id, visible, message) {
+  function setCardLinksLoading(visible, message, pct) {
+    const wrap = document.getElementById('card-links-loading');
+    if (!wrap) return;
+    const bar = document.getElementById('card-links-loading-bar');
+    const fill = document.getElementById('card-links-loading-fill');
+    const textEl = document.getElementById('card-links-loading-text');
+    const pctEl = document.getElementById('card-links-loading-pct');
+    wrap.hidden = !visible;
+    wrap.classList.toggle('visible', !!visible);
+    wrap.style.removeProperty('display');
+    if (!visible) {
+      if (bar) {
+        bar.classList.add('indeterminate');
+        bar.setAttribute('aria-valuenow', '0');
+      }
+      if (fill) fill.style.width = '0%';
+      if (pctEl) {
+        pctEl.textContent = '';
+        pctEl.hidden = true;
+      }
+      return;
+    }
+    if (message && textEl) textEl.textContent = message;
+    const hasPct = typeof pct === 'number' && !Number.isNaN(pct);
+    if (bar) bar.classList.toggle('indeterminate', !hasPct);
+    if (hasPct && fill) {
+      const clamped = Math.max(0, Math.min(100, Math.round(pct)));
+      fill.style.width = clamped + '%';
+      if (bar) bar.setAttribute('aria-valuenow', String(clamped));
+      if (pctEl) {
+        pctEl.textContent = clamped + '%';
+        pctEl.hidden = false;
+      }
+    } else if (pctEl) {
+      pctEl.textContent = '';
+      pctEl.hidden = true;
+    }
+  }
+
+  function setPanelLoading(id, visible, message, pct) {
+    if (id === 'card-links-loading') {
+      setCardLinksLoading(visible, message, pct);
+      return;
+    }
     const wrap = document.getElementById(id);
     if (!wrap) return;
     wrap.hidden = !visible;
@@ -2322,11 +2365,41 @@
   let _cardLinksAiSettings = {
     includeLinked: true,
     scope: 'all',
-    batchSize: 45,
+    batchSize: 60,
     maxProducts: 0,
+    maxAiBatches: 12,
     deterministicPacks: true,
     splitOversized: true,
   };
+  let _cardLinksAiPoll = null;
+
+  function stopCardLinksAiPoll() {
+    if (_cardLinksAiPoll) {
+      clearInterval(_cardLinksAiPoll);
+      _cardLinksAiPoll = null;
+    }
+  }
+
+  function applyCardLinksAiResult(data) {
+    cardLinksData.ai_suggestions = data.ai_suggestions || [];
+    cardLinksData.ai_bundles = data.ai_bundles || [];
+    cardLinksData.ai_meta = data.ai_meta || {};
+    cardLinksSelectedAi.clear();
+    cardLinksView = 'ai';
+    document.querySelectorAll('.card-links-tab').forEach(btn => {
+      btn.classList.toggle('active', btn.getAttribute('data-cl-view') === 'ai');
+    });
+    const meta = data.ai_meta || {};
+    const trunc = meta.truncated ? ' · ⚠ не весь каталог (увеличьте лимит)' : '';
+    const uncov = meta.uncovered ? ` · без предложения: ${meta.uncovered}` : '';
+    const batchHint = meta.batches_skipped
+      ? ` · категорий ${meta.batches_run || '?'}/${meta.batches_planned || '?'} (лимит)`
+      : (meta.batches_run ? ` · категорий ${meta.batches_run}${meta.categories_total ? ` из ${meta.categories_total}` : ''}` : '');
+    setCardLinksStatus(
+      `ИИ: ${data.count || 0} итоговых связок · проверено ${meta.analyzed || '?'}/${meta.total_catalog || '?'} товаров${trunc}${uncov}${batchHint}`,
+    );
+    renderCardLinksTable();
+  }
 
   const CARD_LINKS_MAX_PAGES_OPTS = {
     wb: [
@@ -3001,8 +3074,9 @@
     return {
       include_linked: !!document.getElementById('card-links-ai-include-linked')?.checked,
       scope: String(document.getElementById('card-links-ai-scope')?.value || 'all'),
-      batch_size: Number(document.getElementById('card-links-ai-batch-size')?.value || 45),
+      batch_size: Number(document.getElementById('card-links-ai-batch-size')?.value || 60),
       max_products: Number(document.getElementById('card-links-ai-max-products')?.value || 0),
+      max_ai_batches: Number(document.getElementById('card-links-ai-max-batches')?.value || 12),
       deterministic_packs: !!document.getElementById('card-links-ai-deterministic-packs')?.checked,
       split_oversized: !!document.getElementById('card-links-ai-split-oversized')?.checked,
     };
@@ -3019,9 +3093,11 @@
     const scope = document.getElementById('card-links-ai-scope');
     if (scope) scope.value = s.scope || 'all';
     const bs = document.getElementById('card-links-ai-batch-size');
-    if (bs) bs.value = String(s.batchSize || 45);
+    if (bs) bs.value = String(s.batchSize || 60);
     const mp = document.getElementById('card-links-ai-max-products');
-    if (mp) mp.value = String(s.maxProducts || 400);
+    if (mp) mp.value = String(s.maxProducts ?? 0);
+    const mb = document.getElementById('card-links-ai-max-batches');
+    if (mb) mb.value = String(s.maxAiBatches ?? 12);
     const det = document.getElementById('card-links-ai-deterministic-packs');
     if (det) det.checked = s.deterministicPacks !== false;
     const split = document.getElementById('card-links-ai-split-oversized');
@@ -3032,8 +3108,9 @@
     _cardLinksAiSettings = {
       includeLinked: !!document.getElementById('card-links-ai-include-linked')?.checked,
       scope: String(document.getElementById('card-links-ai-scope')?.value || 'all'),
-      batchSize: Number(document.getElementById('card-links-ai-batch-size')?.value || 45),
-      maxProducts: Number(document.getElementById('card-links-ai-max-products')?.value || 400),
+      batchSize: Number(document.getElementById('card-links-ai-batch-size')?.value || 60),
+      maxProducts: Number(document.getElementById('card-links-ai-max-products')?.value || 0),
+      maxAiBatches: Number(document.getElementById('card-links-ai-max-batches')?.value || 12),
       deterministicPacks: !!document.getElementById('card-links-ai-deterministic-packs')?.checked,
       splitOversized: !!document.getElementById('card-links-ai-split-oversized')?.checked,
     };
@@ -4771,6 +4848,7 @@
       return;
     }
     persistCardLinksAiSettings();
+    stopCardLinksAiPoll();
     cardLinksAiEdits = {};
     const articles = cardLinksArticlesText();
     const articlesOnly = cardLinksArticlesOnly();
@@ -4782,36 +4860,60 @@
     const qs = new URLSearchParams();
     if (articles) qs.set('articles', articles);
     if (articlesOnly) qs.set('articles_only', '1');
-    setPanelLoading('card-links-loading', true, 'ИИ анализирует каталог (названия + текущие связки)…');
+    if (window.MarketAIFx && window.MarketAIFx.hideCow) {
+      window.MarketAIFx.hideCow();
+    }
+    setCardLinksLoading(true, 'Запуск ИИ-анализа…', 0);
     try {
-      const data = await api(`/card-links/${mp}/${storeId}/ai-suggest?${qs.toString()}`, {
+      const res = await api(`/card-links/${mp}/${storeId}/ai-suggest?${qs.toString()}`, {
         method: 'POST',
         body: JSON.stringify({
           items: cardLinksData.items,
           groups: cardLinksData.groups,
           options: cardLinksAiOptionsFromUI(),
         }),
-        timeoutMs: 600000,
+        timeoutMs: 120000,
       });
-      cardLinksData.ai_suggestions = data.ai_suggestions || [];
-      cardLinksData.ai_bundles = data.ai_bundles || [];
-      cardLinksData.ai_meta = data.ai_meta || {};
-      cardLinksSelectedAi.clear();
-      cardLinksView = 'ai';
-      document.querySelectorAll('.card-links-tab').forEach(btn => {
-        btn.classList.toggle('active', btn.getAttribute('data-cl-view') === 'ai');
-      });
-      const meta = data.ai_meta || {};
-      const trunc = meta.truncated ? ' · ⚠ не весь каталог (увеличьте лимит)' : '';
-      const uncov = meta.uncovered ? ` · без предложения: ${meta.uncovered}` : '';
-      setCardLinksStatus(
-        `ИИ: ${data.count || 0} итоговых связок · проверено ${meta.analyzed || '?'}/${meta.total_catalog || '?'} товаров${trunc}${uncov}`,
-      );
-      renderCardLinksTable();
+      if (!res.task_id) {
+        throw new Error('Сервер не вернул идентификатор задачи ИИ');
+      }
+      const taskId = res.task_id;
+      _cardLinksAiPoll = setInterval(async () => {
+        try {
+          const state = await api('/tasks/' + taskId);
+          const detail = (state.detail || '').trim();
+          const [cur, total] = state.progress || [0, 1];
+          const safeTotal = Math.max(Number(total) || 0, 1);
+          const safeCur = Math.max(0, Math.min(Number(cur) || 0, safeTotal));
+          const pct = Math.round((safeCur / safeTotal) * 100);
+          const line = detail || `ИИ: шаг ${safeCur}/${safeTotal}`;
+          setCardLinksLoading(true, line, pct);
+          if (state.status === 'done') {
+            stopCardLinksAiPoll();
+            setCardLinksLoading(true, 'Готово', 100);
+            setTimeout(() => setCardLinksLoading(false), 400);
+            if (window.MarketAIFx && window.MarketAIFx.hideCow) {
+              window.MarketAIFx.hideCow({ success: true });
+            }
+            applyCardLinksAiResult(state.result || {});
+          } else if (state.status === 'error' || state.status === 'cancelled') {
+            stopCardLinksAiPoll();
+            setCardLinksLoading(false);
+            toast(state.error || (state.status === 'cancelled' ? 'Остановлено' : 'Ошибка ИИ'), 'error');
+          }
+        } catch (e) {
+          stopCardLinksAiPoll();
+          setCardLinksLoading(false);
+          toast((e && e.message) ? e.message : 'Ошибка опроса задачи ИИ', 'error');
+        }
+      }, 800);
     } catch (e) {
+      stopCardLinksAiPoll();
+      setCardLinksLoading(false);
+      if (window.MarketAIFx && window.MarketAIFx.hideCow) {
+        window.MarketAIFx.hideCow();
+      }
       toast((e && e.message) ? e.message : 'Ошибка ИИ', 'error');
-    } finally {
-      setPanelLoading('card-links-loading', false);
     }
   }
 
@@ -4971,6 +5073,7 @@
       'card-links-ai-scope',
       'card-links-ai-batch-size',
       'card-links-ai-max-products',
+      'card-links-ai-max-batches',
       'card-links-ai-deterministic-packs',
       'card-links-ai-split-oversized',
     ].forEach((id) => {

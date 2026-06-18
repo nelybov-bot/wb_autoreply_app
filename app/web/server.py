@@ -83,7 +83,6 @@ from app.core.ozon_actions import (
 )
 from app.core.ozon_client import OzonClient
 from app.core.card_links import (
-    ai_suggest_card_links,
     apply_link_status,
     build_wb_catalog_payload,
     build_ozon_catalog_payload,
@@ -3368,8 +3367,9 @@ class CardLinksOzonQtyTableBody(BaseModel):
 class CardLinksAiOptions(BaseModel):
     include_linked: bool = True
     scope: str = "all"
-    batch_size: int = 45
+    batch_size: int = 60
     max_products: int = 0
+    max_ai_batches: int = 12
     deterministic_packs: bool = True
     split_oversized: bool = True
 
@@ -3753,27 +3753,20 @@ async def api_card_links_wb_ai_suggest(
             raise _card_links_http_error("wb", e) from e
         groups = group_wb_rows(rows)
         apply_link_status(rows, groups)
-    try:
-        ai_rows, ai_bundles, ai_meta = await ai_suggest_card_links(
-            rows,
-            groups,
-            marketplace="wb",
-            openai_key=key,
-            include_linked=opts.include_linked,
-            scope=opts.scope,
-            batch_size=opts.batch_size,
-            max_products=opts.max_products,
-            deterministic_packs=opts.deterministic_packs,
-            split_oversized=opts.split_oversized,
-        )
-    except HttpStatusError as e:
-        raise HTTPException(e.status, str(e.body or e)[:400]) from e
-    return {
-        "ai_suggestions": ai_rows,
-        "ai_bundles": ai_bundles,
-        "count": len(ai_bundles),
-        "ai_meta": ai_meta,
-    }
+    task_id = await web_tasks.run_card_links_ai_suggest(
+        rows=rows,
+        groups=groups,
+        marketplace="wb",
+        openai_key=key,
+        include_linked=opts.include_linked,
+        scope=opts.scope,
+        batch_size=opts.batch_size,
+        max_products=opts.max_products,
+        max_ai_batches=opts.max_ai_batches,
+        deterministic_packs=opts.deterministic_packs,
+        split_oversized=opts.split_oversized,
+    )
+    return {"task_id": task_id, "status": "running"}
 
 
 @app.post("/api/card-links/ozon/{store_id}/ai-suggest")
@@ -3813,27 +3806,20 @@ async def api_card_links_ozon_ai_suggest(
             raise HTTPException(400, str(e)) from e
         groups = group_ozon_rows(rows, articles_only=articles_only)
         apply_link_status(rows, groups)
-    try:
-        ai_rows, ai_bundles, ai_meta = await ai_suggest_card_links(
-            rows,
-            groups,
-            marketplace="ozon",
-            openai_key=key,
-            include_linked=opts.include_linked,
-            scope=opts.scope,
-            batch_size=opts.batch_size,
-            max_products=opts.max_products,
-            deterministic_packs=opts.deterministic_packs,
-            split_oversized=opts.split_oversized,
-        )
-    except HttpStatusError as e:
-        raise HTTPException(e.status, str(e.body or e)[:400]) from e
-    return {
-        "ai_suggestions": ai_rows,
-        "ai_bundles": ai_bundles,
-        "count": len(ai_bundles),
-        "ai_meta": ai_meta,
-    }
+    task_id = await web_tasks.run_card_links_ai_suggest(
+        rows=rows,
+        groups=groups,
+        marketplace="ozon",
+        openai_key=key,
+        include_linked=opts.include_linked,
+        scope=opts.scope,
+        batch_size=opts.batch_size,
+        max_products=opts.max_products,
+        max_ai_batches=opts.max_ai_batches,
+        deterministic_packs=opts.deterministic_packs,
+        split_oversized=opts.split_oversized,
+    )
+    return {"task_id": task_id, "status": "running"}
 
 
 # ---------- API: stats ----------

@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
-  <link rel="stylesheet" href="/static/styles.css?v=28">
+  <link rel="stylesheet" href="/static/styles.css?v=29">
   <link rel="stylesheet" href="/static/fx-widgets.css?v=5">
 </head>
 <body>
@@ -665,11 +665,13 @@
                 </select>
               </label>
               <label class="card-links-work-filter-field">
-                <span class="toolbar-label">Товаров за запрос ИИ</span>
+                <span class="toolbar-label">Лимит товаров в категории</span>
                 <select id="card-links-ai-batch-size" class="select-md">
-                  <option value="30">30</option>
-                  <option value="45" selected>45</option>
-                  <option value="60">60</option>
+                  <option value="60" selected>60 (целиком, если меньше)</option>
+                  <option value="80">80</option>
+                  <option value="100">100</option>
+                  <option value="120">120</option>
+                  <option value="150">150</option>
                 </select>
               </label>
               <label class="card-links-work-filter-field">
@@ -682,16 +684,31 @@
                   <option value="5000">5000</option>
                 </select>
               </label>
+              <label class="card-links-work-filter-field">
+                <span class="toolbar-label">Макс. категорий за запуск</span>
+                <select id="card-links-ai-max-batches" class="select-md">
+                  <option value="6">6</option>
+                  <option value="12" selected>12</option>
+                  <option value="20">20</option>
+                  <option value="40">40</option>
+                  <option value="0">Без лимита</option>
+                </select>
+              </label>
               <label class="card-links-work-toggle"><input type="checkbox" id="card-links-ai-deterministic-packs" checked> Авто: фасовки 1/2/3 шт (без ИИ)</label>
               <label class="card-links-work-toggle"><input type="checkbox" id="card-links-ai-split-oversized" checked> Делить связки &gt;30</label>
             </div>
-            <p class="form-hint">Показываются <strong>итоговые связки</strong> (что будет после применения). По умолчанию проверяется весь загруженный каталог.</p>
+            <p class="form-hint">Показываются <strong>итоговые связки</strong>. ИИ получает <strong>всю категорию одним запросом</strong> (лучше видит фасовки и связки). Очень большие категории режутся по лимиту. Запуск фоном — прогресс в %.</p>
           </details>
         </details>
         <div id="card-links-status" class="form-hint card-links-status" role="status">Выберите магазин и нажмите «Загрузить».</div>
         <div class="progress-wrap" id="card-links-loading" aria-live="polite" hidden>
-          <div class="progress-bar indeterminate" role="progressbar"><div class="fill"></div></div>
-          <span class="progress-label" id="card-links-loading-text">Загрузка…</span>
+          <div class="progress-bar indeterminate" id="card-links-loading-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="fill" id="card-links-loading-fill" style="width: 0%"></div>
+          </div>
+          <div class="progress-foot">
+            <span class="progress-label" id="card-links-loading-text">Загрузка…</span>
+            <span class="progress-pct" id="card-links-loading-pct" hidden></span>
+          </div>
         </div>
         <div class="card-links-nav">
           <div class="segmented card-links-view-tabs" role="tablist" aria-label="Режим">
@@ -1409,6 +1426,6 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=51"></script>
+  <script src="/static/app.js?v=54"></script>
 </body>
 </html>

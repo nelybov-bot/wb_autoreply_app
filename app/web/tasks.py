@@ -319,6 +319,98 @@ async def run_send(db: Database, item_ids: list[int]) -> str:
     return task_id
 
 
+async def run_card_links_ai_suggest(
+    *,
+    rows: list,
+    groups: list,
+    marketplace: str,
+    openai_key: str,
+    include_linked: bool = True,
+    scope: str = "all",
+    batch_size: int = 60,
+    max_products: int = 0,
+    max_ai_batches: int = 12,
+    deterministic_packs: bool = True,
+    split_oversized: bool = True,
+) -> str:
+    from app.core.card_links import ai_suggest_card_links
+    from app.core.net import HttpStatusError
+
+    task_id = _make_id()
+    ctrl = await _init_task(task_id, "card_links_ai", "Подготовка ИИ…", 1)
+
+    def _progress(cur: int, tot: int, detail: str) -> None:
+        if _tasks.get(task_id, {}).get("status") != "running":
+            return
+        safe_tot = max(int(tot or 0), 1)
+        safe_cur = max(0, min(int(cur or 0), safe_tot))
+
+        async def _set() -> None:
+            async with _tasks_lock:
+                if task_id in _tasks:
+                    _tasks[task_id]["progress"] = [safe_cur, safe_tot]
+                    _tasks[task_id]["detail"] = detail
+
+        asyncio.create_task(_set())
+
+    async def _run() -> None:
+        try:
+            ai_rows, ai_bundles, ai_meta = await ai_suggest_card_links(
+                list(rows),
+                list(groups),
+                marketplace=marketplace,
+                openai_key=openai_key,
+                include_linked=include_linked,
+                scope=scope,
+                batch_size=batch_size,
+                max_products=max_products,
+                max_ai_batches=max_ai_batches,
+                deterministic_packs=deterministic_packs,
+                split_oversized=split_oversized,
+                progress_cb=_progress,
+                cancel=ctrl,
+            )
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "done"
+                _tasks[task_id]["result"] = {
+                    "ai_suggestions": ai_rows,
+                    "ai_bundles": ai_bundles,
+                    "count": len(ai_bundles),
+                    "ai_meta": ai_meta,
+                }
+                planned = int(ai_meta.get("batches_planned") or 0)
+                run_n = int(ai_meta.get("batches_run") or 0)
+                skipped = int(ai_meta.get("batches_skipped") or 0)
+                detail = f"Готово · {len(ai_bundles)} связок"
+                if planned:
+                    detail += f" · ИИ-запросов {run_n}/{planned}"
+                if skipped:
+                    detail += f" · пропущено {skipped} (лимит батчей)"
+                _tasks[task_id]["progress"] = [max(run_n, 1), max(planned, run_n, 1)]
+                _tasks[task_id]["detail"] = detail
+            _mark_finished(task_id, "done")
+        except asyncio.CancelledError:
+            async with _tasks_lock:
+                if task_id in _tasks and _tasks[task_id].get("status") == "running":
+                    _tasks[task_id]["status"] = "cancelled"
+                    _tasks[task_id]["error"] = "Остановлено пользователем"
+            _mark_finished(task_id, "cancelled")
+        except HttpStatusError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e.body or e)[:400]
+            _mark_finished(task_id, "error")
+        except Exception as e:
+            log.exception("card_links_ai task %s failed: %s", task_id, e)
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+
+    _handles[task_id] = asyncio.create_task(_run())
+    return task_id
+
+
 async def get_task(task_id: str) -> Optional[dict[str, Any]]:
     await _prune_tasks()
     async with _tasks_lock:

@@ -5,6 +5,45 @@
 
 ---
 
+## 2026-06-18 — ИИ по категориям целиком
+
+### Backend
+- `_build_ai_category_batch_jobs`: 1 OpenAI-запрос на категорию, split только при превышении cap
+- Промпт: `category`, `product_count`; meta: `categories_total`, `ai_mode: category`
+
+### Frontend
+- Настройки: «Лимит товаров в категории», «Макс. категорий за запуск»
+- `app.js?v=54`
+
+---
+
+## 2026-06-18 — Процент прогресса ИИ + параллельные батчи
+
+### Backend
+- До **3 параллельных** вызовов OpenAI (`AI_SUGGEST_PARALLEL`)
+- Общий клиент OpenAI на задачу; батч по умолчанию 60
+- Прогресс: шаги prep → N батчей → сборка (cur/total для %)
+
+### Frontend
+- Determinate progress bar + метка «N%» для ИИ-задачи
+- `app.js?v=53`, `styles.css?v=29`
+
+---
+
+## 2026-06-18 — Фоновый ИИ-связки (fix таймаута Render)
+
+### Backend
+- `ai-suggest` запускает фоновую задачу `card_links_ai`, ответ `{ task_id }`
+- `max_ai_batches` (default 12), meta: batches_planned/run/skipped
+- Батчи сортируются по размеру категории (сначала крупные)
+
+### Frontend
+- Опрос задачи, прогресс «ИИ: запрос N/M», без 10-мин HTTP hang
+- Настройка лимита батчей; снятие cow-overlay при ошибке
+- `app.js?v=52`
+
+---
+
 ## 2026-06-18 — Итоговые связки ИИ + полный каталог
 
 ### Backend

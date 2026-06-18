@@ -6,13 +6,15 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.core.net import HttpStatusError
 from app.core.ozon_client import OzonClient
 from app.core.wb_content_client import WbContentClient
 
 log = logging.getLogger("card_links")
+
+AI_SUGGEST_PARALLEL = 3
 
 OZON_MODEL_ATTR_ID = OzonClient.OZON_MODEL_ATTR_ID
 # Частые ID «Бренд» в разных категориях Ozon (уточняются по схеме категории).
@@ -1672,6 +1674,48 @@ def _row_category_key(row: dict, marketplace: str) -> str:
     return f"oz:{row.get('category_key') or '0:0'}"
 
 
+def _row_category_label(row: dict, marketplace: str) -> str:
+    mp = (marketplace or "").strip().lower()
+    name = str(row.get("subject_name") or row.get("category_label") or "").strip()
+    if name:
+        return name
+    if mp == "wb":
+        parent = str(row.get("parent_name") or "").strip()
+        if parent:
+            return parent
+    return _row_category_key(row, mp)
+
+
+def _build_ai_category_batch_jobs(
+    by_cat: Dict[str, List[dict]],
+    groups_by_cat: Dict[str, List[dict]],
+    *,
+    marketplace: str,
+    max_per_request: int,
+) -> List[Tuple[str, List[dict], List[dict], str]]:
+    """Один запрос ИИ на категорию; режем только если категория больше лимита."""
+    mp = (marketplace or "").strip().lower()
+    cap = max(10, min(int(max_per_request or 60), 150))
+    jobs: List[Tuple[str, List[dict], List[dict], str]] = []
+    for ck, cat_rows in by_cat.items():
+        if len(cat_rows) < 2:
+            continue
+        cat_groups = groups_by_cat.get(ck, [])
+        cat_label = _row_category_label(cat_rows[0], mp)
+        if len(cat_rows) <= cap:
+            jobs.append((ck, cat_rows, cat_groups, cat_label))
+            continue
+        total_parts = (len(cat_rows) + cap - 1) // cap
+        for part_idx, i in enumerate(range(0, len(cat_rows), cap), start=1):
+            batch = cat_rows[i : i + cap]
+            if len(batch) < 2:
+                continue
+            part_label = f"{cat_label} ({part_idx}/{total_parts})" if total_parts > 1 else cat_label
+            jobs.append((ck, batch, cat_groups, part_label))
+    jobs.sort(key=lambda x: -len(x[1]))
+    return jobs
+
+
 def _row_brand_extended(row: dict) -> str:
     b = str(row.get("brand") or "").strip()
     if b:
@@ -2189,6 +2233,8 @@ async def _ai_suggest_batch(
     *,
     marketplace: str,
     openai_key: str,
+    client: Any = None,
+    category_label: str = "",
 ) -> List[dict]:
     from app.core.openai_client import OpenAIClient
 
@@ -2201,13 +2247,15 @@ async def _ai_suggest_batch(
     user = json.dumps(
         {
             "marketplace": mp,
+            "category": category_label or _row_category_label(cat_rows[0], mp) if cat_rows else "",
+            "product_count": len(products),
             "existing_linked_groups": linked_groups,
             "products": products,
         },
         ensure_ascii=False,
     )
-    client = OpenAIClient(openai_key)
-    raw = await client.generate(_ai_system_prompt(mp), user)
+    ai_client = client or OpenAIClient(openai_key)
+    raw = await ai_client.generate(_ai_system_prompt(mp), user)
     text = (raw or "").strip()
     if text.startswith("```"):
         text = re.sub(r"^```\w*\n?", "", text)
@@ -2251,10 +2299,13 @@ async def ai_suggest_card_links(
     openai_key: str,
     include_linked: bool = True,
     scope: str = "all",
-    batch_size: int = 45,
+    batch_size: int = 60,
     max_products: int = 400,
+    max_ai_batches: int = 12,
     deterministic_packs: bool = True,
     split_oversized: bool = True,
+    progress_cb: Optional[Callable[[int, int, str], None]] = None,
+    cancel: Any = None,
 ) -> Tuple[List[dict], List[dict], dict]:
     """
     ИИ-кластеризация карточек (включая уже связанные).
@@ -2263,6 +2314,11 @@ async def ai_suggest_card_links(
     mp = (marketplace or "").strip().lower()
     meta: Dict[str, Any] = {
         "batches": 0,
+        "batches_planned": 0,
+        "batches_run": 0,
+        "batches_skipped": 0,
+        "categories_total": 0,
+        "ai_mode": "category",
         "ai_clusters": 0,
         "pack_clusters": 0,
         "total_catalog": len(rows),
@@ -2282,6 +2338,8 @@ async def ai_suggest_card_links(
     seq = 0
 
     if deterministic_packs:
+        if progress_cb:
+            progress_cb(0, 1, "Авто-фасовки 1/2/3 шт…")
         pack_rows = pool if include_linked else [r for r in pool if not r.get("linked")]
         packs, used_articles, seq = deterministic_pack_suggestions(
             pack_rows,
@@ -2306,44 +2364,114 @@ async def ai_suggest_card_links(
             ck = _row_category_key(items[0], mp)
             groups_by_cat.setdefault(ck, []).append(g)
 
-        bs = max(10, min(int(batch_size), 80))
+        bs = max(10, min(int(batch_size), 150))
         seen_clusters: set[frozenset] = set()
-        for ck, cat_rows in by_cat.items():
-            cat_groups = groups_by_cat.get(ck, [])
-            for i in range(0, len(cat_rows), bs):
-                batch = cat_rows[i : i + bs]
-                if len(batch) < 2:
-                    continue
-                meta["batches"] += 1
+        batch_jobs = _build_ai_category_batch_jobs(
+            by_cat,
+            groups_by_cat,
+            marketplace=mp,
+            max_per_request=bs,
+        )
+        meta["categories_total"] = len(by_cat)
+        meta["batches_planned"] = len(batch_jobs)
+        batch_cap = int(max_ai_batches or 0)
+        if batch_cap > 0 and len(batch_jobs) > batch_cap:
+            batch_jobs = batch_jobs[:batch_cap]
+            meta["batches_skipped"] = meta["batches_planned"] - batch_cap
+        total_batches = len(batch_jobs)
+        total_steps = max(total_batches, 1) + 2
+        if progress_cb:
+            progress_cb(1, total_steps, "Подготовка ИИ…")
+
+        from app.core.openai_client import OpenAIClient
+
+        ai_client = OpenAIClient(openai_key)
+        sem = asyncio.Semaphore(AI_SUGGEST_PARALLEL)
+        done_batches = 0
+        batch_lock = asyncio.Lock()
+
+        def _merge_batch_results(batch_results: List[dict]) -> None:
+            nonlocal seq
+            for br in batch_results:
+                cl = br["cl"]
+                items = br["items"]
+                if split_oversized and len(items) > MAX_LINK_ITEMS:
+                    chunks = _split_items_to_bundles(items)
+                else:
+                    chunks = [items]
+                for chunk in chunks:
+                    if len(chunk) < 2 and cl.get("kind") in ("new_link", "merge_groups"):
+                        continue
+                    key = frozenset(_row_article(x, mp) for x in chunk)
+                    if key in seen_clusters:
+                        continue
+                    seen_clusters.add(key)
+                    err = _validate_ai_cluster_items(chunk, mp)
+                    if err:
+                        continue
+                    seq += 1
+                    out.append(
+                        _build_ai_candidate_entry(cl, chunk, groups, marketplace=mp, seq=seq, source="ai")
+                    )
+                    meta["ai_clusters"] += 1
+
+        async def _run_batch(ck: str, batch: List[dict], cat_groups: List[dict], cat_label: str) -> None:
+            nonlocal done_batches
+            if cancel is not None and getattr(cancel, "cancelled", False):
+                return
+            if cancel is not None and hasattr(cancel, "raise_if_cancelled"):
+                cancel.raise_if_cancelled()
+            async with sem:
+                if cancel is not None and hasattr(cancel, "raise_if_cancelled"):
+                    cancel.raise_if_cancelled()
                 try:
                     batch_results = await _ai_suggest_batch(
-                        batch, cat_groups, marketplace=mp, openai_key=openai_key,
+                        batch,
+                        cat_groups,
+                        marketplace=mp,
+                        openai_key=openai_key,
+                        client=ai_client,
+                        category_label=cat_label,
                     )
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
-                    log.warning("AI batch failed (%s): %s", ck, e)
-                    continue
-                for br in batch_results:
-                    cl = br["cl"]
-                    items = br["items"]
-                    if split_oversized and len(items) > MAX_LINK_ITEMS:
-                        chunks = _split_items_to_bundles(items)
-                    else:
-                        chunks = [items]
-                    for chunk in chunks:
-                        if len(chunk) < 2 and cl.get("kind") in ("new_link", "merge_groups"):
-                            continue
-                        key = frozenset(_row_article(x, mp) for x in chunk)
-                        if key in seen_clusters:
-                            continue
-                        seen_clusters.add(key)
-                        err = _validate_ai_cluster_items(chunk, mp)
-                        if err:
-                            continue
-                        seq += 1
-                        out.append(
-                            _build_ai_candidate_entry(cl, chunk, groups, marketplace=mp, seq=seq, source="ai")
-                        )
-                        meta["ai_clusters"] += 1
+                    log.warning("AI batch failed (%s): %s", cat_label, e)
+                    batch_results = []
+            async with batch_lock:
+                done_batches += 1
+                meta["batches"] += 1
+                meta["batches_run"] += 1
+                step = 1 + done_batches
+                pct = int(round(step / total_steps * 100))
+                if progress_cb:
+                    progress_cb(
+                        step,
+                        total_steps,
+                        f"ИИ: {done_batches}/{total_batches} · {pct}% · {cat_label[:48]} · {len(batch)} тов.",
+                    )
+                _merge_batch_results(batch_results)
+
+        if total_batches:
+            if progress_cb:
+                progress_cb(1, total_steps, f"ИИ: 0/{total_batches} категорий · 0%")
+            tasks = [
+                asyncio.create_task(_run_batch(ck, batch, cat_groups, cat_label))
+                for ck, batch, cat_groups, cat_label in batch_jobs
+            ]
+            try:
+                await asyncio.gather(*tasks)
+            except asyncio.CancelledError:
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                meta["cancelled"] = True
+                raise
+            except Exception as e:
+                log.warning("AI parallel batches failed: %s", e)
+
+        if progress_cb:
+            progress_cb(total_steps - 1, total_steps, "Сборка итоговых связок…")
 
     meta["suggestions_raw"] = len(out)
     bundles = consolidate_ai_bundle_previews(out, groups, marketplace=mp)
