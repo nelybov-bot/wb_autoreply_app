@@ -1902,6 +1902,214 @@ def _validate_ai_cluster_items(items: List[dict], marketplace: str) -> Optional[
     return None
 
 
+def _bundle_bucket_key(c: dict, *, marketplace: str) -> str:
+    mp = (marketplace or "").strip().lower()
+    cat = _candidate_category_key(c, marketplace=mp)
+    kind = str(c.get("kind") or "new_link")
+    if kind == "new_link":
+        label = str(
+            c.get("suggested_model_name")
+            or c.get("normalized_product_name")
+            or c.get("detected_brand")
+            or "",
+        ).strip().lower()
+        if label:
+            return f"new:{cat}:{label[:80]}"
+        return f"new:{c.get('candidate_id')}"
+    tgt = str(
+        c.get("target_group_id")
+        or c.get("suggested_target_imt")
+        or c.get("suggested_model_name")
+        or c.get("target_group_label")
+        or "",
+    ).strip()
+    return f"tgt:{cat}:{tgt}"
+
+
+def _merged_apply_candidate(
+    bucket: dict,
+    moving_items: List[dict],
+    op_map: Dict[str, dict],
+    *,
+    marketplace: str,
+) -> dict:
+    mp = (marketplace or "").strip().lower()
+    ops = [op_map[oid] for oid in bucket.get("operations") or [] if oid in op_map]
+    if not ops:
+        return {}
+    if len(ops) == 1 and len(moving_items) == len(ops[0].get("items") or []):
+        return dict(ops[0])
+    base = dict(ops[0])
+    base["candidate_id"] = f"{bucket['bundle_id']}-apply"
+    base["items"] = moving_items
+    base["count"] = len(moving_items)
+    if bucket.get("is_new_bundle"):
+        base["kind"] = "new_link"
+        if mp == "ozon" and bucket.get("suggested_model_name"):
+            base["suggested_model_name"] = bucket["suggested_model_name"]
+        if mp == "wb":
+            base["suggested_target_imt"] = _wb_target_imt(moving_items)
+        return base
+    tgt = bucket.get("target_group_id") or bucket.get("suggested_target_imt")
+    base["kind"] = "merge_groups" if len(moving_items) > 1 else "attach"
+    if mp == "wb" and tgt:
+        base["target_group_id"] = str(tgt)
+        base["suggested_target_imt"] = int(tgt)
+        base["target_group_label"] = f"imtID {tgt}"
+    if mp == "ozon":
+        model = bucket.get("target_model_name") or bucket.get("suggested_model_name") or ""
+        if model:
+            base["suggested_model_name"] = model
+            base["target_group_label"] = model
+    return base
+
+
+def consolidate_ai_bundle_previews(
+    suggestions: List[dict],
+    groups: List[dict],
+    *,
+    marketplace: str,
+) -> List[dict]:
+    """Сводит операции ИИ в понятные «итоговые связки» для UI."""
+    mp = (marketplace or "").strip().lower()
+    if not suggestions:
+        return []
+    group_by_id = {str(g.get("group_id")): g for g in groups if g.get("group_id")}
+    op_map = {str(c.get("candidate_id")): c for c in suggestions if c.get("candidate_id")}
+    buckets: Dict[str, dict] = {}
+    seq = 0
+
+    for c in suggestions:
+        key = _bundle_bucket_key(c, marketplace=mp)
+        if key not in buckets:
+            seq += 1
+            kind = str(c.get("kind") or "new_link")
+            is_new = kind == "new_link"
+            tgt_id = str(c.get("target_group_id") or c.get("suggested_target_imt") or "").strip()
+            tgt_model = str(
+                c.get("suggested_model_name") or c.get("target_group_label") or "",
+            ).strip()
+            if mp == "wb":
+                if is_new:
+                    bl = str(
+                        c.get("suggested_model_name")
+                        or c.get("normalized_product_name")
+                        or c.get("category_label")
+                        or f"Новая связка {seq}",
+                    ).strip()
+                else:
+                    bl = f"imtID {tgt_id}" if tgt_id else (tgt_model or f"Связка {seq}")
+            else:
+                bl = (
+                    tgt_model
+                    if tgt_model and not is_new
+                    else str(
+                        c.get("suggested_model_name")
+                        or c.get("normalized_product_name")
+                        or f"Новая модель {seq}",
+                    ).strip()
+                )
+            buckets[key] = {
+                "bundle_id": f"bundle-{mp}-{seq}",
+                "bundle_label": bl[:120],
+                "category_label": c.get("category_label") or "",
+                "is_new_bundle": is_new,
+                "target_group_id": tgt_id,
+                "target_model_name": tgt_model,
+                "suggested_target_imt": c.get("suggested_target_imt"),
+                "suggested_model_name": c.get("suggested_model_name"),
+                "subject_id": c.get("subject_id"),
+                "category_key": c.get("category_key"),
+                "operations": [],
+                "moving_by_art": {},
+            }
+        b = buckets[key]
+        cid = str(c.get("candidate_id") or "")
+        if cid and cid not in b["operations"]:
+            b["operations"].append(cid)
+        for it in c.get("items") or []:
+            art = _row_article(it, mp)
+            if art:
+                b["moving_by_art"][art] = dict(it)
+
+    out: List[dict] = []
+    for b in buckets.values():
+        moving_arts = set(b["moving_by_art"].keys())
+        final_by_art: Dict[str, dict] = {}
+        tgt_id = b["target_group_id"]
+        is_new = b["is_new_bundle"]
+
+        if not is_new and tgt_id and tgt_id in group_by_id:
+            for it in group_by_id[tgt_id].get("items") or []:
+                art = _row_article(it, mp)
+                if not art:
+                    continue
+                if art in moving_arts:
+                    final_by_art[art] = {**it, "role": "move", "moving": True}
+                else:
+                    final_by_art[art] = {**it, "role": "stay", "moving": False}
+
+        for art, it in b["moving_by_art"].items():
+            if art in final_by_art:
+                final_by_art[art]["moving"] = True
+                final_by_art[art]["role"] = "move" if final_by_art[art].get("linked") else "add"
+            else:
+                final_by_art[art] = {**it, "role": "add", "moving": True}
+
+        items_list = list(final_by_art.values())
+        if not items_list:
+            continue
+        moving_items = [x for x in items_list if x.get("moving")]
+        moving_n = len(moving_items)
+        stay_n = len(items_list) - moving_n
+        if is_new:
+            summary = f"Новая связка · {len(items_list)} товаров"
+        else:
+            parts = []
+            if moving_n:
+                parts.append(f"+{moving_n} в связку")
+            if stay_n:
+                parts.append(f"{stay_n} уже там")
+            parts.append(f"итого {len(items_list)} шт.")
+            summary = " · ".join(parts)
+
+        apply_c = _merged_apply_candidate(b, moving_items, op_map, marketplace=mp)
+        if not apply_c or not moving_items:
+            continue
+        if len(items_list) > MAX_LINK_ITEMS:
+            summary += f" · ⚠ больше {MAX_LINK_ITEMS} — примените вручную или разделите"
+
+        out.append(
+            {
+                "bundle_id": b["bundle_id"],
+                "bundle_label": b["bundle_label"],
+                "category_label": b["category_label"],
+                "is_new_bundle": is_new,
+                "target_group_id": b["target_group_id"],
+                "target_model_name": b["target_model_name"],
+                "suggested_target_imt": b.get("suggested_target_imt"),
+                "suggested_model_name": b.get("suggested_model_name"),
+                "item_count": len(items_list),
+                "moving_count": moving_n,
+                "stay_count": stay_n,
+                "summary": summary,
+                "items": items_list,
+                "operations": b["operations"],
+                "apply_candidate": apply_c,
+                "ai": True,
+            }
+        )
+
+    out.sort(
+        key=lambda x: (
+            -int(x.get("moving_count") or 0),
+            str(x.get("category_label") or ""),
+            str(x.get("bundle_label") or ""),
+        )
+    )
+    return out
+
+
 def deterministic_pack_suggestions(
     rows: List[dict],
     *,
@@ -2047,17 +2255,27 @@ async def ai_suggest_card_links(
     max_products: int = 400,
     deterministic_packs: bool = True,
     split_oversized: bool = True,
-) -> Tuple[List[dict], dict]:
+) -> Tuple[List[dict], List[dict], dict]:
     """
     ИИ-кластеризация карточек (включая уже связанные).
-    Возвращает (предложения, meta).
+    Возвращает (сырые предложения, итоговые связки для UI, meta).
     """
     mp = (marketplace or "").strip().lower()
-    meta: Dict[str, Any] = {"batches": 0, "ai_clusters": 0, "pack_clusters": 0}
+    meta: Dict[str, Any] = {
+        "batches": 0,
+        "ai_clusters": 0,
+        "pack_clusters": 0,
+        "total_catalog": len(rows),
+        "pool_requested": len(_filter_rows_for_ai_scope(rows, scope if include_linked else "unlinked", mp)),
+    }
     pool = _filter_rows_for_ai_scope(rows, scope if include_linked else "unlinked", mp)
-    pool = pool[: max(2, min(int(max_products), 2000))]
+    cap = int(max_products or 0)
+    if cap > 0:
+        pool = pool[: min(cap, 50000)]
+    meta["analyzed"] = len(pool)
+    meta["truncated"] = meta["pool_requested"] > len(pool)
     if len(pool) < 2 and not deterministic_packs:
-        return [], meta
+        return [], [], meta
 
     out: List[dict] = []
     used_articles: set[str] = set()
@@ -2127,7 +2345,18 @@ async def ai_suggest_card_links(
                         )
                         meta["ai_clusters"] += 1
 
-    return out[:120], meta
+    meta["suggestions_raw"] = len(out)
+    bundles = consolidate_ai_bundle_previews(out, groups, marketplace=mp)
+    meta["bundles"] = len(bundles)
+    covered_arts = set()
+    for b in bundles:
+        for it in b.get("items") or []:
+            art = _row_article(it, mp)
+            if art:
+                covered_arts.add(art)
+    meta["products_in_bundles"] = len(covered_arts)
+    meta["uncovered"] = max(0, meta["analyzed"] - len(covered_arts))
+    return out, bundles, meta
 
 
 def _enrich_wb_row(row: dict, subject_map: Dict[int, dict]) -> None:

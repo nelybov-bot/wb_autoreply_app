@@ -2310,7 +2310,7 @@
   // ---- Card links (WB / Ozon) ----
   const MAX_LINK_ITEMS = 30;
   const CARD_LINKS_ACTION_COOLDOWN_MS = 3000;
-  let cardLinksData = { items: [], groups: [], candidates: [], attach_suggestions: [], review_suggestions: [], combine_suggestions: [], ai_suggestions: [], catalog_meta: {} };
+  let cardLinksData = { items: [], groups: [], candidates: [], attach_suggestions: [], review_suggestions: [], combine_suggestions: [], ai_suggestions: [], ai_bundles: [], ai_meta: {}, catalog_meta: {} };
   let cardLinksView = 'catalog';
   let _cardLinksActionBusy = false;
   let _cardLinksCooldownUntil = 0;
@@ -2323,7 +2323,7 @@
     includeLinked: true,
     scope: 'all',
     batchSize: 45,
-    maxProducts: 400,
+    maxProducts: 0,
     deterministicPacks: true,
     splitOversized: true,
   };
@@ -3002,7 +3002,7 @@
       include_linked: !!document.getElementById('card-links-ai-include-linked')?.checked,
       scope: String(document.getElementById('card-links-ai-scope')?.value || 'all'),
       batch_size: Number(document.getElementById('card-links-ai-batch-size')?.value || 45),
-      max_products: Number(document.getElementById('card-links-ai-max-products')?.value || 400),
+      max_products: Number(document.getElementById('card-links-ai-max-products')?.value || 0),
       deterministic_packs: !!document.getElementById('card-links-ai-deterministic-packs')?.checked,
       split_oversized: !!document.getElementById('card-links-ai-split-oversized')?.checked,
     };
@@ -3042,25 +3042,53 @@
     } catch (_) {}
   }
 
+  function findAiBundle(bundleId) {
+    const id = String(bundleId || '');
+    if (!id) return null;
+    return (cardLinksData.ai_bundles || []).find((b) => String(b.bundle_id) === id) || null;
+  }
+
+  function cardLinksBundlePassesWorkFilters(b) {
+    if (!b) return false;
+    return cardLinksCandidatePassesWorkFilters({
+      category_label: b.category_label,
+      items: b.items || [],
+    });
+  }
+
+  function cardLinksCanBulkApplyBundle(b) {
+    const c = b?.apply_candidate;
+    if (!c || !cardLinksCanBulkApplyCandidate(c)) return false;
+    const moving = (c.items || []).length;
+    if (c.kind === 'attach' && moving < 1) return false;
+    if (c.kind !== 'attach' && moving < 2) return false;
+    if ((b.item_count || 0) > MAX_LINK_ITEMS) return false;
+    return true;
+  }
+
+  function getResolvedAiBundle(b) {
+    if (!b?.apply_candidate) return null;
+    const cand = { ...b.apply_candidate, candidate_id: b.bundle_id };
+    return getResolvedAiCandidate(cand);
+  }
+
   function cardLinksAiGroups() {
-    return cardLinksData.ai_suggestions || [];
+    return cardLinksData.ai_bundles || [];
   }
 
   function cardLinksResolvedSelectedAi() {
     cardLinksPruneSelectionSets();
     return [...cardLinksSelectedAi]
-      .map((id) => {
-        const c = findCardLinksCandidate(id);
-        return c ? getResolvedAiCandidate(c) : null;
-      })
-      .filter((c) => c && cardLinksCanBulkApplyCandidate(c) && (c.items || []).length >= (c.kind === 'attach' ? 1 : 2));
+      .map((id) => getResolvedAiBundle(findAiBundle(id)))
+      .filter((c) => c && cardLinksCanBulkApplyCandidate(c));
   }
 
-  function cardLinksAiAddOptions(c) {
+  function cardLinksAiAddOptionsForBundle(b) {
     const mp = cardLinksMarketplace();
-    const resolved = getResolvedAiCandidate(c);
+    const resolved = getResolvedAiBundle(b);
+    if (!resolved) return [];
     const inProp = new Set((resolved.items || []).map((it) => cardLinksArticleKey(it, mp)));
-    const first = (resolved.items || [])[0];
+    const first = (b.items || [])[0];
     if (!first) return [];
     return (cardLinksData.items || []).filter((r) => {
       const art = cardLinksArticleKey(r, mp);
@@ -3094,7 +3122,7 @@
     }
     bar.hidden = false;
     const available = cardLinksAiGroups().filter(
-      (c) => cardLinksCandidatePassesWorkFilters(c) && cardLinksCanBulkApplyCandidate(c),
+      (b) => cardLinksBundlePassesWorkFilters(b) && cardLinksCanBulkApplyBundle(b),
     );
     const runBtn = document.getElementById('btn-card-links-ai-run');
     const applyBtn = document.getElementById('btn-card-links-ai-apply');
@@ -3119,17 +3147,21 @@
     if (selectAllBtn) selectAllBtn.disabled = false;
     if (clearBtn) clearBtn.disabled = false;
     const cands = cardLinksResolvedSelectedAi();
+    const meta = cardLinksData.ai_meta || {};
+    const cov = meta.analyzed != null && meta.total_catalog != null
+      ? ` · проверено ${meta.analyzed}/${meta.total_catalog}`
+      : '';
     label.textContent = cands.length
-      ? `Выбрано ${cands.length} предложений · ${cands.reduce((n, c) => n + (c.items || []).length, 0)} товаров`
-      : `Доступно ${available.length} — отметьте пачку или «Все»`;
+      ? `Выбрано ${cands.length} связок · ${cands.reduce((n, c) => n + (c.items || []).length, 0)} товаров к действию${cov}`
+      : `Итоговых связок: ${available.length}${cov} — отметьте и «Применить»`;
     if (applyBtn) applyBtn.disabled = cands.length < 1;
   }
 
   function cardLinksSelectAllAi() {
     cardLinksSelectedAi.clear();
-    for (const c of cardLinksAiGroups()) {
-      if (!cardLinksCandidatePassesWorkFilters(c) || !cardLinksCanBulkApplyCandidate(c)) continue;
-      const id = String(c.candidate_id || '').trim();
+    for (const b of cardLinksAiGroups()) {
+      if (!cardLinksBundlePassesWorkFilters(b) || !cardLinksCanBulkApplyBundle(b)) continue;
+      const id = String(b.bundle_id || '').trim();
       if (id) cardLinksSelectedAi.add(id);
     }
     renderCardLinksTable();
@@ -3194,8 +3226,13 @@
     const pool = cardLinksView === 'review'
       ? sortCardLinksCandidates(cardLinksReviewGroups())
       : cardLinksView === 'ai'
-        ? sortCardLinksCandidates(cardLinksAiGroups())
+        ? cardLinksAiGroups()
         : cardLinksCandidateGroups();
+    if (cardLinksView === 'ai') {
+      return pool
+        .filter((b) => cardLinksBundlePassesWorkFilters(b))
+        .filter((b) => cardLinksCanBulkApplyBundle(b));
+    }
     return pool
       .filter((c) => cardLinksCandidatePassesWorkFilters(c))
       .filter((c) => cardLinksCanBulkApplyCandidate(c));
@@ -3203,7 +3240,9 @@
 
   function cardLinksPruneSelectionSets() {
     const applyable = new Set(
-      cardLinksBulkApplyCandidates().map((c) => String(c.candidate_id || '')).filter(Boolean),
+      cardLinksBulkApplyCandidates().map((x) => String(
+        cardLinksView === 'ai' ? x.bundle_id : x.candidate_id,
+      ) || '').filter(Boolean),
     );
     for (const id of [...cardLinksSelectedApply]) {
       if (!applyable.has(id)) cardLinksSelectedApply.delete(id);
@@ -3816,7 +3855,7 @@
     }
     if (cardLinksView === 'ai') {
       const available = cardLinksBulkApplyCandidates();
-      const selected = available.filter((c) => cardLinksSelectedAi.has(String(c.candidate_id || '')));
+      const selected = available.filter((b) => cardLinksSelectedAi.has(String(b.bundle_id || '')));
       checkAll.disabled = !available.length;
       checkAll.checked = available.length > 0 && selected.length === available.length;
       checkAll.indeterminate = selected.length > 0 && selected.length < available.length;
@@ -3904,7 +3943,7 @@
   function cardLinksTableCandidateGroups() {
     let list;
     if (cardLinksView === 'ai') {
-      list = sortCardLinksCandidates(cardLinksAiGroups());
+      return cardLinksAiGroups().filter((b) => cardLinksBundlePassesWorkFilters(b));
     } else if (cardLinksView === 'review') {
       list = sortCardLinksCandidates(cardLinksReviewGroups());
     } else {
@@ -3993,82 +4032,80 @@
     panel.hidden = cardLinksView !== 'guide';
   }
 
-  function cardLinkAiCandidateBlockHtml(c, mp) {
-    const resolved = getResolvedAiCandidate(c);
-    const cid = escapeHtml(String(c.candidate_id || ''));
-    const kind = resolved.kind || 'new_link';
-    const badge = cardLinkCandidateBadge(c);
-    const title = cardLinkCandidateTitle(resolved, mp);
-    const refItem = cardLinksRefItemFromCandidate(resolved);
-    const addCount = cardLinksCandidateAddCount(resolved);
-    const compatGroups = cardLinksCompatibleGroups(refItem, addCount);
-    const canSelect = cardLinksCanBulkApplyCandidate(c);
-    const rowChecked = cardLinksSelectedAi.has(String(c.candidate_id || ''));
-    const needsPicker = kind === 'attach' || kind === 'attach_batch' || kind === 'relocate' || kind === 'merge_groups';
-    const edit = ensureCardLinksAiEdit(c.candidate_id);
-    const defaultTarget = edit.targetOverride
-      || String(resolved.suggested_target_imt || resolved.target_group_id || resolved.suggested_model_name || resolved.target_group_label || '');
-    const pickerHtml = needsPicker
-      ? cardLinkTargetPickerHtml({
-        pickerId: `picker-${c.candidate_id}`,
-        groups: compatGroups,
-        selected: defaultTarget || (compatGroups[0] ? String(mp === 'wb' ? compatGroups[0].group_id : compatGroups[0].group_label) : ''),
-        refItem,
-        placeholder: compatGroups.length ? 'Целевая связка' : 'Нет связок в категории',
-        allowEmpty: kind === 'new_link',
-        extraAttrs: `data-picker-candidate="${cid}"`,
-      })
-      : '';
-    const modelVal = escapeHtml(edit.modelName || resolved.suggested_model_name || '');
-    const modelInput = mp === 'ozon' && (kind === 'new_link' || kind === 'merge_groups')
-      ? `<input type="text" class="input-sm card-links-ai-model-input" data-candidate-id="${cid}" value="${modelVal}" placeholder="Название модели">`
-      : '';
-    const conf = c.confidence ? `<span class="card-links-ai-conf card-links-ai-conf--${escapeHtml(c.confidence)}">${escapeHtml(c.confidence)}</span>` : '';
-    const itemRows = (resolved.items || []).map((it) => {
+  function cardLinkAiBundleBlockHtml(b, mp) {
+    const bid = escapeHtml(String(b.bundle_id || ''));
+    const resolved = getResolvedAiBundle(b);
+    const canSelect = cardLinksCanBulkApplyBundle(b);
+    const rowChecked = cardLinksSelectedAi.has(String(b.bundle_id || ''));
+    const targetLabel = mp === 'wb'
+      ? (b.is_new_bundle
+        ? `Новая связка${b.suggested_target_imt ? ` · imtID ${b.suggested_target_imt}` : ''}`
+        : `→ imtID ${escapeHtml(String(b.target_group_id || b.suggested_target_imt || '—'))}`)
+      : (b.is_new_bundle
+        ? `Новая модель: ${escapeHtml(b.suggested_model_name || b.bundle_label || '—')}`
+        : `→ модель «${escapeHtml(b.target_model_name || b.suggested_model_name || b.bundle_label || '—')}»`);
+    const typeBadge = b.is_new_bundle
+      ? '<span class="card-links-ai-type card-links-ai-type--new">Новая связка</span>'
+      : '<span class="card-links-ai-type card-links-ai-type--merge">Итоговая связка</span>';
+    const overLimit = (b.item_count || 0) > MAX_LINK_ITEMS;
+    const itemCards = (b.items || []).map((it) => {
       const art = cardLinksArticleKey(it, mp);
-      const linkedTag = it.linked ? '<span class="card-links-ai-linked-tag">в связке</span>' : '';
-      return `<tr class="card-links-ai-item-row">
-        <td class="col-photo">${cardLinkPhotoCell(it.photo_url)}</td>
-        <td>${escapeHtml(art)}</td>
-        <td>${escapeHtml((it.title || '').slice(0, 100))}${linkedTag}</td>
-        <td class="col-check"><button type="button" class="btn btn-secondary btn-xs card-links-ai-remove-item" data-candidate-id="${cid}" data-article="${escapeHtml(art)}" title="Убрать из предложения">×</button></td>
-      </tr>`;
-    }).join('');
-    const addOpts = cardLinksAiAddOptions(c).map((r) => {
+      const role = it.role || (it.moving ? 'add' : 'stay');
+      const roleLabel = role === 'stay'
+        ? 'остаётся'
+        : (role === 'move' ? 'перенести' : 'добавить');
+      const roleCls = role === 'stay' ? 'stay' : 'move';
+      const excluded = (cardLinksAiEdits[b.bundle_id]?.excluded || new Set()).has(art);
+      if (excluded && role !== 'stay') return '';
+      return `<div class="card-links-ai-product card-links-ai-product--${roleCls}">
+        ${cardLinkPhotoCell(it.photo_url)}
+        <div class="card-links-ai-product-text">
+          <span class="card-links-ai-product-title">${escapeHtml((it.title || '').slice(0, 90))}</span>
+          <span class="card-links-ai-product-meta">${escapeHtml(art)} · <em>${roleLabel}</em></span>
+        </div>
+        ${role !== 'stay' ? `<button type="button" class="btn btn-secondary btn-xs card-links-ai-remove-item" data-bundle-id="${bid}" data-article="${escapeHtml(art)}" title="Исключить">×</button>` : ''}
+      </div>`;
+    }).filter(Boolean).join('');
+    const edit = ensureCardLinksAiEdit(b.bundle_id);
+    const modelVal = escapeHtml(edit.modelName || b.suggested_model_name || b.bundle_label || '');
+    const modelInput = mp === 'ozon' && b.is_new_bundle
+      ? `<input type="text" class="input-sm card-links-ai-model-input" data-bundle-id="${bid}" value="${modelVal}" placeholder="Название модели">`
+      : '';
+    const addOpts = cardLinksAiAddOptionsForBundle(b).map((r) => {
       const art = cardLinksArticleKey(r, mp);
-      return `<option value="${escapeHtml(art)}">${escapeHtml(art)} · ${escapeHtml((r.title || '').slice(0, 50))}</option>`;
+      return `<option value="${escapeHtml(art)}">${escapeHtml(art)} · ${escapeHtml((r.title || '').slice(0, 45))}</option>`;
     }).join('');
     const addRow = addOpts
       ? `<div class="card-links-ai-add-row">
-          <select class="select-md card-links-ai-add-select" data-candidate-id="${cid}"><option value="">Добавить товар…</option>${addOpts}</select>
-          <button type="button" class="btn btn-secondary btn-sm card-links-ai-add-btn" data-candidate-id="${cid}">+</button>
+          <select class="select-md card-links-ai-add-select" data-bundle-id="${bid}"><option value="">Добавить в связку…</option>${addOpts}</select>
+          <button type="button" class="btn btn-secondary btn-sm card-links-ai-add-btn" data-bundle-id="${bid}">+</button>
         </div>`
       : '';
-    const rowCheckCell = canSelect
+    const rowCheckCell = canSelect && !overLimit
       ? `<td class="col-check card-links-cand-check-cell">
-          <label class="card-links-cand-check-wrap" title="Выбрать пачку для применения">
-            <input type="checkbox" class="card-links-row-check card-links-ai-cluster-check" data-candidate-id="${cid}"${rowChecked ? ' checked' : ''}>
+          <label class="card-links-cand-check-wrap" title="Применить эту связку">
+            <input type="checkbox" class="card-links-row-check card-links-ai-cluster-check" data-bundle-id="${bid}"${rowChecked ? ' checked' : ''}>
           </label>
         </td>`
-      : '<td class="col-check card-links-cand-check-cell"></td>';
-    return `<tr class="card-links-cand-header card-links-ai-cand">${rowCheckCell}<td colspan="6">
-      <div class="card-links-cand-block card-links-ai-block">
-        <div class="card-links-cand-row">
-          <div class="card-links-cand-head">
-            <span class="card-links-cand-badge card-links-cand-badge--${badge.cls}">${escapeHtml(badge.text)}</span>
-            ${cardLinkCandidateCategoryBadge(c)}
-            ${conf}
-            <span class="card-links-cand-title">${escapeHtml(title)}</span>
+      : `<td class="col-check card-links-cand-check-cell"${overLimit ? ' title="Более 30 — разделите вручную"' : ''}></td>`;
+    return `<tr class="card-links-cand-header card-links-ai-bundle-row">${rowCheckCell}<td colspan="6">
+      <div class="card-links-ai-bundle card-links-ai-block${overLimit ? ' card-links-ai-bundle--warn' : ''}">
+        <div class="card-links-ai-bundle-head">
+          <div class="card-links-ai-bundle-title">
+            ${typeBadge}
+            <strong class="card-links-ai-bundle-name">${escapeHtml(b.bundle_label || 'Связка')}</strong>
+            <span class="card-links-ai-bundle-count">${b.item_count || 0} товаров</span>
           </div>
-          <div class="card-links-cand-actions card-links-ai-actions">
-            ${modelInput}
-            ${needsPicker ? pickerHtml : ''}
-            <button type="button" class="btn btn-primary btn-sm card-links-attach-btn" data-candidate-id="${cid}">Применить</button>
-          </div>
+          <div class="card-links-ai-bundle-target">${targetLabel}</div>
         </div>
-        <p class="card-links-ai-hint">${escapeHtml(c.hint || resolved.hint || '')}</p>
-        <table class="card-links-ai-items-table"><tbody>${itemRows || '<tr><td colspan="4" class="empty-cell">Нет товаров — добавьте или удалите исключения</td></tr>'}</tbody></table>
-        ${addRow}
+        ${b.category_label ? `<div class="card-links-ai-bundle-cat">${escapeHtml(b.category_label)}</div>` : ''}
+        <div class="card-links-ai-bundle-summary">${escapeHtml(b.summary || '')}${overLimit ? ` · ⚠ лимит ${MAX_LINK_ITEMS}` : ''}</div>
+        <div class="card-links-ai-bundle-items">${itemCards || '<span class="form-hint">Нет товаров</span>'}</div>
+        <div class="card-links-ai-bundle-foot">
+          ${modelInput}
+          ${addRow}
+          <button type="button" class="btn btn-primary btn-sm card-links-ai-apply-one" data-bundle-id="${bid}"${overLimit ? ' disabled' : ''}>Применить связку</button>
+        </div>
       </div>
     </td></tr>`;
   }
@@ -4175,7 +4212,7 @@
             html += `<tr class="card-links-cat-divider"><td colspan="8">${escapeHtml(catLabel)}</td></tr>`;
           }
           if (cardLinksView === 'ai') {
-            html += cardLinkAiCandidateBlockHtml(c, mp);
+            html += cardLinkAiBundleBlockHtml(c, mp);
             continue;
           }
           const kind = c.kind || 'new_link';
@@ -4398,7 +4435,7 @@
         cardLinksStartCooldown();
         _cardLinksCooldownUntil = Date.now() + 60000;
       }
-      cardLinksData = { items: [], groups: [], candidates: [], attach_suggestions: [], review_suggestions: [], combine_suggestions: [], ai_suggestions: [], catalog_meta: {} };
+      cardLinksData = { items: [], groups: [], candidates: [], attach_suggestions: [], review_suggestions: [], combine_suggestions: [], ai_suggestions: [], ai_bundles: [], ai_meta: {}, catalog_meta: {} };
       renderCardLinksTable();
     } finally {
       setPanelLoading('card-links-loading', false);
@@ -4757,14 +4794,18 @@
         timeoutMs: 600000,
       });
       cardLinksData.ai_suggestions = data.ai_suggestions || [];
+      cardLinksData.ai_bundles = data.ai_bundles || [];
+      cardLinksData.ai_meta = data.ai_meta || {};
       cardLinksSelectedAi.clear();
       cardLinksView = 'ai';
       document.querySelectorAll('.card-links-tab').forEach(btn => {
         btn.classList.toggle('active', btn.getAttribute('data-cl-view') === 'ai');
       });
       const meta = data.ai_meta || {};
+      const trunc = meta.truncated ? ' · ⚠ не весь каталог (увеличьте лимит)' : '';
+      const uncov = meta.uncovered ? ` · без предложения: ${meta.uncovered}` : '';
       setCardLinksStatus(
-        `ИИ: ${data.count || 0} предложений · фасовки: ${meta.pack_clusters || 0} · запросов: ${meta.batches || 0}`,
+        `ИИ: ${data.count || 0} итоговых связок · проверено ${meta.analyzed || '?'}/${meta.total_catalog || '?'} товаров${trunc}${uncov}`,
       );
       renderCardLinksTable();
     } catch (e) {
@@ -4829,7 +4870,7 @@
       document.querySelectorAll('.card-links-picker-menu').forEach((m) => { m.hidden = true; });
     });
     document.getElementById('card-links-marketplace')?.addEventListener('change', () => {
-      cardLinksData = { items: [], groups: [], candidates: [], attach_suggestions: [], review_suggestions: [], combine_suggestions: [], ai_suggestions: [], catalog_meta: {} };
+      cardLinksData = { items: [], groups: [], candidates: [], attach_suggestions: [], review_suggestions: [], combine_suggestions: [], ai_suggestions: [], ai_bundles: [], ai_meta: {}, catalog_meta: {} };
       void ensureStoresLoaded().then(() => {
         syncCardLinksStoreSelect();
         syncCardLinksScopeUI();
@@ -4838,7 +4879,7 @@
       });
     });
     document.getElementById('card-links-store')?.addEventListener('change', () => {
-      cardLinksData = { items: [], groups: [], candidates: [], attach_suggestions: [], review_suggestions: [], combine_suggestions: [], ai_suggestions: [], catalog_meta: {} };
+      cardLinksData = { items: [], groups: [], candidates: [], attach_suggestions: [], review_suggestions: [], combine_suggestions: [], ai_suggestions: [], ai_bundles: [], ai_meta: {}, catalog_meta: {} };
       cardLinksAiEdits = {};
       cardLinksSelectedAi.clear();
       loadCardLinksWorkFilters();
@@ -4997,7 +5038,8 @@
         return;
       }
       if (e.target.matches('.card-links-row-check')) {
-        const id = e.target.getAttribute('data-candidate-id');
+        const bundleId = e.target.getAttribute('data-bundle-id');
+        const id = bundleId || e.target.getAttribute('data-candidate-id');
         if (!id) return;
         const targetSet = cardLinksView === 'review'
           ? cardLinksSelectedReview
@@ -5023,25 +5065,32 @@
     document.getElementById('card-links-tbody')?.addEventListener('click', (e) => {
       const removeBtn = e.target.closest('.card-links-ai-remove-item');
       if (removeBtn) {
-        const cid = removeBtn.getAttribute('data-candidate-id');
+        const bid = removeBtn.getAttribute('data-bundle-id');
         const art = removeBtn.getAttribute('data-article');
-        if (cid && art) {
-          ensureCardLinksAiEdit(cid).excluded.add(art);
+        if (bid && art) {
+          ensureCardLinksAiEdit(bid).excluded.add(art);
           renderCardLinksTable();
         }
         return;
       }
       const addBtn = e.target.closest('.card-links-ai-add-btn');
       if (addBtn) {
-        const cid = addBtn.getAttribute('data-candidate-id');
-        const sel = document.querySelector(`.card-links-ai-add-select[data-candidate-id="${CSS.escape(String(cid || ''))}"]`);
+        const bid = addBtn.getAttribute('data-bundle-id');
+        const sel = document.querySelector(`.card-links-ai-add-select[data-bundle-id="${CSS.escape(String(bid || ''))}"]`);
         const art = sel?.value;
-        if (cid && art) {
-          const edit = ensureCardLinksAiEdit(cid);
+        if (bid && art) {
+          const edit = ensureCardLinksAiEdit(bid);
           if (!edit.added.includes(art)) edit.added.push(art);
           edit.excluded.delete(art);
           renderCardLinksTable();
         }
+        return;
+      }
+      const applyOne = e.target.closest('.card-links-ai-apply-one');
+      if (applyOne) {
+        const b = getResolvedAiBundle(findAiBundle(applyOne.getAttribute('data-bundle-id')));
+        if (!b) return;
+        void mergeSelectedCardLinks({ candidate: b });
         return;
       }
       const attachBtn = e.target.closest('.card-links-attach-btn');
@@ -5063,8 +5112,8 @@
     });
     document.getElementById('card-links-tbody')?.addEventListener('input', (e) => {
       if (e.target.matches('.card-links-ai-model-input')) {
-        const cid = e.target.getAttribute('data-candidate-id');
-        if (cid) ensureCardLinksAiEdit(cid).modelName = e.target.value || '';
+        const bid = e.target.getAttribute('data-bundle-id');
+        if (bid) ensureCardLinksAiEdit(bid).modelName = e.target.value || '';
       }
     });
     document.getElementById('card-links-check-all')?.addEventListener('change', (e) => {

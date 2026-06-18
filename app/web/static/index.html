@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
-  <link rel="stylesheet" href="/static/styles.css?v=27">
+  <link rel="stylesheet" href="/static/styles.css?v=28">
   <link rel="stylesheet" href="/static/fx-widgets.css?v=5">
 </head>
 <body>
@@ -673,18 +673,19 @@
                 </select>
               </label>
               <label class="card-links-work-filter-field">
-                <span class="toolbar-label">Макс. товаров всего</span>
+                <span class="toolbar-label">Макс. товаров</span>
                 <select id="card-links-ai-max-products" class="select-md">
-                  <option value="200">200</option>
-                  <option value="400" selected>400</option>
-                  <option value="800">800</option>
-                  <option value="1500">1500</option>
+                  <option value="0" selected>Весь загруженный каталог</option>
+                  <option value="500">500</option>
+                  <option value="1000">1000</option>
+                  <option value="2000">2000</option>
+                  <option value="5000">5000</option>
                 </select>
               </label>
               <label class="card-links-work-toggle"><input type="checkbox" id="card-links-ai-deterministic-packs" checked> Авто: фасовки 1/2/3 шт (без ИИ)</label>
               <label class="card-links-work-toggle"><input type="checkbox" id="card-links-ai-split-oversized" checked> Делить связки &gt;30</label>
             </div>
-            <p class="form-hint">ИИ читает названия, бренд, категорию и текущие связки. Решение можно править перед применением.</p>
+            <p class="form-hint">Показываются <strong>итоговые связки</strong> (что будет после применения). По умолчанию проверяется весь загруженный каталог.</p>
           </details>
         </details>
         <div id="card-links-status" class="form-hint card-links-status" role="status">Выберите магазин и нажмите «Загрузить».</div>
@@ -1408,6 +1409,6 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=50"></script>
+  <script src="/static/app.js?v=51"></script>
 </body>
 </html>

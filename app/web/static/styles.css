@@ -4326,6 +4326,123 @@ body.theme-dark .card-links-guide-panel {
   display: none;
 }
 
+.card-links-ai-bundle {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 0.75rem;
+  background: var(--surface-2, rgba(0, 0, 0, 0.02));
+}
+
+.card-links-ai-bundle--warn {
+  border-color: #c98600;
+}
+
+.card-links-ai-bundle-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.35rem 1rem;
+  align-items: baseline;
+  margin-bottom: 0.35rem;
+}
+
+.card-links-ai-bundle-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.card-links-ai-bundle-name {
+  font-size: 1.05rem;
+}
+
+.card-links-ai-bundle-count {
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.card-links-ai-bundle-target {
+  font-size: 0.9rem;
+  color: var(--accent, #4a7cff);
+}
+
+.card-links-ai-bundle-cat {
+  font-size: 0.82rem;
+  opacity: 0.75;
+  margin-bottom: 0.25rem;
+}
+
+.card-links-ai-bundle-summary {
+  font-size: 0.88rem;
+  margin-bottom: 0.5rem;
+}
+
+.card-links-ai-type {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  padding: 0.12rem 0.4rem;
+  border-radius: 3px;
+}
+
+.card-links-ai-type--new {
+  background: rgba(40, 160, 80, 0.15);
+}
+
+.card-links-ai-type--merge {
+  background: rgba(74, 124, 255, 0.12);
+}
+
+.card-links-ai-bundle-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+}
+
+.card-links-ai-product {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+}
+
+.card-links-ai-product--stay {
+  opacity: 0.72;
+  border-style: dashed;
+}
+
+.card-links-ai-product--move {
+  border-color: rgba(74, 124, 255, 0.35);
+}
+
+.card-links-ai-product-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.card-links-ai-product-title {
+  display: block;
+  line-height: 1.25;
+}
+
+.card-links-ai-product-meta {
+  display: block;
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+
+.card-links-ai-bundle-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  margin-top: 0.35rem;
+}
+
 .card-links-catalog-filter[hidden] {
   display: none !important;
 }

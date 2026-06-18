@@ -3369,7 +3369,7 @@ class CardLinksAiOptions(BaseModel):
     include_linked: bool = True
     scope: str = "all"
     batch_size: int = 45
-    max_products: int = 400
+    max_products: int = 0
     deterministic_packs: bool = True
     split_oversized: bool = True
 
@@ -3754,7 +3754,7 @@ async def api_card_links_wb_ai_suggest(
         groups = group_wb_rows(rows)
         apply_link_status(rows, groups)
     try:
-        ai_rows, ai_meta = await ai_suggest_card_links(
+        ai_rows, ai_bundles, ai_meta = await ai_suggest_card_links(
             rows,
             groups,
             marketplace="wb",
@@ -3768,7 +3768,12 @@ async def api_card_links_wb_ai_suggest(
         )
     except HttpStatusError as e:
         raise HTTPException(e.status, str(e.body or e)[:400]) from e
-    return {"ai_suggestions": ai_rows, "count": len(ai_rows), "ai_meta": ai_meta}
+    return {
+        "ai_suggestions": ai_rows,
+        "ai_bundles": ai_bundles,
+        "count": len(ai_bundles),
+        "ai_meta": ai_meta,
+    }
 
 
 @app.post("/api/card-links/ozon/{store_id}/ai-suggest")
@@ -3809,7 +3814,7 @@ async def api_card_links_ozon_ai_suggest(
         groups = group_ozon_rows(rows, articles_only=articles_only)
         apply_link_status(rows, groups)
     try:
-        ai_rows, ai_meta = await ai_suggest_card_links(
+        ai_rows, ai_bundles, ai_meta = await ai_suggest_card_links(
             rows,
             groups,
             marketplace="ozon",
@@ -3823,7 +3828,12 @@ async def api_card_links_ozon_ai_suggest(
         )
     except HttpStatusError as e:
         raise HTTPException(e.status, str(e.body or e)[:400]) from e
-    return {"ai_suggestions": ai_rows, "count": len(ai_rows), "ai_meta": ai_meta}
+    return {
+        "ai_suggestions": ai_rows,
+        "ai_bundles": ai_bundles,
+        "count": len(ai_bundles),
+        "ai_meta": ai_meta,
+    }
 
 
 # ---------- API: stats ----------
