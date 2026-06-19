@@ -3155,9 +3155,7 @@ def consolidate_ai_bundle_previews(
                 {
                     "bundle_id": bundle_id,
                     "bundle_label": bundle_label,
-                    "category_label": _items_display_category_label(
-                        chunk_items, marketplace=mp,
-                    ) or b["category_label"],
+                    "category_label": b["category_label"],
                     "is_new_bundle": is_new,
                     "target_group_id": b["target_group_id"],
                     "target_model_name": b["target_model_name"],

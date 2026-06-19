@@ -5,10 +5,9 @@
 
 ---
 
-## 2026-06-19 — Категория только из WB
+## 2026-06-19 — Категория только из WB (+ hotfix NameError)
 
-- Откат подмены категории по названию товара
-- В UI: `subject_name` / `parent_name` из каталога WB как есть
+- Откат подмены категории по названию; исправлен оставшийся вызов `_items_display_category_label` в `consolidate_ai_bundle_previews`
 
 ---
 
@@ -17,9 +16,9 @@
 ### Frontend
 - `cardLinksBundleApplyBlockReason`: «уже в связке» vs реальный лимит 30
 
-### Backend
-- `_items_display_category_label`, `_row_household_line_key`: щетка/губка/будильник из названия
-- bin-pack `brand_general` не смешивает разные типы товаров в одном subject
+### Backend (откат части 046bff8)
+- Категория в UI снова только из WB subject/parent
+- `_row_household_line_key` остаётся только для разбиения bin-pack (не для подписи)
 
 ---
 
