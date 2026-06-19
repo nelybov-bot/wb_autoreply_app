@@ -2681,8 +2681,14 @@
   function syncCardLinksWorkFilterBar() {
     const bar = document.getElementById('card-links-work-filter');
     const hasData = (cardLinksData.items || []).length > 0;
-    if (bar) bar.hidden = !hasData;
-    if (!hasData) return;
+    const show = hasData && cardLinksView !== 'guide';
+    if (bar) {
+      bar.hidden = !show;
+      if (show && bar.tagName === 'DETAILS') {
+        bar.open = cardLinksView === 'catalog' || cardLinksView === 'review';
+      }
+    }
+    if (!show) return;
 
     const { brands, categories } = cardLinksCollectFilterOptions();
     const brandSel = document.getElementById('card-links-filter-brand');
@@ -3298,6 +3304,7 @@
     }
     const stats = cardLinksAiPageStats();
     bar.hidden = stats.pageCount <= 1;
+    if (bar.hidden) return;
     if (label) {
       label.textContent = stats.pageCount <= 1
         ? `${stats.totalBundles} связок · ${stats.totalItems} товаров`
@@ -3506,6 +3513,7 @@
     if (!bar || !label) return;
     if (cardLinksView !== 'ai') {
       bar.hidden = true;
+      syncCardLinksAiPagination();
       return;
     }
     bar.hidden = false;
@@ -3533,6 +3541,7 @@
       if (selectAllBtn) selectAllBtn.disabled = true;
       if (clearBtn) clearBtn.disabled = true;
       if (mergeBtn) mergeBtn.disabled = true;
+      syncCardLinksAiPagination();
       return;
     }
     if (selectAllBtn) selectAllBtn.disabled = false;
@@ -4601,14 +4610,16 @@
     } else {
       const groups = cardLinksTableCandidateGroups();
       if (!groups.length) {
-        const emptyMsg = cardLinksView === 'review'
-          ? 'Нажмите «Запустить перепроверку» — список не обновляется сам.'
-          : cardLinksView === 'ai'
-            ? (cardLinksAiGroups().length
+        if (cardLinksView === 'ai' && !cardLinksAiGroups().length) {
+          tbody.innerHTML = '<tr><td colspan="8" class="empty-cell empty-cell--muted">Результаты появятся после «Запустить ИИ»</td></tr>';
+        } else {
+          const emptyMsg = cardLinksView === 'review'
+            ? 'Нажмите «Запустить перепроверку» — список не обновляется сам.'
+            : cardLinksView === 'ai'
               ? 'Нет связок на этой странице — смените страницу или сбросьте фильтры.'
-              : 'Нажмите «Запустить ИИ» — анализ названий и текущих связок (можно пересобрать уже связанное).')
-            : 'Нет данных.';
-        tbody.innerHTML = `<tr><td colspan="8" class="empty-cell">${emptyMsg}</td></tr>`;
+              : 'Нет данных.';
+          tbody.innerHTML = `<tr><td colspan="8" class="empty-cell">${emptyMsg}</td></tr>`;
+        }
       } else {
         let lastCat = cardLinksView === 'ai' ? cardLinksAiPrevPageLastCategory() : '';
         for (const c of groups) {

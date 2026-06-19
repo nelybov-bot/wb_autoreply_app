@@ -730,7 +730,9 @@
             <button type="button" class="card-links-tab active" data-cl-view="catalog" role="tab">Каталог</button>
           </div>
         </div>
-        <div id="card-links-work-filter" class="card-links-work-filter" hidden>
+        <details id="card-links-work-filter" class="card-links-work-filter" hidden>
+          <summary class="card-links-work-filter-summary">Фильтры</summary>
+          <div class="card-links-work-filter-body">
           <div class="card-links-work-filter-row">
             <label class="card-links-work-filter-field">
               <span class="toolbar-label">Бренд</span>
@@ -752,19 +754,24 @@
             <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-filter-reset">Сбросить фильтры</button>
             <span id="card-links-filter-stats" class="card-links-filter-stats form-hint"></span>
           </div>
-        </div>
+          </div>
+        </details>
         <div id="card-links-ai-bar" class="card-links-ai-wrap" hidden>
-          <span id="card-links-ai-label" class="card-links-combine-label"></span>
-          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-run">Запустить ИИ</button>
-          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-select-all">Все</button>
-          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-merge-two" title="Отметьте 2 связки в одной категории">Склеить 2 связки</button>
-          <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-ai-apply">Применить выбранные</button>
-          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-clear">Снять</button>
-        </div>
-        <div id="card-links-ai-pagination" class="card-links-ai-pagination" hidden>
-          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-page-prev" aria-label="Предыдущая страница">←</button>
-          <span id="card-links-ai-page-label" class="card-links-ai-page-label"></span>
-          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-page-next" aria-label="Следующая страница">→</button>
+          <div class="card-links-ai-toolbar">
+            <p id="card-links-ai-label" class="card-links-ai-lead"></p>
+            <div class="card-links-ai-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-ai-run">Запустить ИИ</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-select-all">Все</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-merge-two" title="Отметьте 2 связки в одной категории">Склеить 2 связки</button>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-ai-apply">Применить выбранные</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-clear">Снять</button>
+            </div>
+          </div>
+          <div id="card-links-ai-pagination" class="card-links-ai-pagination" hidden>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-page-prev" aria-label="Предыдущая страница">← Назад</button>
+            <span id="card-links-ai-page-label" class="card-links-ai-page-label"></span>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-page-next" aria-label="Следующая страница">Вперёд →</button>
+          </div>
         </div>
         <div id="card-links-review-bar" class="card-links-review-wrap" hidden>
           <span id="card-links-review-label" class="card-links-combine-label"></span>
@@ -1444,6 +1451,6 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=59"></script>
+  <script src="/static/app.js?v=60"></script>
 </body>
 </html>

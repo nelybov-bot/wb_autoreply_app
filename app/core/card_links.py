@@ -645,7 +645,12 @@ def _candidate_label(items: List[dict], *, marketplace: str) -> str:
 def _title_base_key(title: str) -> str:
     t = (title or "").lower().strip()
     t = _PACK_RE.sub(" ", t)
-    t = re.sub(r"[,–—-]\s*\d+\s*(pcs|pc|шт|штук)?\b", " ", t, flags=re.IGNORECASE)
+    t = re.sub(
+        r"[,–—-]\s*(\d+)\s*(pcs|pc|шт|штук|уп|упак|pack)\b",
+        " ",
+        t,
+        flags=re.IGNORECASE,
+    )
     t = re.sub(r"\s+", " ", t).strip()
     return t[:120]
 
@@ -1781,6 +1786,132 @@ def _items_brand_buckets_compatible(items: List[dict]) -> bool:
     return True
 
 
+_PRODUCT_USE_PATTERNS: List[Tuple[str, str]] = [
+    (
+        "hair_rinse",
+        r"бальзам[\s\-–—]*ополаскиватель|ополаскиватель(?:\s+для)?\s+волос|"
+        r"кондиционер\s+для\s+волос|бальзам\s+для\s+волос|"
+        r"haarspülung|conditioner",
+    ),
+    ("hair", r"шампунь|маска\s+для\s+волос|спрей\s+для\s+волос|shampoo|trockenshampoo"),
+    (
+        "lips",
+        r"гигиеническ\w*\s+помад|"
+        r"бальзам\s+для\s+губ|для\s+губ|губн|"
+        r"lip\s+balms?|lip\s+care|lippenpflege|lippenbalsam|"
+        r"\blabello\b",
+    ),
+    (
+        "lipstick",
+        r"губная\s+помада|помада\s+для\s+губ|"
+        r"блеск\s+для\s+губ|тинт\s+для\s+губ|"
+        r"lipstick|lip\s*gloss|lip\s*tint|lippenstift",
+    ),
+    (
+        "hands",
+        r"бальзам\s+для\s+рук|крем\s+для\s+рук|"
+        r"hand\s+balms?|hand\s+creams?|handcreme",
+    ),
+    (
+        "feet",
+        r"бальзам\s+для\s+ног|крем\s+для\s+ног|"
+        r"foot\s+creams?|fußcreme|fusscreme",
+    ),
+    (
+        "body",
+        r"бальзам\s+для\s+тела|крем\s+для\s+тела|"
+        r"лосьон\s+для\s+тела|молочко\s+для\s+тела|"
+        r"body\s+creams?|body\s+lotion|körpercreme|körperlotion",
+    ),
+    (
+        "face",
+        r"крем\s+для\s+лица|"
+        r"face\s+creams?|gesichtscreme|"
+        r"дневной\s+крем|ночной\s+крем|увлажняющий\s+крем",
+    ),
+]
+
+_CATEGORY_USE_HINTS: List[Tuple[str, str]] = [
+    ("hair_rinse", r"ополаскиватель|кондиционер|бальзам.*волос"),
+    ("hair", r"шампун"),
+    ("lips", r"гигиеническ.*помад|бальзам.*губ|губн|lip\s*balm"),
+    ("lipstick", r"губная\s+помад|помада\s+для|lipstick|блеск.*губ"),
+    ("hands", r"для\s+рук|handcreme"),
+    ("feet", r"для\s+ног"),
+    ("body", r"для\s+тела|körper"),
+    ("face", r"для\s+лица|gesicht"),
+]
+
+_USE_BUCKET_MERGEABLE = frozenset(
+    {"lips", "lipstick", "hands", "feet", "body", "face", "hair_rinse", "hair"},
+)
+
+# lips + lipstick (гигиеническая помада + цветная помада) — одна склейка в subjectID
+_USE_BUCKET_MERGE_GROUP: Dict[str, str] = {
+    "lips": "lip_care",
+    "lipstick": "lip_care",
+}
+
+_USE_BUCKET_LABEL_RU: Dict[str, str] = {
+    "lip_care": "для губ (бальзамы и гигиенические помады)",
+    "lips": "для губ (бальзамы)",
+    "lipstick": "помады и блеск",
+    "hands": "для рук",
+    "feet": "для ног",
+    "body": "для тела",
+    "face": "для лица",
+    "hair_rinse": "для волос (ополаскиватель)",
+    "hair": "для волос",
+}
+
+
+def _use_bucket_merge_group(use: str) -> str:
+    return _USE_BUCKET_MERGE_GROUP.get(use, use)
+
+
+def _category_use_bucket(row: dict) -> str:
+    text = " ".join(
+        str(row.get(k) or "") for k in ("subject_name", "parent_name")
+    ).strip().lower()
+    if not text:
+        return ""
+    for key, pat in _CATEGORY_USE_HINTS:
+        if re.search(pat, text, re.IGNORECASE):
+            return key
+    return ""
+
+
+def _product_use_bucket(title: str) -> str:
+    t = (title or "").strip().lower()
+    if not t:
+        return ""
+    for key, pat in _PRODUCT_USE_PATTERNS:
+        if re.search(pat, t, re.IGNORECASE):
+            return key
+    if re.search(r"\bбальзам\b", t, re.IGNORECASE):
+        return "balm_unspecified"
+    if re.search(r"\bкрем\b", t, re.IGNORECASE):
+        return "cream_unspecified"
+    return ""
+
+
+def _row_use_bucket(row: dict) -> str:
+    bucket = _product_use_bucket(str(row.get("title") or ""))
+    if bucket in ("", "balm_unspecified", "cream_unspecified"):
+        from_cat = _category_use_bucket(row)
+        if from_cat:
+            return from_cat
+    return bucket
+
+
+def _items_product_use_compatible(items: List[dict]) -> bool:
+    buckets = {_row_use_bucket(x) for x in items}
+    buckets.discard("")
+    if len(buckets) <= 1:
+        return True
+    return False
+
+
 def _items_same_category(items: List[dict], marketplace: str) -> bool:
     if not items:
         return False
@@ -1866,8 +1997,15 @@ def default_ai_system_prompt(marketplace: str) -> str:
         f"(пример: 42 → {n} + 12). Набивай каждую связку по максимуму до {n}: не делай связки по 1–3 карточки, "
         f"если в ту же связку можно добавить другие логически близкие товары этой категории "
         f"(15 карточек в одной связке — нормально, если они подходят по смыслу).\n"
-        "3) Не смешивать разные продукты ради заполнения (лопатка ≠ шампунь, крем для ног ≠ крем для рук, "
-        "сухой шампунь ≠ обычный). Разные линейки/ароматы/оттенки — разные продукты, но фасовки 1/2/3 каждой линейки — вместе.\n"
+        "3) Сначала делить по НАЗНАЧЕНИЮ — разное назначение НИКОГДА вместе. "
+        "В пределах одного subjectID WB — одна связка до лимита "
+        "(все гигиенические помады Balea / alverde / SUNDANCE вместе — разные вкусы и бренды нормально; "
+        "фасовки 1/2/3/5 шт одной линейки — всегда вместе; "
+        "кремы для лица вместе; цветные помады/блеск вместе). "
+        "«Гигиеническая помада» = бальзам для губ, не цветная помада. "
+        "ЗАПРЕТЫ: бальзам/гигиеническая помада ≠ для рук ≠ ополаскиватель для волос ≠ крем для тела; "
+        "крем для лица ≠ для рук ≠ для ног. "
+        "Смотри назначение в названии И в категории WB.\n"
         "4) Бренд из колонки и названия; IKEA не смешивать с ноунейм; ноунейм не смешивать с именованными брендами.\n"
         "5) IKEA и аксессуары-хранение (сумки, косметички, контейнеры) — можно разные SKU одного класса в одной связке.\n"
         "6) Запчасти телефонов — группировать по модели устройства (iPhone 14, Samsung A54…).\n"
@@ -1999,6 +2137,8 @@ def _validate_ai_cluster_items(items: List[dict], marketplace: str) -> Optional[
         return "разные категории"
     if not _items_brand_buckets_compatible(items):
         return "несовместимые бренды (IKEA/ноунейм)"
+    if not _items_product_use_compatible(items):
+        return "разное назначение (губы/помады/руки/волосы/тело/лицо)"
     return None
 
 
@@ -2127,6 +2267,115 @@ def _merge_ai_suggestions_by_pack_key(
     out = [c for c in suggestions if str(c.get("candidate_id") or "") not in consumed]
     out.extend(merged_out)
     return out, pack_merge_n
+
+
+def _use_merge_category_key(c: dict, row: dict, *, marketplace: str) -> str:
+    """Ключ для склейки по назначению: WB — subjectID (требование API при объединении imtID)."""
+    mp = (marketplace or "").strip().lower()
+    if mp == "wb":
+        sid = int(row.get("subject_id") or c.get("subject_id") or 0)
+        if sid:
+            return f"wb:subject:{sid}"
+        pid = int(row.get("parent_id") or 0)
+        if pid:
+            return f"wb:parent:{pid}"
+    return _candidate_category_key(c, marketplace=mp) or _row_category_key(row, mp)
+
+
+def _merge_ai_suggestions_by_use_bucket(
+    suggestions: List[dict],
+    groups: List[dict],
+    *,
+    marketplace: str,
+    start_seq: int = 0,
+) -> Tuple[List[dict], int]:
+    """Собирает предложения с одинаковым назначением в категории (все «для губ» вместе)."""
+    mp = (marketplace or "").strip().lower()
+    if not suggestions:
+        return suggestions, 0
+
+    by_key: Dict[str, List[dict]] = {}
+    passthrough: List[dict] = []
+
+    for c in suggestions:
+        items = c.get("items") or []
+        if not items:
+            passthrough.append(c)
+            continue
+        uses = {_row_use_bucket(it) for it in items}
+        uses.discard("")
+        if len(uses) != 1:
+            passthrough.append(c)
+            continue
+        use = next(iter(uses))
+        if use not in _USE_BUCKET_MERGEABLE:
+            passthrough.append(c)
+            continue
+        cat = _use_merge_category_key(c, items[0], marketplace=mp)
+        merge_use = _use_bucket_merge_group(use)
+        by_key.setdefault(f"{cat}\x00{merge_use}", []).append(c)
+
+    consumed: set[str] = set()
+    merged_out: List[dict] = []
+    seq = start_seq
+    use_merge_n = 0
+
+    for bucket_key, cluster in by_key.items():
+        if len(cluster) < 2:
+            continue
+        use = bucket_key.split("\x00", 1)[-1]
+        use_label = _USE_BUCKET_LABEL_RU.get(use, use)
+        all_items: List[dict] = []
+        seen: set[str] = set()
+        for c in cluster:
+            for it in c.get("items") or []:
+                art = _row_article(it, mp)
+                if not art or art in seen:
+                    continue
+                seen.add(art)
+                all_items.append(it)
+        if len(all_items) < 2 or not _items_product_use_compatible(all_items):
+            continue
+        for chunk in _split_items_to_bundles(all_items):
+            if len(chunk) < 2:
+                continue
+            tgt_imt, tgt_model = _pick_merge_target_group(chunk, cluster, marketplace=mp)
+            seq += 1
+            if mp == "wb" and tgt_imt:
+                cl: Dict[str, Any] = {
+                    "kind": "merge_groups",
+                    "target_group_id": tgt_imt,
+                    "reason": f"По назначению ({use_label}) · {len(chunk)} шт.",
+                    "confidence": "high",
+                    "normalized_product_name": use_label,
+                }
+            elif mp == "ozon" and tgt_model:
+                cl = {
+                    "kind": "merge_groups",
+                    "target_group_id": tgt_model,
+                    "suggested_model_name": tgt_model,
+                    "reason": f"По назначению ({use_label}) · {len(chunk)} шт.",
+                    "confidence": "high",
+                    "normalized_product_name": use_label,
+                }
+            else:
+                cl = {
+                    "kind": "new_link",
+                    "reason": f"Новая связка · {use_label} · {len(chunk)} шт.",
+                    "confidence": "high",
+                    "normalized_product_name": use_label,
+                }
+            merged_out.append(
+                _build_ai_candidate_entry(cl, chunk, groups, marketplace=mp, seq=seq, source="use_merge"),
+            )
+            use_merge_n += 1
+        consumed.update(str(c.get("candidate_id") or "") for c in cluster if c.get("candidate_id"))
+
+    if not consumed:
+        return suggestions, 0
+    out = passthrough + [c for c in suggestions if str(c.get("candidate_id") or "") not in consumed]
+    out.extend(merged_out)
+    return out, use_merge_n
 
 
 def _bundle_bucket_key(c: dict, *, marketplace: str) -> str:
@@ -2681,6 +2930,10 @@ async def ai_suggest_card_links(
         out, groups, marketplace=mp, start_seq=seq,
     )
     meta["pack_merges"] = pack_merge_n
+    out, use_merge_n = _merge_ai_suggestions_by_use_bucket(
+        out, groups, marketplace=mp, start_seq=seq + pack_merge_n,
+    )
+    meta["use_merges"] = use_merge_n
     bundles = consolidate_ai_bundle_previews(out, groups, marketplace=mp)
     meta["bundles"] = len(bundles)
     covered_arts = set()
