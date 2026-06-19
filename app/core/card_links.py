@@ -1760,11 +1760,53 @@ def _build_ai_category_batch_jobs(
 
 def _row_brand_extended(row: dict) -> str:
     b = str(row.get("brand") or "").strip()
-    if b:
+    if b and not _NO_NAME_BRAND_RE.search(b):
         return b
+    key = _row_brand_key(row)
+    if not key:
+        return ""
     title = str(row.get("title") or "")
-    m = re.search(r"^[\[\(]?([A-Za-zА-Яа-яёЁ0-9][\w\-]{1,30})", title)
-    return m.group(1) if m else ""
+    m = re.search(re.escape(key), title, re.I)
+    if m:
+        return m.group(0)
+    return key
+
+
+_TITLE_BRAND_STOP = frozenset(
+    {
+        "гигиеническая", "гигиенический", "гигиеническую", "помада", "помаду", "помады",
+        "бальзам", "крем", "жидкая", "natural", "для", "губ", "spf", "bio", "liquid", "pure",
+        "naturkosmetik", "natürkosmetik", "naturokosmetik", "the", "for", "lip",
+        "men", "med", "care", "sensitive", "original", "hyaluron",
+    },
+)
+
+_TITLE_BRAND_EXTRACT_PATTERNS = [
+    re.compile(r"помад\w*\s+([A-Za-z][A-Za-z0-9\-]{1,25})", re.I),
+    re.compile(r"бальзам\s+для\s+губ\s+([A-Za-z][A-Za-z0-9\-]{1,25})", re.I),
+    re.compile(r"[-–—]\s*([A-Za-z][A-Za-z0-9\-]{1,25})\s*[-–—,]", re.I),
+    re.compile(r"\b([A-Z][A-Z0-9\-]{2,24})\b"),
+]
+
+
+def _row_brand_key(row: dict) -> str:
+    b = str(row.get("brand") or "").strip()
+    if b and not _NO_NAME_BRAND_RE.search(b):
+        return b.lower()
+    title = str(row.get("title") or "")
+    for pat in _TITLE_BRAND_EXTRACT_PATTERNS:
+        m = pat.search(title)
+        if m:
+            w = m.group(1).lower()
+            if w not in _TITLE_BRAND_STOP and len(w) >= 2:
+                return w
+    return ""
+
+
+def _items_same_brand_key(items: List[dict]) -> bool:
+    keys = {_row_brand_key(x) for x in items}
+    keys.discard("")
+    return len(keys) <= 1
 
 
 def _brand_bucket(row: dict) -> str:
@@ -1803,7 +1845,7 @@ _PRODUCT_USE_PATTERNS: List[Tuple[str, str]] = [
     ),
     (
         "lipstick",
-        r"губная\s+помада|помада\s+для\s+губ|"
+        r"губная\s+помада|помада\s+для\s+губ|жидкая\s+помад\w*|"
         r"блеск\s+для\s+губ|тинт\s+для\s+губ|"
         r"lipstick|lip\s*gloss|lip\s*tint|lippenstift",
     ),
@@ -1835,7 +1877,7 @@ _CATEGORY_USE_HINTS: List[Tuple[str, str]] = [
     ("hair_rinse", r"ополаскиватель|кондиционер|бальзам.*волос"),
     ("hair", r"шампун"),
     ("lips", r"гигиеническ.*помад|бальзам.*губ|губн|lip\s*balm"),
-    ("lipstick", r"губная\s+помад|помада\s+для|lipstick|блеск.*губ"),
+    ("lipstick", r"блеск|губная\s+помад|помада\s+для|жидкая\s+помад|lipstick"),
     ("hands", r"для\s+рук|handcreme"),
     ("feet", r"для\s+ног"),
     ("body", r"для\s+тела|körper"),
@@ -1998,15 +2040,14 @@ def default_ai_system_prompt(marketplace: str) -> str:
         f"если в ту же связку можно добавить другие логически близкие товары этой категории "
         f"(15 карточек в одной связке — нормально, если они подходят по смыслу).\n"
         "3) Сначала делить по НАЗНАЧЕНИЮ — разное назначение НИКОГДА вместе. "
-        "В пределах одного subjectID WB — одна связка до лимита "
-        "(все гигиенические помады Balea / alverde / SUNDANCE вместе — разные вкусы и бренды нормально; "
-        "фасовки 1/2/3/5 шт одной линейки — всегда вместе; "
-        "кремы для лица вместе; цветные помады/блеск вместе). "
-        "«Гигиеническая помада» = бальзам для губ, не цветная помада. "
-        "ЗАПРЕТЫ: бальзам/гигиеническая помада ≠ для рук ≠ ополаскиватель для волос ≠ крем для тела; "
-        "крем для лица ≠ для рук ≠ для ног. "
-        "Смотри назначение в названии И в категории WB.\n"
-        "4) Бренд из колонки и названия; IKEA не смешивать с ноунейм; ноунейм не смешивать с именованными брендами.\n"
+        "Затем в пределах одного subjectID и ОДНОГО БРЕНДА — одна связка до лимита "
+        "(все оттенки/вкусы Balea вместе; все оттенки lavera Liquid Pure вместе; "
+        "фасовки 1/2/3/5 шт одной линейки — всегда вместе). "
+        "ЗАПРЕТ: Balea + Labello + ISANA в одной связке — разные бренды всегда раздельно. "
+        "«Гигиеническая помада» = бальзам для губ. "
+        "ЗАПРЕТЫ по назначению: губы ≠ руки ≠ волосы ≠ тело; крем для лица ≠ для рук.\n"
+        "4) Бренд из колонки и названия (Balea, Labello, lavera…); один бренд на связку; "
+        "IKEA не смешивать с ноунейм; ноунейм не смешивать с именованными брендами.\n"
         "5) IKEA и аксессуары-хранение (сумки, косметички, контейнеры) — можно разные SKU одного класса в одной связке.\n"
         "6) Запчасти телефонов — группировать по модели устройства (iPhone 14, Samsung A54…).\n"
         "7) Заполняй связки по максимуму внутри логической группы (до лимита).\n"
@@ -2137,6 +2178,8 @@ def _validate_ai_cluster_items(items: List[dict], marketplace: str) -> Optional[
         return "разные категории"
     if not _items_brand_buckets_compatible(items):
         return "несовместимые бренды (IKEA/ноунейм)"
+    if not _items_same_brand_key(items):
+        return "разные бренды (Balea ≠ Labello и т.п.)"
     if not _items_product_use_compatible(items):
         return "разное назначение (губы/помады/руки/волосы/тело/лицо)"
     return None
@@ -2289,7 +2332,7 @@ def _merge_ai_suggestions_by_use_bucket(
     marketplace: str,
     start_seq: int = 0,
 ) -> Tuple[List[dict], int]:
-    """Собирает предложения с одинаковым назначением в категории (все «для губ» вместе)."""
+    """Склеивает предложения с одним брендом и назначением в subjectID (оттенки lavera вместе)."""
     mp = (marketplace or "").strip().lower()
     if not suggestions:
         return suggestions, 0
@@ -2311,9 +2354,13 @@ def _merge_ai_suggestions_by_use_bucket(
         if use not in _USE_BUCKET_MERGEABLE:
             passthrough.append(c)
             continue
+        brand = _row_brand_key(items[0])
+        if not brand:
+            passthrough.append(c)
+            continue
         cat = _use_merge_category_key(c, items[0], marketplace=mp)
         merge_use = _use_bucket_merge_group(use)
-        by_key.setdefault(f"{cat}\x00{merge_use}", []).append(c)
+        by_key.setdefault(f"{cat}\x00{merge_use}\x00{brand}", []).append(c)
 
     consumed: set[str] = set()
     merged_out: List[dict] = []
@@ -2336,6 +2383,9 @@ def _merge_ai_suggestions_by_use_bucket(
                 all_items.append(it)
         if len(all_items) < 2 or not _items_product_use_compatible(all_items):
             continue
+        if not _items_same_brand_key(all_items):
+            continue
+        brand_label = _row_brand_extended(all_items[0]) or _row_brand_key(all_items[0])
         for chunk in _split_items_to_bundles(all_items):
             if len(chunk) < 2:
                 continue
@@ -2345,9 +2395,10 @@ def _merge_ai_suggestions_by_use_bucket(
                 cl: Dict[str, Any] = {
                     "kind": "merge_groups",
                     "target_group_id": tgt_imt,
-                    "reason": f"По назначению ({use_label}) · {len(chunk)} шт.",
+                    "reason": f"{brand_label} · {use_label} · {len(chunk)} шт.",
                     "confidence": "high",
                     "normalized_product_name": use_label,
+                    "detected_brand": brand_label,
                 }
             elif mp == "ozon" and tgt_model:
                 cl = {
