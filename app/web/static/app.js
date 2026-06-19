@@ -2361,7 +2361,8 @@
   const cardLinksSelectedReview = new Set();
   const cardLinksSelectedAi = new Set();
   const cardLinksSelectedAiMerge = new Set();
-  const CARD_LINKS_AI_ITEMS_PER_PAGE = 100;
+  const CARD_LINKS_AI_PAGE_SIZE_KEY = 'card_links_ai_page_size';
+  let _cardLinksAiItemsPerPage = 100;
   let _cardLinksAiPage = 0;
   let cardLinksAiEdits = {};
   const CARD_LINKS_AI_SETTINGS_KEY = 'card_links_ai_settings';
@@ -2891,6 +2892,41 @@
     return !!(c?.ai && n > 0);
   }
 
+  function cardLinksNormalizeApplyCandidate(c) {
+    if (!c) return null;
+    const out = { ...c, items: [...(c.items || [])] };
+    const n = out.items.length;
+    if (n > 1 && (out.kind === 'relocate' || out.kind === 'attach')) {
+      out.kind = 'merge_groups';
+    }
+    out.count = n;
+    return out;
+  }
+
+  function cardLinksAiItemsPerPage() {
+    const n = Number(_cardLinksAiItemsPerPage);
+    return n > 0 ? n : Infinity;
+  }
+
+  function restoreCardLinksAiPageSize() {
+    try {
+      const raw = localStorage.getItem(CARD_LINKS_AI_PAGE_SIZE_KEY);
+      if (raw != null && raw !== '') _cardLinksAiItemsPerPage = Number(raw);
+    } catch (_) {}
+    const sel = document.getElementById('card-links-ai-page-size');
+    if (sel) sel.value = String(_cardLinksAiItemsPerPage);
+  }
+
+  function persistCardLinksAiPageSize() {
+    const sel = document.getElementById('card-links-ai-page-size');
+    _cardLinksAiItemsPerPage = Number(sel?.value ?? 100);
+    try {
+      localStorage.setItem(CARD_LINKS_AI_PAGE_SIZE_KEY, String(_cardLinksAiItemsPerPage));
+    } catch (_) {}
+    _cardLinksAiPage = 0;
+    renderCardLinksTable();
+  }
+
   function cardLinkItemCategory(it, mp) {
     if (!it) return '';
     if (mp === 'wb') {
@@ -2951,6 +2987,73 @@
       return `Нельзя связать более ${MAX_LINK_ITEMS} товаров за раз`;
     }
     return '';
+  }
+
+  function cardLinksItemGroupId(it, mp) {
+    if (!it) return '';
+    if (mp === 'wb') return String(it.imt_id || it.link_group_id || '');
+    return String(it.model_name || it.link_group_label || '').trim();
+  }
+
+  function findCatalogByNmId(nmId, mp) {
+    const n = Number(nmId || 0);
+    if (!n) return null;
+    return (cardLinksData.items || []).find((r) => Number(r.nm_id) === n) || null;
+  }
+
+  function cardLinksFilterNmIdsForTarget(nmIds, targetImt, mp) {
+    const tgt = String(targetImt || '');
+    if (mp !== 'wb' || !tgt) return nmIds;
+    return nmIds.filter((nmId) => {
+      const it = findCatalogByNmId(nmId, mp);
+      return cardLinksItemGroupId(it, mp) !== tgt;
+    });
+  }
+
+  function cardLinksFilterArticlesForModel(articles, modelName, mp) {
+    const model = String(modelName || '').trim();
+    if (mp !== 'ozon' || !model) return articles;
+    return articles.filter((art) => {
+      const it = findCatalogByArticle(art, mp);
+      return String(it?.model_name || '').trim() !== model;
+    });
+  }
+
+  function cardLinksValidateMergeCapacity(nmIds, targetImt, modelName, mp) {
+    if (mp === 'wb') {
+      const targetSize = cardLinksTargetGroupSize(targetImt, null);
+      const newIds = cardLinksFilterNmIdsForTarget(nmIds, targetImt, mp);
+      return cardLinksValidateLinkSize(newIds.length, targetSize);
+    }
+    const targetSize = cardLinksTargetGroupSize(null, modelName);
+    const newArts = cardLinksFilterArticlesForModel(nmIds, modelName, mp);
+    return cardLinksValidateLinkSize(newArts.length, targetSize);
+  }
+
+  function cardLinksBundleTargetImt(b) {
+    return Number(b?.target_group_id || b?.suggested_target_imt || 0);
+  }
+
+  function cardLinksBundleApplySizeOk(b) {
+    const mp = cardLinksMarketplace();
+    const c = cardLinksNormalizeApplyCandidate(getResolvedAiBundle(b));
+    if (!c) return false;
+    if (b.is_new_bundle) {
+      const n = (c.items || []).length;
+      return n >= 1 && n <= MAX_LINK_ITEMS;
+    }
+    const targetImt = cardLinksBundleTargetImt(b);
+    const nmIds = (c.items || []).map((it) => Number(it.nm_id || 0)).filter((x) => x > 0);
+    if (mp === 'wb') {
+      const newIds = cardLinksFilterNmIdsForTarget(nmIds, targetImt, mp);
+      const targetSize = cardLinksTargetGroupSize(targetImt, null);
+      return targetSize + newIds.length <= MAX_LINK_ITEMS;
+    }
+    const model = String(b.target_model_name || b.suggested_model_name || '').trim();
+    const arts = (c.items || []).map((it) => cardLinksArticleKey(it, mp)).filter(Boolean);
+    const newArts = cardLinksFilterArticlesForModel(arts, model, mp);
+    const targetSize = cardLinksTargetGroupSize(null, model);
+    return targetSize + newArts.length <= MAX_LINK_ITEMS;
   }
 
   function cardLinksTargetGroupSize(targetImt, modelName) {
@@ -3212,12 +3315,12 @@
   }
 
   function cardLinksCanBulkApplyBundle(b) {
-    const c = b?.apply_candidate;
+    const c = cardLinksNormalizeApplyCandidate(getResolvedAiBundle(b));
     if (!c || !cardLinksCanBulkApplyCandidate(c)) return false;
     const moving = (c.items || []).length;
-    if (c.kind === 'attach' && moving < 1) return false;
-    if (c.kind !== 'attach' && moving < 2) return false;
-    if ((b.item_count || 0) > MAX_LINK_ITEMS) return false;
+    if (moving < 1) return false;
+    if ((c.kind === 'new_link' || c.kind === 'combine_suggestions') && moving < 2) return false;
+    if (!cardLinksBundleApplySizeOk(b)) return false;
     return true;
   }
 
@@ -3246,12 +3349,16 @@
 
   function cardLinksAiBundlePages() {
     const bundles = cardLinksFilteredAiBundles();
+    const limit = cardLinksAiItemsPerPage();
+    if (!Number.isFinite(limit)) {
+      return bundles.length ? [bundles] : [[]];
+    }
     const pages = [];
     let current = [];
     let itemSum = 0;
     for (const b of bundles) {
       const n = Number(b.item_count || (b.items || []).length || 0);
-      if (current.length && itemSum + n > CARD_LINKS_AI_ITEMS_PER_PAGE) {
+      if (current.length && itemSum + n > limit) {
         pages.push(current);
         current = [];
         itemSum = 0;
@@ -3302,16 +3409,22 @@
       bar.hidden = true;
       return;
     }
+    bar.hidden = false;
     const stats = cardLinksAiPageStats();
-    bar.hidden = stats.pageCount <= 1;
-    if (bar.hidden) return;
+    const showNav = stats.pageCount > 1;
     if (label) {
-      label.textContent = stats.pageCount <= 1
-        ? `${stats.totalBundles} связок · ${stats.totalItems} товаров`
-        : `Стр. ${stats.page} / ${stats.pageCount} · ${stats.pageBundles} связок · ${stats.pageItems} товаров (всего ${stats.totalItems})`;
+      label.textContent = showNav
+        ? `Стр. ${stats.page} / ${stats.pageCount} · ${stats.pageBundles} связок · ${stats.pageItems} товаров (всего ${stats.totalItems})`
+        : `${stats.totalBundles} связок · ${stats.totalItems} товаров`;
     }
-    if (prev) prev.disabled = stats.page <= 1;
-    if (next) next.disabled = stats.page >= stats.pageCount;
+    if (prev) {
+      prev.hidden = !showNav;
+      prev.disabled = stats.page <= 1;
+    }
+    if (next) {
+      next.hidden = !showNav;
+      next.disabled = stats.page >= stats.pageCount;
+    }
   }
 
   function buildMergedAiBundle(b1, b2) {
@@ -3474,8 +3587,12 @@
   function cardLinksResolvedSelectedAi() {
     cardLinksPruneSelectionSets();
     return [...cardLinksSelectedAi]
-      .map((id) => getResolvedAiBundle(findAiBundle(id)))
-      .filter((c) => c && cardLinksCanBulkApplyCandidate(c));
+      .map((id) => {
+        const bundle = findAiBundle(id);
+        if (!bundle || !cardLinksCanBulkApplyBundle(bundle)) return null;
+        return cardLinksNormalizeApplyCandidate(getResolvedAiBundle(bundle));
+      })
+      .filter(Boolean);
   }
 
   function cardLinksAiAddOptionsForBundle(b) {
@@ -3553,7 +3670,7 @@
       : '';
     label.textContent = cands.length
       ? `Выбрано ${cands.length} связок · ${cands.reduce((n, c) => n + (c.items || []).length, 0)} товаров к действию${cov}`
-      : `Итоговых связок: ${available.length}${cov} — отметьте и «Применить»`;
+      : `Итоговых связок: ${available.length}${cov} — отметьте галочкой слева, затем «Применить»`;
     if (applyBtn) applyBtn.disabled = cands.length < 1;
     if (mergeBtn) {
       const mergeIds = [...cardLinksSelectedAiMerge];
@@ -3582,7 +3699,12 @@
     if (_cardLinksActionBusy) return;
     const cands = cardLinksResolvedSelectedAi();
     if (!cands.length) {
-      toast(cardLinksSelectedAi.size ? 'Исправьте предложения (минимум 2 товара)' : 'Отметьте предложения ИИ', 'error');
+      toast(
+        cardLinksSelectedAi.size
+          ? 'Выбранные связки нельзя применить (нет товаров, лимит 30 или новая связка < 2 шт.)'
+          : 'Отметьте галочкой слева связки для «Применить выбранные»',
+        'error',
+      );
       return;
     }
     const pauseSec = Math.ceil(CARD_LINKS_ACTION_COOLDOWN_MS / 1000);
@@ -4456,7 +4578,7 @@
     const typeBadge = b.is_new_bundle
       ? '<span class="card-links-ai-type card-links-ai-type--new">Новая связка</span>'
       : '<span class="card-links-ai-type card-links-ai-type--merge">Итоговая связка</span>';
-    const overLimit = (b.item_count || 0) > MAX_LINK_ITEMS;
+    const overLimit = !cardLinksBundleApplySizeOk(b);
     const itemCards = (b.items || []).map((it) => {
       const art = cardLinksArticleKey(it, mp);
       const role = it.role || (it.moving ? 'add' : 'stay');
@@ -4511,9 +4633,9 @@
         <div class="card-links-ai-bundle-summary">${escapeHtml(b.summary || '')}${overLimit ? ` · ⚠ лимит ${MAX_LINK_ITEMS}` : ''}</div>
         <div class="card-links-ai-bundle-items">${itemCards || '<span class="form-hint">Нет товаров</span>'}</div>
         <div class="card-links-ai-bundle-foot">
-          <label class="card-links-ai-merge-pick-wrap" title="Выбрать для склейки (макс. 2 в одной категории)">
+          <label class="card-links-ai-merge-pick-wrap" title="Объединить 2 связки в одну (отдельно от массового применения)">
             <input type="checkbox" class="card-links-ai-merge-pick" data-bundle-id="${bid}"${mergeChecked ? ' checked' : ''}>
-            <span>Склейка</span>
+            <span>Склейка 2</span>
           </label>
           ${modelInput}
           ${addRow}
@@ -4939,7 +5061,7 @@
 
     const mp = cardLinksMarketplace();
     const storeId = Number(document.getElementById('card-links-store')?.value || 0);
-    const candidate = opts.candidate || null;
+    const candidate = cardLinksNormalizeApplyCandidate(opts.candidate || null);
     let checked = opts.checked || getSelectedCardLinkRows();
     if (!checked.length && candidate) {
       document.querySelectorAll('.card-links-check').forEach((el) => {
@@ -4998,9 +5120,15 @@
           || 0,
         );
       }
-      const nmIds = checked.length
+      const nmIdsRaw = checked.length
         ? checked.map(el => Number(el.getAttribute('data-nm-id') || 0)).filter(x => x > 0)
         : (candidate?.items || []).map((it) => Number(it.nm_id || 0)).filter(x => x > 0);
+      const nmIds = (linkKind === 'attach' || linkKind === 'relocate' || linkKind === 'merge_groups')
+        ? cardLinksFilterNmIdsForTarget(nmIdsRaw, targetImt, mp)
+        : nmIdsRaw;
+      if (!nmIds.length && nmIdsRaw.length && (linkKind === 'merge_groups' || linkKind === 'attach')) {
+        return fail('Все выбранные товары уже в целевой связке');
+      }
       if ((linkKind === 'new_link' || kind === 'combine_suggestions') && !targetImt) {
         const first = (candidate?.items || [])[0];
         if (first) targetImt = Number(first.imt_id || 0);
@@ -5014,15 +5142,9 @@
       }
       if ((kind === 'attach' || kind === 'attach_batch' || kind === 'relocate') && nmIds.length < 1) return fail('Нет товара для связки');
       if (kind === 'merge_groups' && nmIds.length < 1) return fail('Нет товаров для объединения');
-      const targetSize = cardLinksTargetGroupSize(targetImt, null);
-      let sizeErr = '';
-      if (linkKind === 'attach' || linkKind === 'relocate' || linkKind === 'merge_groups') {
-        sizeErr = cardLinksValidateLinkSize(nmIds.length, targetSize);
-      } else {
-        sizeErr = targetImt
-          ? cardLinksValidateLinkSize(nmIds.length, targetSize)
-          : cardLinksValidateLinkSize(nmIds.length, 0);
-      }
+      const sizeErr = (linkKind === 'new_link' || kind === 'combine_suggestions') && !targetImt
+        ? cardLinksValidateLinkSize(nmIdsRaw.length, 0)
+        : cardLinksValidateMergeCapacity(nmIds, targetImt, null, mp);
       if (sizeErr) return fail(sizeErr);
       const confirmMsg = kind === 'relocate'
         ? `Переместить ${nmIds.length} карточку в imtID ${targetImt}?`
@@ -5089,15 +5211,20 @@
     if (!modelName) {
       return fail(kind === 'relocate' ? 'Выберите целевую модель' : 'Введите название модели');
     }
-    const ozTargetSize = cardLinksTargetGroupSize(null, modelName);
-    const ozSizeErr = cardLinksValidateLinkSize(articles.length, ozTargetSize);
+    const articlesToApply = (kind === 'merge_groups' || kind === 'attach' || kind === 'relocate')
+      ? cardLinksFilterArticlesForModel(articles, modelName, mp)
+      : articles;
+    if (!articlesToApply.length && articles.length && (kind === 'merge_groups' || kind === 'attach')) {
+      return fail('Все выбранные товары уже в целевой модели');
+    }
+    const ozSizeErr = cardLinksValidateMergeCapacity(articlesToApply, null, modelName, mp);
     if (ozSizeErr) return fail(ozSizeErr);
     const ozCatalogRows = buildMergeCatalogRows(checked, { candidate, modelName });
     const ozConfirm = kind === 'relocate'
-      ? `Переместить ${articles.length} товар в модель «${modelName}»?`
+      ? `Переместить ${articlesToApply.length} товар в модель «${modelName}»?`
       : (kind === 'merge_groups'
-        ? `Объединить ${articles.length} товаров с моделью «${modelName}»?`
-        : `Связать ${articles.length} товаров Ozon с моделью «${modelName}»?`);
+        ? `Объединить ${articlesToApply.length} товаров с моделью «${modelName}»?`
+        : `Связать ${articlesToApply.length} товаров Ozon с моделью «${modelName}»?`);
     if (!opts.skipConfirm && !confirm(ozConfirm)) return finish({ ok: false, cancelled: true });
     const aiBundleId = resolveAiBundleId(opts, candidate);
     if (aiBundleId) removeAiBundleFromUi(aiBundleId);
@@ -5108,7 +5235,7 @@
     try {
       await api(`/card-links/ozon/${storeId}/link`, {
         method: 'POST',
-        body: JSON.stringify({ offer_ids: articles, model_name: modelName, catalog_rows: ozCatalogRows }),
+        body: JSON.stringify({ offer_ids: articlesToApply, model_name: modelName, catalog_rows: ozCatalogRows }),
       });
       if (!opts.skipToast) {
         toast(aiBundleId ? 'Связка отправлена в Ozon' : 'Название модели обновлено', 'success');
@@ -5275,6 +5402,7 @@
       syncCardLinksStoreSelect();
       restoreCardLinksScopeSettings();
       restoreCardLinksAiSettings();
+      restoreCardLinksAiPageSize();
       void loadCardLinksAiPrompt();
       loadCardLinksWorkFilters();
       syncCardLinksWorkFilterBar();
@@ -5476,6 +5604,8 @@
       }
     });
     restoreCardLinksAiSettings();
+    restoreCardLinksAiPageSize();
+    document.getElementById('card-links-ai-page-size')?.addEventListener('change', () => { persistCardLinksAiPageSize(); });
     restoreCardLinksScopeSettings();
     document.getElementById('btn-card-links-merge')?.addEventListener('click', () => { void mergeSelectedCardLinks(); });
     document.getElementById('btn-card-links-disconnect')?.addEventListener('click', () => { void disconnectSelectedCardLinks(); });
@@ -5601,15 +5731,16 @@
       const applyOne = e.target.closest('.card-links-ai-apply-one');
       if (applyOne) {
         const bundleId = applyOne.getAttribute('data-bundle-id');
-        const b = getResolvedAiBundle(findAiBundle(bundleId));
-        if (!b) return;
-        void mergeSelectedCardLinks({ candidate: b, bundleId, lightweight: true });
+        const bundle = findAiBundle(bundleId);
+        const c = cardLinksNormalizeApplyCandidate(getResolvedAiBundle(bundle));
+        if (!c) return;
+        void mergeSelectedCardLinks({ candidate: c, bundleId, lightweight: true });
         return;
       }
       const attachBtn = e.target.closest('.card-links-attach-btn');
       if (attachBtn) {
         const raw = findCardLinksCandidate(attachBtn.getAttribute('data-candidate-id'));
-        const c = raw && raw.ai ? getResolvedAiCandidate(raw) : raw;
+        const c = cardLinksNormalizeApplyCandidate(raw && raw.ai ? getResolvedAiCandidate(raw) : raw);
         if (!c) return;
         void mergeSelectedCardLinks({ candidate: c });
         return;
@@ -5617,7 +5748,7 @@
       const mergeGroupBtn = e.target.closest('.card-links-merge-group');
       if (mergeGroupBtn) {
         const raw = findCardLinksCandidate(mergeGroupBtn.getAttribute('data-candidate-id'));
-        const c = raw && raw.ai ? getResolvedAiCandidate(raw) : raw;
+        const c = cardLinksNormalizeApplyCandidate(raw && raw.ai ? getResolvedAiCandidate(raw) : raw);
         if (!c) return;
         void mergeSelectedCardLinks({ candidate: c });
         return;

@@ -4397,6 +4397,15 @@ body.theme-dark .card-links-guide-panel {
   text-align: center;
 }
 
+.card-links-ai-page-size-wrap {
+  font-size: 0.88rem;
+  opacity: 0.9;
+}
+
+.card-links-ai-page-size {
+  min-width: 5.5rem;
+}
+
 .card-links-ai-merge-pick-wrap {
   display: inline-flex;
   align-items: center;

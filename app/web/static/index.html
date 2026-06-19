@@ -768,6 +768,13 @@
             </div>
           </div>
           <div id="card-links-ai-pagination" class="card-links-ai-pagination" hidden>
+            <label class="card-links-ai-page-size-wrap" for="card-links-ai-page-size">На странице</label>
+            <select id="card-links-ai-page-size" class="select-md card-links-ai-page-size" aria-label="Товаров на странице">
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="200">200</option>
+              <option value="0">Все</option>
+            </select>
             <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-page-prev" aria-label="Предыдущая страница">← Назад</button>
             <span id="card-links-ai-page-label" class="card-links-ai-page-label"></span>
             <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-page-next" aria-label="Следующая страница">Вперёд →</button>
@@ -1451,6 +1458,6 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=60"></script>
+  <script src="/static/app.js?v=62"></script>
 </body>
 </html>

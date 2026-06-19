@@ -2032,6 +2032,64 @@ def _items_same_category(items: List[dict], marketplace: str) -> bool:
     return len(cats) <= 1
 
 
+def _item_link_group_id(it: dict, marketplace: str) -> str:
+    mp = (marketplace or "").strip().lower()
+    if mp == "wb":
+        return str(it.get("link_group_id") or it.get("imt_id") or "").strip()
+    return str(it.get("model_name") or it.get("link_group_label") or "").strip()
+
+
+def _external_moving_items(
+    items: List[dict],
+    target_group_id: str,
+    *,
+    marketplace: str,
+) -> List[dict]:
+    """Товары, которые реально переносятся в целевую связку (не уже там)."""
+    tgt = str(target_group_id or "").strip()
+    out: List[dict] = []
+    for it in items:
+        if not it.get("moving"):
+            continue
+        if tgt and _item_link_group_id(it, marketplace) == tgt:
+            continue
+        out.append(it)
+    return out
+
+
+def _split_target_merge_chunks(
+    items_list: List[dict],
+    external_moving: List[dict],
+    target_group_size: int,
+    *,
+    max_size: int = MAX_LINK_ITEMS,
+) -> List[List[dict]]:
+    """Делит перенос в существующую связку на части по лимиту WB."""
+    stay = [x for x in items_list if not x.get("moving")]
+    if len(items_list) <= max_size and target_group_size + len(external_moving) <= max_size:
+        return [items_list]
+    tgt_n = max(int(target_group_size or 0), len(stay))
+    room = max(0, max_size - tgt_n)
+    if room <= 0 or not external_moving:
+        return _split_items_to_bundles(items_list, max_size=max_size)
+
+    chunks: List[List[dict]] = []
+    batches: List[List[dict]] = [
+        external_moving[i : i + room] for i in range(0, len(external_moving), room)
+    ]
+    first = stay + batches[0]
+    if first:
+        chunks.append(first)
+    for batch in batches[1:]:
+        if len(batch) >= 2:
+            chunks.append(batch)
+        elif batch and stay:
+            chunks.append([stay[0], *batch])
+        elif batch:
+            chunks.append(batch)
+    return chunks or _split_items_to_bundles(items_list, max_size=max_size)
+
+
 def _split_items_to_bundles(items: List[dict], max_size: int = MAX_LINK_ITEMS) -> List[List[dict]]:
     if len(items) <= max_size:
         return [items]
@@ -2555,7 +2613,14 @@ def _merged_apply_candidate(
     if not ops:
         return {}
     if len(ops) == 1 and len(moving_items) == len(ops[0].get("items") or []):
-        return dict(ops[0])
+        base = dict(ops[0])
+        base["items"] = moving_items
+        base["count"] = len(moving_items)
+        if not bucket.get("is_new_bundle"):
+            kind = str(base.get("kind") or "")
+            if len(moving_items) > 1 and kind in ("relocate", "attach"):
+                base["kind"] = "merge_groups"
+        return base
     base = dict(ops[0])
     base["candidate_id"] = f"{bucket['bundle_id']}-apply"
     base["items"] = moving_items
@@ -2709,13 +2774,47 @@ def consolidate_ai_bundle_previews(
         if not _items_same_brand_key(items_list):
             continue
 
-        item_chunks = _split_items_to_bundles(items_list) if len(items_list) > MAX_LINK_ITEMS else [items_list]
+        target_group_size = (
+            len(group_by_id[tgt_id].get("items") or [])
+            if not is_new and tgt_id and tgt_id in group_by_id
+            else 0
+        )
+        external_moving = (
+            _external_moving_items(items_list, str(tgt_id or ""), marketplace=mp)
+            if not is_new and tgt_id
+            else [x for x in items_list if x.get("moving")]
+        )
+        if not is_new and tgt_id and not external_moving:
+            continue
+        if is_new:
+            item_chunks = (
+                _split_items_to_bundles(items_list)
+                if len(items_list) > MAX_LINK_ITEMS
+                else [items_list]
+            )
+        elif len(items_list) > MAX_LINK_ITEMS or target_group_size + len(external_moving) > MAX_LINK_ITEMS:
+            item_chunks = _split_target_merge_chunks(
+                items_list,
+                external_moving,
+                target_group_size,
+            )
+        else:
+            item_chunks = [items_list]
         for part_idx, chunk_items in enumerate(item_chunks):
             if len(chunk_items) < 2:
                 continue
-            chunk_moving = [x for x in chunk_items if x.get("moving")]
+            if is_new:
+                chunk_moving = [x for x in chunk_items if x.get("moving")]
+            else:
+                chunk_moving = _external_moving_items(
+                    chunk_items,
+                    str(tgt_id or ""),
+                    marketplace=mp,
+                )
+            if not chunk_moving:
+                continue
             chunk_moving_n = len(chunk_moving)
-            chunk_stay_n = len(chunk_items) - chunk_moving_n
+            chunk_stay_n = len([x for x in chunk_items if not x.get("moving")])
             if is_new:
                 summary = f"Новая связка · {len(chunk_items)} товаров"
             else:
@@ -2728,6 +2827,8 @@ def consolidate_ai_bundle_previews(
                 summary = " · ".join(parts)
             if len(item_chunks) > 1:
                 summary += f" · часть {part_idx + 1}/{len(item_chunks)}"
+            if not is_new and len(item_chunks) > 1 and part_idx > 0:
+                summary += " · после части 1 обновите каталог"
 
             chunk_apply = _merged_apply_candidate(b, chunk_moving, op_map, marketplace=mp)
             if not chunk_apply or not chunk_moving:
