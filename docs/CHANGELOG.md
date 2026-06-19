@@ -5,6 +5,26 @@
 
 ---
 
+## 2026-06-18 — Фасовки 1/2/3 не дробить
+
+### Backend
+- Авто-фасовки: `merge_groups` если 1/2/3 шт в разных imtID
+- `_merge_ai_suggestions_by_pack_key` перед brand-merge
+- Промпт ИИ: главное правило — фасовки всегда в одной связке
+
+---
+
+## 2026-06-18 — Слияние ИИ-связок по бренду в категории
+
+### Backend
+- `_merge_ai_suggestions_by_brand_category` после pack/AI, до consolidate
+- Balea/ARTDECO в одной категории → одна итоговая связка (merge_groups в главный imtID)
+
+### Frontend
+- Статус: «объединено по бренду: N» · `app.js?v=55`
+
+---
+
 ## 2026-06-18 — ИИ по категориям целиком
 
 ### Backend
