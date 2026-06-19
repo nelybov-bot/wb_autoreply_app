@@ -697,6 +697,18 @@
               <label class="card-links-work-toggle"><input type="checkbox" id="card-links-ai-deterministic-packs" checked> Авто: фасовки 1/2/3 шт (без ИИ)</label>
               <label class="card-links-work-toggle"><input type="checkbox" id="card-links-ai-split-oversized" checked> Делить связки &gt;30</label>
             </div>
+            <div class="card-links-ai-prompt-wrap">
+              <div class="card-links-ai-prompt-head">
+                <span class="toolbar-label">Системный промпт ИИ (<span id="card-links-ai-prompt-mp-label">WB</span>)</span>
+                <span id="card-links-ai-prompt-status" class="form-hint card-links-ai-prompt-status"></span>
+              </div>
+              <textarea id="card-links-ai-prompt" class="card-links-ai-prompt-input" rows="14" spellcheck="false" placeholder="Загрузка…"></textarea>
+              <div class="card-links-ai-prompt-actions">
+                <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-ai-prompt-save">Сохранить промпт</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-prompt-reset">Вернуть встроенный</button>
+              </div>
+              <p class="form-hint">Промпт для выбранного маркетплейса. Плейсхолдер <code>{max_link_items}</code> — лимит карточек в связке (30). Сохраняется на сервере для всех сессий.</p>
+            </div>
             <p class="form-hint">Показываются <strong>итоговые связки</strong>. ИИ получает <strong>всю категорию одним запросом</strong> (лучше видит фасовки и связки). Очень большие категории режутся по лимиту. Запуск фоном — прогресс в %.</p>
           </details>
         </details>
@@ -745,8 +757,14 @@
           <span id="card-links-ai-label" class="card-links-combine-label"></span>
           <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-run">Запустить ИИ</button>
           <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-select-all">Все</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-merge-two" title="Отметьте 2 связки в одной категории">Склеить 2 связки</button>
           <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-ai-apply">Применить выбранные</button>
           <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-clear">Снять</button>
+        </div>
+        <div id="card-links-ai-pagination" class="card-links-ai-pagination" hidden>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-page-prev" aria-label="Предыдущая страница">←</button>
+          <span id="card-links-ai-page-label" class="card-links-ai-page-label"></span>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-page-next" aria-label="Следующая страница">→</button>
         </div>
         <div id="card-links-review-bar" class="card-links-review-wrap" hidden>
           <span id="card-links-review-label" class="card-links-combine-label"></span>
@@ -1426,6 +1444,6 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=56"></script>
+  <script src="/static/app.js?v=59"></script>
 </body>
 </html>

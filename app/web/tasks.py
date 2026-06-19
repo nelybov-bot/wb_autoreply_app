@@ -332,6 +332,7 @@ async def run_card_links_ai_suggest(
     max_ai_batches: int = 12,
     deterministic_packs: bool = True,
     split_oversized: bool = True,
+    system_prompt: str = "",
 ) -> str:
     from app.core.card_links import ai_suggest_card_links
     from app.core.net import HttpStatusError
@@ -367,6 +368,7 @@ async def run_card_links_ai_suggest(
                 max_ai_batches=max_ai_batches,
                 deterministic_packs=deterministic_packs,
                 split_oversized=split_oversized,
+                system_prompt=system_prompt or None,
                 progress_cb=_progress,
                 cancel=ctrl,
             )

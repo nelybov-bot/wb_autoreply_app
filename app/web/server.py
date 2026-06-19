@@ -104,6 +104,10 @@ from app.core.card_links import (
     wb_disconnect_cards,
     wb_merge_cards,
     wb_merge_error_message,
+    default_ai_system_prompt,
+    get_card_links_ai_prompt_stored,
+    set_card_links_ai_prompt_stored,
+    resolve_ai_system_prompt,
 )
 from app.core.chat_common import SETTING_AUTO_CHAT_MAX_AGE_DAYS, SETTING_REPLY_FROM, parse_api_error_detail
 from app.core.secret_mask import (
@@ -3380,6 +3384,69 @@ class CardLinksAiSuggestBody(BaseModel):
     options: Optional[CardLinksAiOptions] = None
 
 
+class CardLinksAiPromptOut(BaseModel):
+    marketplace: str
+    prompt_text: str
+    stored_text: str
+    default_prompt: str
+    is_custom: bool
+
+
+class CardLinksAiPromptUpdate(BaseModel):
+    prompt_text: str = ""
+
+
+def _card_links_ai_prompt_marketplace(marketplace: str) -> str:
+    mp = (marketplace or "").strip().lower()
+    if mp not in ("wb", "ozon"):
+        raise HTTPException(400, "marketplace должен быть wb или ozon")
+    return mp
+
+
+@app.get("/api/card-links/ai-prompt/{marketplace}", response_model=CardLinksAiPromptOut)
+def api_card_links_ai_prompt_get(
+    marketplace: str,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    mp = _card_links_ai_prompt_marketplace(marketplace)
+    stored = get_card_links_ai_prompt_stored(db, mp)
+    default = default_ai_system_prompt(mp)
+    effective = resolve_ai_system_prompt(mp, stored) if stored else default
+    return CardLinksAiPromptOut(
+        marketplace=mp,
+        prompt_text=effective,
+        stored_text=stored,
+        default_prompt=default,
+        is_custom=bool(stored),
+    )
+
+
+@app.put("/api/card-links/ai-prompt/{marketplace}", response_model=CardLinksAiPromptOut)
+def api_card_links_ai_prompt_put(
+    marketplace: str,
+    body: CardLinksAiPromptUpdate,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    mp = _card_links_ai_prompt_marketplace(marketplace)
+    text = (body.prompt_text or "").strip()
+    default = default_ai_system_prompt(mp)
+    if not text or text == default:
+        set_card_links_ai_prompt_stored(db, mp, "")
+    else:
+        set_card_links_ai_prompt_stored(db, mp, text)
+    stored = get_card_links_ai_prompt_stored(db, mp)
+    effective = resolve_ai_system_prompt(mp, stored) if stored else default
+    return CardLinksAiPromptOut(
+        marketplace=mp,
+        prompt_text=effective,
+        stored_text=stored,
+        default_prompt=default,
+        is_custom=bool(stored),
+    )
+
+
 def _card_links_http_error(marketplace: str, e: HttpStatusError) -> HTTPException:
     mp = "Wildberries" if marketplace == "wb" else "Ozon"
     body = redact_secrets_in_text((e.body or "")[:500])
@@ -3753,6 +3820,7 @@ async def api_card_links_wb_ai_suggest(
             raise _card_links_http_error("wb", e) from e
         groups = group_wb_rows(rows)
         apply_link_status(rows, groups)
+    ai_prompt = get_card_links_ai_prompt_stored(db, "wb")
     task_id = await web_tasks.run_card_links_ai_suggest(
         rows=rows,
         groups=groups,
@@ -3765,6 +3833,7 @@ async def api_card_links_wb_ai_suggest(
         max_ai_batches=opts.max_ai_batches,
         deterministic_packs=opts.deterministic_packs,
         split_oversized=opts.split_oversized,
+        system_prompt=ai_prompt,
     )
     return {"task_id": task_id, "status": "running"}
 
@@ -3806,6 +3875,7 @@ async def api_card_links_ozon_ai_suggest(
             raise HTTPException(400, str(e)) from e
         groups = group_ozon_rows(rows, articles_only=articles_only)
         apply_link_status(rows, groups)
+    ai_prompt = get_card_links_ai_prompt_stored(db, "ozon")
     task_id = await web_tasks.run_card_links_ai_suggest(
         rows=rows,
         groups=groups,
@@ -3818,6 +3888,7 @@ async def api_card_links_ozon_ai_suggest(
         max_ai_batches=opts.max_ai_batches,
         deterministic_packs=opts.deterministic_packs,
         split_oversized=opts.split_oversized,
+        system_prompt=ai_prompt,
     )
     return {"task_id": task_id, "status": "running"}
 

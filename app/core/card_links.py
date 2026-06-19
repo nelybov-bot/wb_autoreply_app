@@ -63,6 +63,21 @@ _PACK_RE = re.compile(
 )
 
 MAX_LINK_ITEMS = 30
+CARD_LINKS_AI_PROMPT_KEY_WB = "card_links_ai_prompt_wb"
+CARD_LINKS_AI_PROMPT_KEY_OZON = "card_links_ai_prompt_ozon"
+
+
+def card_links_ai_prompt_setting_key(marketplace: str) -> str:
+    mp = (marketplace or "").strip().lower()
+    return CARD_LINKS_AI_PROMPT_KEY_WB if mp == "wb" else CARD_LINKS_AI_PROMPT_KEY_OZON
+
+
+def get_card_links_ai_prompt_stored(db: Any, marketplace: str) -> str:
+    return (db.get_setting(card_links_ai_prompt_setting_key(marketplace)) or "").strip()
+
+
+def set_card_links_ai_prompt_stored(db: Any, marketplace: str, prompt_text: str) -> None:
+    db.set_setting(card_links_ai_prompt_setting_key(marketplace), (prompt_text or "").strip())
 # Эвристики предложений: O(n²) по названиям — ограничиваем на больших каталогах
 _CLUSTER_TITLE_SIMILARITY_MAX = 120
 _ATTACH_SUGGEST_LIMIT = 200
@@ -1838,7 +1853,7 @@ def _filter_rows_for_ai_scope(rows: List[dict], scope: str, marketplace: str) ->
     return list(rows)
 
 
-def _ai_system_prompt(marketplace: str) -> str:
+def default_ai_system_prompt(marketplace: str) -> str:
     mp = (marketplace or "").strip().lower()
     n = MAX_LINK_ITEMS
     common = (
@@ -1869,7 +1884,7 @@ def _ai_system_prompt(marketplace: str) -> str:
         return (
             "Ты эксперт по связкам карточек Wildberries (WB). Связка = общий imtID.\n"
             + common
-            + "Верни ТОЛЬКО JSON-массив без markdown. Каждый элемент — одна связка (до 30 article_ids). Формат элемента:\n"
+            + f"Верни ТОЛЬКО JSON-массив без markdown. Каждый элемент — одна связка (до {n} article_ids). Формат элемента:\n"
             '{"cluster_id":"c1","kind":"new_link"|"attach"|"relocate"|"merge_groups",'
             '"article_ids":["vendor_code",...],"target_group_id":null|123456789,'
             '"suggested_model_name":null,"normalized_product_name":"...","detected_brand":"...",'
@@ -1888,6 +1903,13 @@ def _ai_system_prompt(marketplace: str) -> str:
         '"detected_brand":"...","confidence":"high"|"medium"|"low","reason":"кратко по-русски"}.\n'
         "article_ids — offer_id из списка."
     )
+
+
+def resolve_ai_system_prompt(marketplace: str, custom: Optional[str] = None) -> str:
+    text = (custom or "").strip()
+    if not text:
+        return default_ai_system_prompt(marketplace)
+    return text.replace("{max_link_items}", str(MAX_LINK_ITEMS))
 
 
 def _resolve_target_group_id(
@@ -2321,9 +2343,8 @@ def consolidate_ai_bundle_previews(
 
     out.sort(
         key=lambda x: (
-            -int(x.get("moving_count") or 0),
-            str(x.get("category_label") or ""),
-            str(x.get("bundle_label") or ""),
+            str(x.get("category_label") or "").lower(),
+            str(x.get("bundle_label") or "").lower(),
         )
     )
     return out
@@ -2413,6 +2434,7 @@ async def _ai_suggest_batch(
     openai_key: str,
     client: Any = None,
     category_label: str = "",
+    system_prompt: Optional[str] = None,
 ) -> List[dict]:
     from app.core.openai_client import OpenAIClient
 
@@ -2433,7 +2455,7 @@ async def _ai_suggest_batch(
         ensure_ascii=False,
     )
     ai_client = client or OpenAIClient(openai_key)
-    raw = await ai_client.generate(_ai_system_prompt(mp), user)
+    raw = await ai_client.generate(resolve_ai_system_prompt(mp, system_prompt), user)
     text = (raw or "").strip()
     if text.startswith("```"):
         text = re.sub(r"^```\w*\n?", "", text)
@@ -2482,6 +2504,7 @@ async def ai_suggest_card_links(
     max_ai_batches: int = 12,
     deterministic_packs: bool = True,
     split_oversized: bool = True,
+    system_prompt: Optional[str] = None,
     progress_cb: Optional[Callable[[int, int, str], None]] = None,
     cancel: Any = None,
 ) -> Tuple[List[dict], List[dict], dict]:
@@ -2611,6 +2634,7 @@ async def ai_suggest_card_links(
                         openai_key=openai_key,
                         client=ai_client,
                         category_label=cat_label,
+                        system_prompt=system_prompt,
                     )
                 except asyncio.CancelledError:
                     raise

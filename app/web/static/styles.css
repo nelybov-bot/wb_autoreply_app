@@ -4262,6 +4262,72 @@ body.theme-dark .card-links-guide-panel {
   margin-top: 0.5rem;
 }
 
+.card-links-ai-prompt-wrap {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(120, 120, 120, 0.2);
+}
+
+.card-links-ai-prompt-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.35rem 1rem;
+  margin-bottom: 0.35rem;
+}
+
+.card-links-ai-prompt-status {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.card-links-ai-prompt-input {
+  width: 100%;
+  min-height: 12rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  resize: vertical;
+}
+
+.card-links-ai-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.card-links-ai-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: 0.35rem 0 0.5rem;
+  padding: 0.35rem 0;
+}
+
+.card-links-ai-page-label {
+  font-size: 0.88rem;
+  opacity: 0.92;
+  min-width: 12rem;
+  text-align: center;
+}
+
+.card-links-ai-merge-pick-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  margin-right: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.card-links-ai-merge-pick-wrap input {
+  margin: 0;
+}
+
 .card-links-ai-block {
   border-left: 3px solid var(--accent, #4a7cff);
   padding-left: 0.5rem;

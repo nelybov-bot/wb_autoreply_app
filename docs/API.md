@@ -199,6 +199,8 @@
 | POST | `/api/card-links/ozon/{store_id}/link-qty-table` | Связка по таблице количеств (TMS) |
 | POST | `/api/card-links/wb/{store_id}/ai-suggest` | ИИ-подсказки WB |
 | POST | `/api/card-links/ozon/{store_id}/ai-suggest` | ИИ-подсказки Ozon |
+| GET | `/api/card-links/ai-prompt/{marketplace}` | Системный промпт ИИ (`wb` / `ozon`) |
+| PUT | `/api/card-links/ai-prompt/{marketplace}` | Сохранить промпт ИИ |
 
 Query-параметры каталога:
 - WB: `articles`, `q` (поиск), `max_pages` (default 100, max 150), `articles_only` (bool)
