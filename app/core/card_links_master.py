@@ -569,7 +569,121 @@ def master_step_plan(rows: List[dict]) -> Tuple[List[dict], List[dict], dict]:
         "singles": singles,
         "pending": len(rows) - covered - singles,
     }
-    return rows, bundles_out, meta
+    return out
+
+
+def master_merge_bundles(
+    rows: List[dict],
+    bundles: List[dict],
+    bundle_ids: List[str],
+) -> Tuple[List[dict], List[dict], dict]:
+    """Ручное объединение 2+ связок плана в одну (до 29 SKU)."""
+    ids = [str(x).strip() for x in (bundle_ids or []) if str(x).strip()]
+    uniq_ids = list(dict.fromkeys(ids))
+    if len(uniq_ids) < 2:
+        raise ValueError("Выберите минимум 2 связки для объединения")
+
+    by_id = {str(b.get("bundle_id") or ""): b for b in bundles if str(b.get("bundle_id") or "")}
+    selected = [by_id[bid] for bid in uniq_ids if bid in by_id]
+    if len(selected) != len(uniq_ids):
+        missing = [bid for bid in uniq_ids if bid not in by_id]
+        raise ValueError(f"Связки не найдены в плане: {', '.join(missing[:5])}")
+
+    seg = str(selected[0].get("segment") or SEGMENT_HOME)
+
+    def _bundle_subject(b: dict) -> int:
+        items = b.get("items") or []
+        if items:
+            return int(items[0].get("subject_id") or 0)
+        nms = b.get("nm_ids") or []
+        if nms:
+            row = next((r for r in rows if int(r.get("nm_id") or 0) == int(nms[0])), None)
+            if row:
+                return int(row.get("subject_id") or 0)
+        return 0
+
+    want_subj = _bundle_subject(selected[0])
+    if not want_subj:
+        raise ValueError("Не определён subjectID у первой связки")
+
+    for b in selected[1:]:
+        if str(b.get("segment") or "") != seg:
+            raise ValueError("Разные сегменты — объединяйте связки одного типа (косметика/дом/…)")
+        if _bundle_subject(b) != want_subj:
+            raise ValueError(
+                "Разные предметы WB (subjectID) — объединяйте связки одной категории WB"
+            )
+
+    cur = dict(selected[0])
+    for b in selected[1:]:
+        merged = _merge_bundle_dicts(cur, b, seg)
+        if not merged:
+            raise ValueError(
+                f"Нельзя объединить «{cur.get('bundle_id')}» и «{b.get('bundle_id')}»: "
+                f"лимит {MAX_MASTER_BUNDLE} SKU или несовместимые бренд/модель"
+            )
+        cur = merged
+
+    nm_ids = []
+    seen_nm: Set[int] = set()
+    for nid in cur.get("nm_ids") or []:
+        n = int(nid)
+        if n and n not in seen_nm:
+            seen_nm.add(n)
+            nm_ids.append(n)
+    if len(nm_ids) < 2:
+        raise ValueError("После объединения осталось меньше 2 товаров")
+
+    seq_base = max(
+        (int(re.sub(r"\D", "", str(b.get("bundle_id") or "")) or 0) for b in bundles),
+        default=0,
+    )
+    new_id = f"mb-m{seq_base + 1}"
+    while any(str(b.get("bundle_id") or "") == new_id for b in bundles):
+        seq_base += 1
+        new_id = f"mb-m{seq_base + 1}"
+
+    brands = sorted({str(b.get("brand") or "").strip() for b in selected if str(b.get("brand") or "").strip()})
+    cat = str(selected[0].get("category_label") or "")
+    if not cat and selected[0].get("items"):
+        cat = _row_category_label(selected[0]["items"][0], marketplace="wb")
+
+    cur["bundle_id"] = new_id
+    cur["segment"] = seg
+    cur["nm_ids"] = nm_ids
+    cur["item_count"] = len(nm_ids)
+    cur["sort_size"] = len(nm_ids)
+    cur["apply_status"] = "pending"
+    cur["category_label"] = cat
+    cur["brand"] = brands[0] if len(brands) == 1 else " · ".join(brands[:4])
+    cur["items"] = [
+        _row_to_item_dict(r)
+        for r in rows
+        if int(r.get("nm_id") or 0) in seen_nm
+    ]
+    imts = [int(x.get("imt_id") or 0) for x in cur["items"] if int(x.get("imt_id") or 0)]
+    cur["target_imt"] = Counter(imts).most_common(1)[0][0] if imts else int(cur.get("target_imt") or 0)
+
+    remove = set(uniq_ids)
+    new_bundles = [b for b in bundles if str(b.get("bundle_id") or "") not in remove]
+    new_bundles.append(cur)
+    new_bundles.sort(key=lambda b: (-int(b.get("sort_size") or 0), str(b.get("category_label") or "")))
+
+    for r in rows:
+        if str(r.get("bundle_id") or "") in remove:
+            nid = int(r.get("nm_id") or 0)
+            if nid in seen_nm:
+                r["bundle_id"] = new_id
+                r["status"] = "planned"
+
+    meta = {
+        "merged_from": uniq_ids,
+        "new_bundle_id": new_id,
+        "item_count": len(nm_ids),
+        "segment": seg,
+        "category_label": cat,
+    }
+    return rows, new_bundles, meta
 
 
 async def master_apply_bundles(

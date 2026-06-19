@@ -3926,7 +3926,8 @@ def api_card_links_master_status(
     state = db.clm_get_state(store_id)
     coverage = db.clm_coverage(store_id)
     filters = db.clm_filter_options(store_id)
-    return {"ok": True, "state": state, "coverage": coverage, "filters": filters}
+    dense = db.clm_dense_categories(store_id, min_count=3)
+    return {"ok": True, "state": state, "coverage": coverage, "filters": filters, "dense_categories": dense}
 
 
 @app.get("/api/card-links/master/{store_id}/bundles")
@@ -3935,6 +3936,7 @@ def api_card_links_master_bundles(
     segment: str = Query(""),
     brand: str = Query(""),
     category: str = Query(""),
+    min_bundles_in_category: int = Query(0, ge=0, le=100),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=5000),
     db: Database = Depends(get_db),
@@ -3947,9 +3949,11 @@ def api_card_links_master_bundles(
         segment=segment.strip(),
         brand=brand.strip(),
         category=category.strip(),
+        min_bundles_in_category=min_bundles_in_category,
         limit=page_size,
         offset=offset,
     )
+    cat_counts = db.clm_category_bundle_counts(store_id)
     return {
         "ok": True,
         "bundles": bundles,
@@ -3957,6 +3961,7 @@ def api_card_links_master_bundles(
         "page": page,
         "page_size": page_size,
         "page_count": max(1, (total + page_size - 1) // page_size),
+        "category_counts": cat_counts,
     }
 
 
@@ -3966,6 +3971,7 @@ def api_card_links_master_bundle_ids(
     segment: str = Query(""),
     brand: str = Query(""),
     category: str = Query(""),
+    min_bundles_in_category: int = Query(0, ge=0, le=100),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_permission("view_settings")),
 ):
@@ -3975,8 +3981,46 @@ def api_card_links_master_bundle_ids(
         segment=segment.strip(),
         brand=brand.strip(),
         category=category.strip(),
+        min_bundles_in_category=min_bundles_in_category,
     )
     return {"ok": True, "bundle_ids": ids, "total": len(ids)}
+
+
+class CardLinksMasterMergeBody(BaseModel):
+    bundle_ids: list[str]
+
+
+@app.post("/api/card-links/master/{store_id}/merge-bundles")
+def api_card_links_master_merge_bundles(
+    store_id: int,
+    body: CardLinksMasterMergeBody,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    from app.core.card_links_master import master_merge_bundles
+
+    _require_wb_store_for_chats(db, store_id)
+    ids = [str(x).strip() for x in (body.bundle_ids or []) if str(x).strip()]
+    if len(ids) < 2:
+        raise HTTPException(400, "Укажите минимум 2 bundle_id")
+    rows = db.clm_load_items(store_id)
+    if not rows:
+        raise HTTPException(400, "Сначала выполните шаг «Загрузить WB» и «План»")
+    bundles, _ = db.clm_load_bundles(store_id, limit=100000, offset=0)
+    if not bundles:
+        raise HTTPException(400, "Нет плана связок — выполните шаг «План»")
+    try:
+        rows, bundles, meta = master_merge_bundles(rows, bundles, ids)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    db.clm_save_items(store_id, rows)
+    db.clm_save_bundles(store_id, bundles)
+    db.clm_append_log(
+        store_id,
+        f"Объединено {len(meta.get('merged_from') or [])} связок → "
+        f"{meta.get('new_bundle_id')} ({meta.get('item_count')} шт)",
+    )
+    return {"ok": True, **meta, "coverage": db.clm_coverage(store_id)}
 
 
 @app.post("/api/card-links/master/{store_id}/step/{step_name}")

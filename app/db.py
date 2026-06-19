@@ -1841,16 +1841,15 @@ class Database:
                 )
             self._conn.commit()
 
-    def clm_load_bundles(
+    def _clm_bundle_where(
         self,
         store_id: int,
         *,
         segment: str = "",
         brand: str = "",
         category: str = "",
-        limit: int = 100,
-        offset: int = 0,
-    ) -> tuple[list[dict], int]:
+        min_bundles_in_category: int = 0,
+    ) -> tuple[list[str], list]:
         where = ["store_id=?"]
         params: list = [int(store_id)]
         if segment:
@@ -1862,6 +1861,55 @@ class Database:
         if category:
             where.append("category_label=?")
             params.append(category)
+        mc = int(min_bundles_in_category or 0)
+        if mc >= 2:
+            where.append(
+                """category_label IN (
+                    SELECT category_label FROM card_links_master_bundles
+                    WHERE store_id=? GROUP BY category_label HAVING COUNT(*) >= ?
+                )"""
+            )
+            params.extend([int(store_id), mc])
+        return where, params
+
+    def clm_category_bundle_counts(self, store_id: int) -> dict[str, int]:
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                """SELECT category_label, COUNT(*) AS n FROM card_links_master_bundles
+                   WHERE store_id=? AND category_label<>'' GROUP BY category_label""",
+                (int(store_id),),
+            )
+            return {str(r[0]): int(r[1]) for r in cur.fetchall() if r and r[0]}
+
+    def clm_dense_categories(self, store_id: int, *, min_count: int = 3) -> list[dict]:
+        mc = max(2, int(min_count or 3))
+        counts = self.clm_category_bundle_counts(store_id)
+        rows = [
+            {"category_label": k, "bundle_count": v}
+            for k, v in counts.items()
+            if v >= mc
+        ]
+        rows.sort(key=lambda x: (-int(x["bundle_count"]), str(x["category_label"])))
+        return rows
+
+    def clm_load_bundles(
+        self,
+        store_id: int,
+        *,
+        segment: str = "",
+        brand: str = "",
+        category: str = "",
+        min_bundles_in_category: int = 0,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        where, params = self._clm_bundle_where(
+            store_id,
+            segment=segment,
+            brand=brand,
+            category=category,
+            min_bundles_in_category=min_bundles_in_category,
+        )
         w = " AND ".join(where)
         with _DB_LOCK:
             cnt = self._conn.execute(
@@ -1893,18 +1941,15 @@ class Database:
         segment: str = "",
         brand: str = "",
         category: str = "",
+        min_bundles_in_category: int = 0,
     ) -> list[str]:
-        where = ["store_id=?"]
-        params: list = [int(store_id)]
-        if segment:
-            where.append("segment=?")
-            params.append(segment)
-        if brand:
-            where.append("brand=?")
-            params.append(brand)
-        if category:
-            where.append("category_label=?")
-            params.append(category)
+        where, params = self._clm_bundle_where(
+            store_id,
+            segment=segment,
+            brand=brand,
+            category=category,
+            min_bundles_in_category=min_bundles_in_category,
+        )
         w = " AND ".join(where)
         with _DB_LOCK:
             cur = self._conn.execute(

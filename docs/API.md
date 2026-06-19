@@ -202,6 +202,7 @@
 | GET | `/api/card-links/master/{store_id}/status` | Статус мастера связок (шаги, покрытие, фильтры) |
 | GET | `/api/card-links/master/{store_id}/bundles` | План связок (пагинация, фильтры) |
 | GET | `/api/card-links/master/{store_id}/bundle-ids` | ID всех связок плана (для «выбрать все») |
+| POST | `/api/card-links/master/{store_id}/merge-bundles` | Объединить 2+ связок плана в одну |
 | POST | `/api/card-links/master/{store_id}/step/{name}` | Шаг: `load` / `brands` / `segment` / `classify` / `plan` / `apply` → `{ task_id }` |
 | GET | `/api/card-links/ai-prompt/{marketplace}` | Системный промпт ИИ (`wb` / `ozon`) |
 | PUT | `/api/card-links/ai-prompt/{marketplace}` | Сохранить промпт ИИ |

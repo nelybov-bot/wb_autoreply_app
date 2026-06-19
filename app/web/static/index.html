@@ -755,9 +755,17 @@
             <label><span class="toolbar-label">На странице</span>
               <select id="clm-page-size" class="select-md"><option value="100" selected>100</option><option value="200">200</option><option value="0">Все</option></select>
             </label>
+            <label class="clm-filter-dense-wrap"><span class="toolbar-label">
+              <input type="checkbox" id="clm-filter-dense" value="1">
+              Категории с ≥
+            </span>
+              <select id="clm-filter-dense-min" class="select-md"><option value="2">2</option><option value="3" selected>3</option><option value="5">5</option><option value="10">10</option></select>
+              <span class="toolbar-label">связками</span>
+            </label>
             <button type="button" class="btn btn-secondary btn-sm" id="btn-clm-refresh">Обновить список</button>
             <button type="button" class="btn btn-secondary btn-sm" id="btn-clm-select-all">Выбрать все</button>
             <button type="button" class="btn btn-secondary btn-sm" id="btn-clm-clear">Снять</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-clm-merge-selected" disabled title="Выберите 2+ связки одной категории WB">Объединить выбранные</button>
             <button type="button" class="btn btn-primary btn-sm" id="btn-clm-apply-selected">Применить выбранные</button>
           </div>
           <div id="card-links-master-pagination" class="card-links-ai-pagination">
@@ -1496,6 +1504,6 @@
 
   <script src="/static/fx-widgets.js?v=4"></script>
   <script src="/static/app.js?v=67"></script>
-  <script src="/static/card_links_master.js?v=2"></script>
+  <script src="/static/card_links_master.js?v=3"></script>
 </body>
 </html>

@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-06-19 — Мастер: объединение связок + фильтр дробных категорий
+
+- POST `/merge-bundles` — склеить 2+ выбранных связки плана (до 29 SKU, один subject WB)
+- Фильтр «категории с ≥N связками», бейдж «N в кат.», подписи в выпадающем списке категорий
+
+---
+
 ## 2026-06-19 — Fix master plan: category label from first item
 
 - `master_step_plan`: `_row_category_label(chunk[0])` вместо передачи всего списка (AttributeError на шаге Plan)

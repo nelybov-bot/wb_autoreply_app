@@ -4794,6 +4794,20 @@ body.theme-dark .card-links-cand-badge--new {
 .clm-apply-applied { background: #e6f4ea; color: #137333; }
 .clm-apply-skipped { background: #fef7e0; color: #b06000; }
 .clm-apply-failed { background: #fce8e6; color: #c5221f; }
+.clm-cat-badge {
+  font-size: 0.72rem;
+  padding: 0.08rem 0.35rem;
+  border-radius: 4px;
+  background: #e8eaf6;
+  color: #3949ab;
+  margin-left: 0.25rem;
+}
+.clm-filter-dense-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  white-space: nowrap;
+}
 .clm-bundle-items {
   display: flex;
   flex-wrap: wrap;

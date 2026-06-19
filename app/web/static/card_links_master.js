@@ -7,6 +7,7 @@
   let pageSize = 100;
   let pageCount = 1;
   let pollTimer = null;
+  let categoryCounts = {};
 
   function storeId() {
     return Number(document.getElementById('card-links-store')?.value || 0);
@@ -64,11 +65,19 @@
     sel.innerHTML = keepAll ? '<option value="">Все</option>' : '';
     (options || []).forEach((v) => {
       const o = document.createElement('option');
-      o.value = v;
-      o.textContent = v;
+      o.value = typeof v === 'object' ? v.value : v;
+      o.textContent = typeof v === 'object' ? v.label : v;
       sel.appendChild(o);
     });
     if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
+  }
+
+  function denseMinValue() {
+    return Number(document.getElementById('clm-filter-dense-min')?.value || 3);
+  }
+
+  function denseFilterOn() {
+    return Boolean(document.getElementById('clm-filter-dense')?.checked);
   }
 
   function filterParams(includePaging = true) {
@@ -79,6 +88,9 @@
     if (seg) q.set('segment', seg);
     if (cat) q.set('category', cat);
     if (brand) q.set('brand', brand);
+    if (denseFilterOn()) {
+      q.set('min_bundles_in_category', String(denseMinValue()));
+    }
     if (includePaging) {
       const psRaw = Number(document.getElementById('clm-page-size')?.value ?? 100);
       pageSize = psRaw === 0 ? 100000 : psRaw;
@@ -86,6 +98,14 @@
       q.set('page_size', String(pageSize > 5000 ? 5000 : pageSize));
     }
     return q;
+  }
+
+  function updateMergeButton() {
+    const btn = document.getElementById('btn-clm-merge-selected');
+    if (!btn) return;
+    const n = selected.size;
+    btn.disabled = n < 2;
+    btn.textContent = n >= 2 ? `Объединить выбранные (${n})` : 'Объединить выбранные';
   }
 
   async function refreshStatus() {
@@ -97,11 +117,20 @@
     const data = await api(`/api/card-links/master/${sid}/status`);
     const c = data.coverage || {};
     const f = data.filters || {};
-    fillSelect('clm-filter-category', f.categories || []);
+    const dense = data.dense_categories || [];
+    const catOpts = (f.categories || []).map((name) => {
+      const cnt = dense.find((d) => d.category_label === name);
+      return cnt
+        ? { value: name, label: `${name} (${cnt.bundle_count} связок)` }
+        : name;
+    });
+    fillSelect('clm-filter-category', catOpts);
     fillSelect('clm-filter-brand', f.brands || []);
-    setStats(
-      `Всего ${c.total || 0} · в плане ${c.planned_items || 0} · одиночек ${c.singles || 0} · связок ${c.bundles || 0}`,
-    );
+    let stats = `Всего ${c.total || 0} · в плане ${c.planned_items || 0} · одиночек ${c.singles || 0} · связок ${c.bundles || 0}`;
+    if (dense.length) {
+      stats += ` · дробных категорий (≥3): ${dense.length}`;
+    }
+    setStats(stats);
     setLog((data.state && data.state.log) || []);
     return data;
   }
@@ -110,7 +139,10 @@
     const list = document.getElementById('card-links-master-list');
     if (!list) return;
     if (!bundles.length) {
-      list.innerHTML = '<p class="empty-cell empty-cell--muted">Нет связок. Выполните шаги 1–5.</p>';
+      const hint = denseFilterOn()
+        ? 'Нет связок по фильтру «категории с несколькими связками». Снимите фильтр или уменьшите порог.'
+        : 'Нет связок. Выполните шаги 1–5.';
+      list.innerHTML = `<p class="empty-cell empty-cell--muted">${esc(hint)}</p>`;
       return;
     }
     list.innerHTML = bundles.map((b) => {
@@ -119,6 +151,11 @@
       const st = String(b.apply_status || '');
       const stBadge = st && st !== 'pending'
         ? `<span class="clm-apply-badge clm-apply-${esc(st)}">${esc(st === 'applied' ? 'применено' : st === 'skipped' ? 'пропуск' : 'ошибка')}</span>`
+        : '';
+      const cat = String(b.category_label || '');
+      const catN = Number(categoryCounts[cat] || 0);
+      const catBadge = catN >= 2
+        ? `<span class="clm-cat-badge" title="Связок в этой категории WB">${catN} в кат.</span>`
         : '';
       const items = (b.items || []).slice(0, 12);
       const cards = items.map((it) => `
@@ -130,7 +167,8 @@
       return `<div class="clm-bundle card-links-ai-block">
         <label class="clm-bundle-head">
           <input type="checkbox" class="clm-bundle-check" data-bundle-id="${esc(bid)}"${checked}>
-          <strong>${esc(b.category_label || 'Категория')}</strong>
+          <strong>${esc(cat || 'Категория')}</strong>
+          ${catBadge}
           <span class="clm-bundle-meta">${esc(b.brand || '')} · ${esc(b.subtype_label || '')} · ${b.item_count || 0} шт</span>
           ${b.target_imt ? `<span class="clm-bundle-imt">imtID ${b.target_imt}</span>` : ''}
           ${stBadge}
@@ -144,14 +182,17 @@
         if (!id) return;
         if (el.checked) selected.add(id);
         else selected.delete(id);
+        updateMergeButton();
       });
     });
+    updateMergeButton();
   }
 
   async function loadBundles() {
     const sid = storeId();
     if (!sid) return;
     const data = await api(`/api/card-links/master/${sid}/bundles?${filterParams(true).toString()}`);
+    categoryCounts = data.category_counts || {};
     pageCount = data.page_count || 1;
     page = data.page || 1;
     const label = document.getElementById('clm-page-label');
@@ -161,6 +202,37 @@
         : `Стр. ${page}/${pageCount} · ${data.total || 0} связок`;
     }
     renderBundles(data.bundles || []);
+  }
+
+  async function mergeSelected() {
+    const sid = storeId();
+    if (!sid) {
+      alert('Выберите магазин WB');
+      return;
+    }
+    const ids = [...selected];
+    if (ids.length < 2) {
+      alert('Выберите минимум 2 связки');
+      return;
+    }
+    if (!confirm(`Объединить ${ids.length} связок в одну (макс. 29 SKU)?\n\nОдин subject WB, совместимый сегмент/бренд.`)) {
+      return;
+    }
+    try {
+      setStats('Объединение…');
+      const res = await api(`/api/card-links/master/${sid}/merge-bundles`, {
+        method: 'POST',
+        body: JSON.stringify({ bundle_ids: ids }),
+      });
+      selected.clear();
+      selected.add(String(res.new_bundle_id || ''));
+      await refreshStatus();
+      await loadBundles();
+      alert(`Готово: ${res.merged_from?.length || ids.length} связок → ${res.new_bundle_id} (${res.item_count} шт)`);
+    } catch (e) {
+      alert(e.message || String(e));
+      await loadBundles();
+    }
   }
 
   function applyResultMessage(result) {
@@ -235,6 +307,7 @@
         }
         if (step === 'apply') {
           selected.clear();
+          updateMergeButton();
           const summary = applyResultMessage(result);
           if (summary) alert(summary);
         }
@@ -268,12 +341,16 @@
     });
     document.getElementById('btn-clm-clear')?.addEventListener('click', () => {
       selected.clear();
+      updateMergeButton();
       void loadBundles();
+    });
+    document.getElementById('btn-clm-merge-selected')?.addEventListener('click', () => {
+      void mergeSelected();
     });
     document.getElementById('btn-clm-apply-selected')?.addEventListener('click', () => {
       void runStep('apply');
     });
-    ['clm-filter-segment', 'clm-filter-category', 'clm-filter-brand', 'clm-page-size'].forEach((id) => {
+    ['clm-filter-segment', 'clm-filter-category', 'clm-filter-brand', 'clm-page-size', 'clm-filter-dense', 'clm-filter-dense-min'].forEach((id) => {
       document.getElementById(id)?.addEventListener('change', () => {
         page = 1;
         void loadBundles();
@@ -291,6 +368,7 @@
         void loadBundles();
       }
     });
+    updateMergeButton();
   }
 
   window.cardLinksMasterOnShow = function () {
