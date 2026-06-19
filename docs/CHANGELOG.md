@@ -5,6 +5,31 @@
 
 ---
 
+## 2026-06-18 — Точечная развязка перед перепривязкой
+
+### Backend
+- `wb_merge_cards`: `disconnect_first` (по умолчанию true) — развязка только moving nm_id перед merge
+- `wb_disconnect_cards`: батчи по 30 nm_id
+- `ozon_link_by_model`: `unlink_first` — развязка offer с другой моделью перед link
+
+### API / Frontend
+- `POST .../merge`: `disconnect_first`; `POST .../link`: `unlink_first`
+- Подтверждение: «Сначала развязать N карточек, затем объединить…»
+
+---
+
+## 2026-06-18 — Покрытие bin-pack и метрики uncovered
+
+### Backend
+- `brand_general`, `balm_unspecified`, `cream_unspecified` в bin-pack (не только косметика с точным use)
+- `bin_covered` — только артикулы из реальных предложений (не «уже ок»)
+- meta: `already_optimal`, `uncovered_unlinked`, `needs_attention`
+
+### Frontend
+- Статус ИИ: «в предложениях» / «уже в норме» / «без связки» вместо одного «без предложения: 5300»
+
+---
+
 ## 2026-06-18 — Bin-pack по всему пулу (CARD_LINKING_REVIEW шаг 1)
 
 ### Backend (`card_links.py`)

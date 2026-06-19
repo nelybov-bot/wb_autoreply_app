@@ -1946,7 +1946,20 @@ _CATEGORY_USE_HINTS: List[Tuple[str, str]] = [
 ]
 
 _USE_BUCKET_MERGEABLE = frozenset(
-    {"lips", "lipstick", "hands", "feet", "body", "face", "hair_rinse", "hair", "hair_gel"},
+    {
+        "lips",
+        "lipstick",
+        "hands",
+        "feet",
+        "body",
+        "face",
+        "hair_rinse",
+        "hair",
+        "hair_gel",
+        "balm_unspecified",
+        "cream_unspecified",
+        "brand_general",
+    },
 )
 
 # Склейка по бренду + назначению в subjectID (не по линейке, не по imtID)
@@ -1969,6 +1982,9 @@ _USE_BUCKET_LABEL_RU: Dict[str, str] = {
     "hair_rinse": "для волос (ополаскиватель)",
     "hair": "для волос",
     "hair_gel": "гель для волос",
+    "balm_unspecified": "бальзам",
+    "cream_unspecified": "крем",
+    "brand_general": "один бренд",
 }
 
 
@@ -2108,20 +2124,24 @@ def _split_items_to_bundles(items: List[dict], max_size: int = MAX_LINK_ITEMS) -
 
 
 def _bin_pack_pool_group_key(row: dict, *, marketplace: str) -> str:
-    """Ключ корзины: subjectID + назначение + бренд."""
+    """Ключ корзины: subjectID + (назначение|brand_general) + бренд."""
     mp = (marketplace or "").strip().lower()
-    use = _row_use_bucket(row)
-    if not use or use not in _USE_BUCKET_MERGEABLE:
-        return ""
     brand = _row_brand_key(row)
     if not brand:
         return ""
     cat = _use_merge_category_key({}, row, marketplace=mp)
-    merge_use = _use_bucket_merge_group(use)
-    scope = _use_merge_scope_key(row, merge_use, marketplace=mp)
-    if not scope:
+    if not cat:
         return ""
-    return f"{cat}\x00{merge_use}\x00{scope}"
+    use = _row_use_bucket(row)
+    if use and use not in ("brand_general",) and use in _USE_BUCKET_MERGEABLE:
+        merge_use = _use_bucket_merge_group(use)
+        scope = _use_merge_scope_key(row, merge_use, marketplace=mp)
+        if scope:
+            return f"{cat}\x00{merge_use}\x00{scope}"
+    scope = _use_merge_scope_key(row, "brand_general", marketplace=mp)
+    if scope:
+        return f"{cat}\x00brand_general\x00{scope}"
+    return ""
 
 
 def _pack_atoms_from_items(items: List[dict], *, marketplace: str) -> List[List[dict]]:
@@ -2236,7 +2256,7 @@ def deterministic_bin_pack_from_pool(
 ) -> Tuple[List[dict], set[str], int]:
     """
     Первичная детерминированная упаковка всего пула по (subject, бренд, назначение).
-    Фасовки 1/2/3 — атомы; сироты без соседа-кандидата ИИ не остаются.
+    Фасовки 1/2/3 — атомы. skipped_ok — уже в оптимальной связке (без предложения).
     """
     mp = (marketplace or "").strip().lower()
     by_key: Dict[str, List[dict]] = {}
@@ -2250,7 +2270,7 @@ def deterministic_bin_pack_from_pool(
         by_key.setdefault(key, []).append(r)
 
     out: List[dict] = []
-    used: set[str] = set()
+    skipped_ok: set[str] = set()
     seq = start_seq
 
     for bucket_key, raw_items in by_key.items():
@@ -2286,7 +2306,7 @@ def deterministic_bin_pack_from_pool(
             if not _chunk_needs_link_action(chunk, tgt_imt, tgt_model, marketplace=mp):
                 for a in (_row_article(x, mp) for x in chunk):
                     if a:
-                        used.add(a)
+                        skipped_ok.add(a)
                 continue
             if len(chunk) < 2 and not tgt_imt and not tgt_model:
                 continue
@@ -2326,11 +2346,8 @@ def deterministic_bin_pack_from_pool(
                     cl, chunk, groups, marketplace=mp, seq=seq, source="bin_pack",
                 ),
             )
-            for a in (_row_article(x, mp) for x in chunk):
-                if a:
-                    used.add(a)
 
-    return out, used, seq
+    return out, skipped_ok, seq
 
 
 def _compact_product_for_ai(row: dict, marketplace: str) -> dict:
@@ -3283,13 +3300,14 @@ async def ai_suggest_card_links(
 
     out: List[dict] = []
     bin_covered: set[str] = set()
+    bin_skipped_ok: set[str] = set()
     seq = 0
 
     if deterministic_packs:
         if progress_cb:
             progress_cb(0, 1, "Упаковка по бренду и назначению…")
         pack_rows = pool if include_linked else [r for r in pool if not r.get("linked")]
-        bin_out, bin_covered, seq = deterministic_bin_pack_from_pool(
+        bin_out, bin_skipped_ok, seq = deterministic_bin_pack_from_pool(
             pack_rows,
             groups,
             marketplace=mp,
@@ -3297,8 +3315,16 @@ async def ai_suggest_card_links(
             start_seq=seq,
         )
         out.extend(bin_out)
+        for c in bin_out:
+            for it in c.get("items") or []:
+                art = _row_article(it, mp)
+                if art:
+                    bin_covered.add(art)
         meta["pack_clusters"] = len(bin_out)
         meta["bin_pack_clusters"] = len(bin_out)
+        meta["already_optimal"] = len(bin_skipped_ok)
+    else:
+        meta["already_optimal"] = 0
 
     ai_pool = list(pool)
     if len(ai_pool) >= 2:
@@ -3446,7 +3472,19 @@ async def ai_suggest_card_links(
             if art:
                 covered_arts.add(art)
     meta["products_in_bundles"] = len(covered_arts)
+    pool_by_art = {_row_article(r, mp): r for r in pool if _row_article(r, mp)}
+    uncovered_unlinked = 0
+    for art, row in pool_by_art.items():
+        if art in covered_arts:
+            continue
+        if not row.get("linked"):
+            uncovered_unlinked += 1
+    meta["uncovered_unlinked"] = uncovered_unlinked
     meta["uncovered"] = max(0, meta["analyzed"] - len(covered_arts))
+    meta["needs_attention"] = max(
+        0,
+        meta["uncovered"] - int(meta.get("already_optimal") or 0),
+    )
     return out, bundles, meta
 
 
@@ -4009,6 +4047,7 @@ async def wb_merge_cards(
     target_imt: int,
     nm_ids: List[int],
     catalog_rows: Optional[List[dict]] = None,
+    disconnect_first: bool = True,
 ) -> dict:
     target = int(target_imt)
     uniq: List[int] = []
@@ -4036,18 +4075,58 @@ async def wb_merge_cards(
     validate_wb_merge_rows(rows, target_imt=target, nm_ids=to_move)
     validate_wb_link_capacity(rows, target_imt=target, nm_ids=to_move)
     client = WbContentClient(api_key)
+    disconnected = 0
+    if disconnect_first:
+        to_disconnect = [
+            nid for nid in to_move
+            if by_nm.get(nid, {}).get("linked")
+        ]
+        if to_disconnect:
+            disc = await wb_disconnect_cards(api_key, nm_ids=to_disconnect)
+            disconnected = int(disc.get("processed") or 0)
+            if disconnected:
+                await asyncio.sleep(2.0)
     last: Optional[dict] = None
     for i in range(0, len(to_move), 30):
         batch = to_move[i : i + 30]
         last = await client.merge_cards(target_imt=target, nm_ids=batch)
         if i + 30 < len(to_move):
             await asyncio.sleep(2.0)
-    return last or {}
+    return {
+        "merge": last or {},
+        "disconnected": disconnected,
+        "moved": len(to_move),
+    }
 
 
 async def wb_disconnect_cards(api_key: str, *, nm_ids: List[int]) -> dict:
+    uniq: List[int] = []
+    seen: set[int] = set()
+    for x in nm_ids:
+        nid = int(x)
+        if nid in seen:
+            continue
+        seen.add(nid)
+        uniq.append(nid)
+    if not uniq:
+        raise ValueError("nm_ids пуст")
     client = WbContentClient(api_key)
-    return await client.disconnect_cards(nm_ids)
+    results: List[dict] = []
+    errors: List[dict] = []
+    for i in range(0, len(uniq), 30):
+        batch = uniq[i : i + 30]
+        part = await client.disconnect_cards(batch)
+        results.extend(part.get("results") or [])
+        errors.extend(part.get("errors") or [])
+        if i + 30 < len(uniq):
+            await asyncio.sleep(2.0)
+    return {
+        "ok": not errors,
+        "processed": len(results),
+        "failed": len(errors),
+        "results": results,
+        "errors": errors,
+    }
 
 
 def _unique_ozon_model_name(*, offer_id: str, title: str = "") -> str:
@@ -4112,6 +4191,7 @@ async def ozon_link_by_model(
     catalog_rows: Optional[List[dict]] = None,
     qty_pack: bool = False,
     validate_only: bool = False,
+    unlink_first: bool = True,
 ) -> dict:
     model = (model_name or "").strip()
     if not model:
@@ -4145,6 +4225,30 @@ async def ozon_link_by_model(
                     qty_attr_id = _ozon_qty_pack_attr_id(attr_names)
     if validate_only:
         return {"ok": True, "validated": True}
+    unlinked_n = 0
+    if unlink_first and catalog_rows:
+        target = model.strip()
+        oid_set = {str(x).strip() for x in oids if str(x).strip()}
+        to_unlink: List[str] = []
+        titles: Dict[str, str] = {}
+        for r in catalog_rows:
+            oid = str(r.get("offer_id") or "").strip()
+            if oid not in oid_set or not r.get("linked"):
+                continue
+            cur = str(r.get("model_name") or "").strip()
+            if cur and cur == target:
+                continue
+            to_unlink.append(oid)
+            titles[oid] = str(r.get("title") or "")
+        if to_unlink:
+            await ozon_unlink_cards(
+                client_id,
+                api_key,
+                offer_ids=to_unlink,
+                titles_by_offer=titles,
+            )
+            unlinked_n = len(to_unlink)
+            await asyncio.sleep(2.0)
     items = []
     for idx, oid in enumerate(oids[:100]):
         attrs: List[dict] = [
@@ -4161,4 +4265,7 @@ async def ozon_link_by_model(
                 }
             )
         items.append({"offer_id": oid, "attributes": attrs})
-    return await client.update_product_attributes(items)
+    link_result = await client.update_product_attributes(items)
+    if unlinked_n:
+        return {"link": link_result, "unlinked": unlinked_n}
+    return link_result

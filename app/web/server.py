@@ -3347,12 +3347,14 @@ class CardLinksWbMergeBody(BaseModel):
     target_imt: int
     nm_ids: list[int]
     catalog_rows: list[dict] = []
+    disconnect_first: bool = True
 
 
 class CardLinksOzonLinkBody(BaseModel):
     offer_ids: list[str]
     model_name: str
     catalog_rows: Optional[list[dict]] = None
+    unlink_first: bool = True
 
 
 class CardLinksWbDisconnectBody(BaseModel):
@@ -3571,6 +3573,7 @@ async def api_card_links_wb_merge(
             target_imt=int(body.target_imt),
             nm_ids=nm_ids,
             catalog_rows=body.catalog_rows or None,
+            disconnect_first=body.disconnect_first,
         )
     except HttpStatusError as e:
         raise _card_links_http_error("wb", e) from e
@@ -3587,7 +3590,14 @@ async def api_card_links_wb_merge(
         )
     except Exception:
         pass
-    return {"ok": True, "result": result, "message": "Запрос на объединение отправлен в WB. Склейка может занять до нескольких часов."}
+    disconnected = int((result or {}).get("disconnected") or 0)
+    msg = "Запрос на объединение отправлен в WB. Склейка может занять до нескольких часов."
+    if disconnected:
+        msg = (
+            f"Развязано {disconnected} карточек, затем отправлено объединение в imtID {int(body.target_imt)}. "
+            "Склейка может занять до нескольких часов."
+        )
+    return {"ok": True, "result": result, "message": msg}
 
 
 @app.post("/api/card-links/ozon/{store_id}/link")
@@ -3611,6 +3621,7 @@ async def api_card_links_ozon_link(
             offer_ids=offer_ids,
             model_name=model_name,
             catalog_rows=body.catalog_rows or None,
+            unlink_first=body.unlink_first,
         )
     except HttpStatusError as e:
         raise _card_links_http_error("ozon", e) from e
@@ -3627,13 +3638,20 @@ async def api_card_links_ozon_link(
         )
     except Exception:
         pass
+    unlinked = int((result or {}).get("unlinked") or 0)
+    msg = (
+        "«Название модели» обновлено. Склейка на Ozon может занять до 24 часов. "
+        "У вариантов должны отличаться размер, цвет или другие вариативные характеристики."
+    )
+    if unlinked:
+        msg = (
+            f"Развязано {unlinked} товаров, затем обновлено «Название модели». "
+            "Склейка на Ozon может занять до 24 часов."
+        )
     return {
         "ok": True,
         "result": result,
-        "message": (
-            "«Название модели» обновлено. Склейка на Ozon может занять до 24 часов. "
-            "У вариантов должны отличаться размер, цвет или другие вариативные характеристики."
-        ),
+        "message": msg,
     }
 
 

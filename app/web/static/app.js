@@ -2399,12 +2399,14 @@
     });
     const meta = data.ai_meta || {};
     const trunc = meta.truncated ? ' · ⚠ не весь каталог (увеличьте лимит)' : '';
-    const uncov = meta.uncovered ? ` · без предложения: ${meta.uncovered}` : '';
+    const inBundles = meta.products_in_bundles != null ? ` · в предложениях: ${meta.products_in_bundles}` : '';
+    const ok = meta.already_optimal ? ` · уже в норме: ${meta.already_optimal}` : '';
+    const unlinked = meta.uncovered_unlinked ? ` · без связки: ${meta.uncovered_unlinked}` : '';
     const batchHint = meta.batches_skipped
       ? ` · категорий ${meta.batches_run || '?'}/${meta.batches_planned || '?'} (лимит)`
       : (meta.batches_run ? ` · категорий ${meta.batches_run}${meta.categories_total ? ` из ${meta.categories_total}` : ''}` : '');
     setCardLinksStatus(
-      `ИИ: ${data.count || 0} итоговых связок · проверено ${meta.analyzed || '?'}/${meta.total_catalog || '?'} товаров${trunc}${uncov}${batchHint}`,
+      `ИИ: ${data.count || 0} итоговых связок · проверено ${meta.analyzed || '?'}/${meta.total_catalog || '?'} товаров${inBundles}${ok}${unlinked}${trunc}${batchHint}`,
     );
     renderCardLinksTable();
   }
@@ -3016,6 +3018,24 @@
     return articles.filter((art) => {
       const it = findCatalogByArticle(art, mp);
       return String(it?.model_name || '').trim() !== model;
+    });
+  }
+
+  function cardLinksNmIdsForDisconnect(nmIds, targetImt, mp) {
+    if (mp !== 'wb') return [];
+    const tgt = String(targetImt || '');
+    return nmIds.filter((nmId) => {
+      const it = findCatalogByNmId(nmId, mp);
+      return it?.linked && cardLinksItemGroupId(it, mp) !== tgt;
+    });
+  }
+
+  function cardLinksOffersForUnlink(offerIds, modelName, mp) {
+    if (mp !== 'ozon') return [];
+    const model = String(modelName || '').trim();
+    return offerIds.filter((oid) => {
+      const it = findCatalogByArticle(oid, mp);
+      return it?.linked && String(it?.model_name || '').trim() !== model;
     });
   }
 
@@ -5146,13 +5166,17 @@
         ? cardLinksValidateLinkSize(nmIdsRaw.length, 0)
         : cardLinksValidateMergeCapacity(nmIds, targetImt, null, mp);
       if (sizeErr) return fail(sizeErr);
+      const toDisconnect = cardLinksNmIdsForDisconnect(nmIds, targetImt, mp);
+      const disconnectPrefix = toDisconnect.length
+        ? `Сначала развязать ${toDisconnect.length} карточек, затем `
+        : '';
       const confirmMsg = kind === 'relocate'
-        ? `Переместить ${nmIds.length} карточку в imtID ${targetImt}?`
+        ? `${disconnectPrefix}переместить ${nmIds.length} карточку в imtID ${targetImt}?`
         : (kind === 'merge_groups'
-          ? `Объединить ${nmIds.length} карточек в imtID ${targetImt}?`
+          ? `${disconnectPrefix}объединить ${nmIds.length} карточек в imtID ${targetImt}?`
           : (kind === 'attach_batch'
-            ? `Добавить ${nmIds.length} карточек в imtID ${targetImt}?`
-            : `Объединить ${nmIds.length} карточек WB в imtID ${targetImt}?`));
+            ? `${disconnectPrefix}добавить ${nmIds.length} карточек в imtID ${targetImt}?`
+            : `${disconnectPrefix}объединить ${nmIds.length} карточек WB в imtID ${targetImt}?`));
       const catalogRows = checked.length
         ? buildMergeCatalogRows(checked, { candidate, targetImt })
         : buildMergeCatalogRows([], { candidate, targetImt });
@@ -5161,12 +5185,17 @@
       if (aiBundleId) removeAiBundleFromUi(aiBundleId);
       if (!bulk && !opts.lightweight) {
         _cardLinksActionBusy = true;
-        setPanelLoading('card-links-loading', true, 'Отправка в WB…');
+        setPanelLoading('card-links-loading', true, toDisconnect.length ? 'Развязка и объединение в WB…' : 'Отправка в WB…');
       }
       try {
         await api(`/card-links/wb/${storeId}/merge`, {
           method: 'POST',
-          body: JSON.stringify({ target_imt: targetImt, nm_ids: nmIds, catalog_rows: catalogRows }),
+          body: JSON.stringify({
+            target_imt: targetImt,
+            nm_ids: nmIds,
+            catalog_rows: catalogRows,
+            disconnect_first: opts.disconnect_first !== false,
+          }),
         });
         if (!opts.skipToast) {
           toast(aiBundleId ? 'Связка отправлена в WB' : 'Запрос на объединение отправлен', 'success');
@@ -5220,22 +5249,31 @@
     const ozSizeErr = cardLinksValidateMergeCapacity(articlesToApply, null, modelName, mp);
     if (ozSizeErr) return fail(ozSizeErr);
     const ozCatalogRows = buildMergeCatalogRows(checked, { candidate, modelName });
+    const toUnlink = cardLinksOffersForUnlink(articlesToApply, modelName, mp);
+    const unlinkPrefix = toUnlink.length
+      ? `Сначала развязать ${toUnlink.length} товаров, затем `
+      : '';
     const ozConfirm = kind === 'relocate'
-      ? `Переместить ${articlesToApply.length} товар в модель «${modelName}»?`
+      ? `${unlinkPrefix}переместить ${articlesToApply.length} товар в модель «${modelName}»?`
       : (kind === 'merge_groups'
-        ? `Объединить ${articlesToApply.length} товаров с моделью «${modelName}»?`
-        : `Связать ${articlesToApply.length} товаров Ozon с моделью «${modelName}»?`);
+        ? `${unlinkPrefix}объединить ${articlesToApply.length} товаров с моделью «${modelName}»?`
+        : `${unlinkPrefix}связать ${articlesToApply.length} товаров Ozon с моделью «${modelName}»?`);
     if (!opts.skipConfirm && !confirm(ozConfirm)) return finish({ ok: false, cancelled: true });
     const aiBundleId = resolveAiBundleId(opts, candidate);
     if (aiBundleId) removeAiBundleFromUi(aiBundleId);
     if (!bulk && !opts.lightweight) {
       _cardLinksActionBusy = true;
-      setPanelLoading('card-links-loading', true, 'Обновление «Названия модели» на Ozon…');
+      setPanelLoading('card-links-loading', true, toUnlink.length ? 'Развязка и обновление модели на Ozon…' : 'Обновление «Названия модели» на Ozon…');
     }
     try {
       await api(`/card-links/ozon/${storeId}/link`, {
         method: 'POST',
-        body: JSON.stringify({ offer_ids: articlesToApply, model_name: modelName, catalog_rows: ozCatalogRows }),
+        body: JSON.stringify({
+          offer_ids: articlesToApply,
+          model_name: modelName,
+          catalog_rows: ozCatalogRows,
+          unlink_first: opts.unlink_first !== false,
+        }),
       });
       if (!opts.skipToast) {
         toast(aiBundleId ? 'Связка отправлена в Ozon' : 'Название модели обновлено', 'success');
