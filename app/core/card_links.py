@@ -1789,10 +1789,6 @@ _STRICT_BRAND_RE = re.compile(
     re.I,
 )
 
-_USE_MERGE_BRAND_SCOPE = frozenset({"lips", "lipstick", "lip_care", "hair_gel"})
-# Склейка по бренду (не imtID / не линейке): губы, блески, гели для волос.
-
-
 def _strict_brands_in_text(text: str) -> set[str]:
     return {m.group(1).lower() for m in _STRICT_BRAND_RE.finditer(text or "")}
 
@@ -1848,21 +1844,9 @@ def _items_same_brand_key(items: List[dict]) -> bool:
     return len(fallback) <= 1
 
 
-def _product_line_key(row: dict, *, marketplace: str = "wb") -> str:
-    """Линейка товара (бренд + название без фасовки). Объём в г/мл не используем для разделения."""
-    brand = _row_brand_key(row)
-    base = _title_base_key(row.get("title") or "")
-    base = re.sub(r"\b\d+[\.,]?\d*\s*(мл|ml|л|l|г|g)\b", " ", base, flags=re.I)
-    base = re.sub(r"\s+", " ", base).strip()
-    if brand:
-        return f"{brand}\x00{base}"
-    return base
-
-
 def _use_merge_scope_key(row: dict, merge_use: str, *, marketplace: str) -> str:
-    if merge_use in _USE_MERGE_BRAND_SCOPE:
-        return _row_brand_key(row) or _product_line_key(row, marketplace=marketplace)
-    return _product_line_key(row, marketplace=marketplace)
+    """Ключ склейки = только бренд (все SKU бренда с тем же назначением вместе)."""
+    return _row_brand_key(row)
 
 
 def _row_brand_extended(row: dict) -> str:
@@ -1964,6 +1948,9 @@ _CATEGORY_USE_HINTS: List[Tuple[str, str]] = [
 _USE_BUCKET_MERGEABLE = frozenset(
     {"lips", "lipstick", "hands", "feet", "body", "face", "hair_rinse", "hair", "hair_gel"},
 )
+
+# Склейка по бренду + назначению в subjectID (не по линейке, не по imtID)
+_USE_MERGE_BRAND_SCOPE = _USE_BUCKET_MERGEABLE
 
 # lips + lipstick (гигиеническая помада + цветная помада) — одна склейка в subjectID
 _USE_BUCKET_MERGE_GROUP: Dict[str, str] = {
@@ -2121,11 +2108,11 @@ def default_ai_system_prompt(marketplace: str) -> str:
         "Затем в пределах одного subjectID и ОДНОГО БРЕНДА — одна связка до лимита. "
         "НЕЛЬЗЯ смешивать в одной связке: Labello, Balea, ISANA, lavera, alverde, alviana, "
         "benecos, Cosnature, Denkmit, Sante, SUNDANCE — даже если категория одна. "
-        "Внутри одного бренда: все оттенки/вкусы вместе (lavera 03+04); "
-        "все гели для волос одного бренда вместе (Balea MEN Wet Look + Ultra Strong); "
-        "фасовки 1/2/3/5 шт одной линейки — всегда вместе. "
-        "Гели для душа: разные линейки ISANA (Urea ≠ Cream & Care) — разные связки. "
-        "«Гигиеническая помада» = бальзам для губ. Не делить по объёму (мл/г) — только по бренду и линейке.\n"
+        "Внутри одного бренда и назначения — ВСЁ вместе до лимита "
+        "(все оттенки lavera; все гели Balea MEN; все гели ISANA для душа; "
+        "фасовки 1/2/3/5 шт — всегда вместе). "
+        "НЕ делить по линейкам, вкусам, оттенкам, объёму (мл/г). "
+        "«Гигиеническая помада» = бальзам для губ.\n"
         "4) Один бренд на связку; бренд из колонки и названия; "
         "IKEA не смешивать с ноунейм; ноунейм не смешивать с именованными брендами.\n"
         "5) IKEA и аксессуары-хранение (сумки, косметички, контейнеры) — можно разные SKU одного класса в одной связке.\n"
