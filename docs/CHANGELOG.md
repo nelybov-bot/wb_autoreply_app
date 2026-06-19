@@ -5,7 +5,14 @@
 
 ---
 
-## 2026-06-18 — lavera: все оттенки в одной связке
+## 2026-06-18 — hair_gel: гели для волос по бренду
+
+### Backend
+- `hair_gel` в классификаторе («Гель для волос»)
+- `_USE_MERGE_BRAND_SCOPE` + UI consolidate: Balea MEN Wet Look + Ultra Strong в одной связке
+- Гели для душа (ISANA Urea / Cream) — по линейке, не весь бренд
+
+---
 
 ### Backend
 - `_bundle_bucket_key`: для губ/блесков — один UI-блок на бренд (не на imtID)

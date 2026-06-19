@@ -1789,7 +1789,8 @@ _STRICT_BRAND_RE = re.compile(
     re.I,
 )
 
-_USE_MERGE_BRAND_SCOPE = frozenset({"lips", "lipstick", "lip_care"})
+_USE_MERGE_BRAND_SCOPE = frozenset({"lips", "lipstick", "lip_care", "hair_gel"})
+# Склейка по бренду (не imtID / не линейке): губы, блески, гели для волос.
 
 
 def _strict_brands_in_text(text: str) -> set[str]:
@@ -1904,6 +1905,11 @@ _PRODUCT_USE_PATTERNS: List[Tuple[str, str]] = [
         r"кондиционер\s+для\s+волос|бальзам\s+для\s+волос|"
         r"haarspülung|conditioner",
     ),
+    (
+        "hair_gel",
+        r"гель\s+для\s+волос|гель[\s\-–—]*стайлинг|"
+        r"haargel|hair\s+gel|hair\s+styling\s+gel",
+    ),
     ("hair", r"шампунь|маска\s+для\s+волос|спрей\s+для\s+волос|shampoo|trockenshampoo"),
     (
         "lips",
@@ -1932,6 +1938,7 @@ _PRODUCT_USE_PATTERNS: List[Tuple[str, str]] = [
         "body",
         r"бальзам\s+для\s+тела|крем\s+для\s+тела|"
         r"лосьон\s+для\s+тела|молочко\s+для\s+тела|"
+        r"гель\s+для\s+душа|duschgel|duschcreme|"
         r"body\s+creams?|body\s+lotion|körpercreme|körperlotion",
     ),
     (
@@ -1944,17 +1951,18 @@ _PRODUCT_USE_PATTERNS: List[Tuple[str, str]] = [
 
 _CATEGORY_USE_HINTS: List[Tuple[str, str]] = [
     ("hair_rinse", r"ополаскиватель|кондиционер|бальзам.*волос"),
+    ("hair_gel", r"гель.*волос|haargel"),
     ("hair", r"шампун"),
     ("lips", r"гигиеническ.*помад|бальзам.*губ|губн|lip\s*balm"),
     ("lipstick", r"блеск|губная\s+помад|помада\s+для|жидкая\s+помад|lipstick"),
     ("hands", r"для\s+рук|handcreme"),
     ("feet", r"для\s+ног"),
-    ("body", r"для\s+тела|körper"),
+    ("body", r"для\s+тела|душ|duschgel|duschcreme|körper"),
     ("face", r"для\s+лица|gesicht"),
 ]
 
 _USE_BUCKET_MERGEABLE = frozenset(
-    {"lips", "lipstick", "hands", "feet", "body", "face", "hair_rinse", "hair"},
+    {"lips", "lipstick", "hands", "feet", "body", "face", "hair_rinse", "hair", "hair_gel"},
 )
 
 # lips + lipstick (гигиеническая помада + цветная помада) — одна склейка в subjectID
@@ -1973,6 +1981,7 @@ _USE_BUCKET_LABEL_RU: Dict[str, str] = {
     "face": "для лица",
     "hair_rinse": "для волос (ополаскиватель)",
     "hair": "для волос",
+    "hair_gel": "гель для волос",
 }
 
 
@@ -2113,8 +2122,9 @@ def default_ai_system_prompt(marketplace: str) -> str:
         "НЕЛЬЗЯ смешивать в одной связке: Labello, Balea, ISANA, lavera, alverde, alviana, "
         "benecos, Cosnature, Denkmit, Sante, SUNDANCE — даже если категория одна. "
         "Внутри одного бренда: все оттенки/вкусы вместе (lavera 03+04); "
+        "все гели для волос одного бренда вместе (Balea MEN Wet Look + Ultra Strong); "
         "фасовки 1/2/3/5 шт одной линейки — всегда вместе. "
-        "Гели/кремы для душа: разные линейки ISANA (Urea ≠ Cream & Care) — разные связки. "
+        "Гели для душа: разные линейки ISANA (Urea ≠ Cream & Care) — разные связки. "
         "«Гигиеническая помада» = бальзам для губ. Не делить по объёму (мл/г) — только по бренду и линейке.\n"
         "4) Один бренд на связку; бренд из колонки и названия; "
         "IKEA не смешивать с ноунейм; ноунейм не смешивать с именованными брендами.\n"
@@ -2639,7 +2649,8 @@ def consolidate_ai_bundle_previews(
                         brand = _row_brand_extended(c_items[0])
                     merge_scope = _bundle_bucket_use_scope(c)
                     if brand and merge_scope in _USE_MERGE_BRAND_SCOPE:
-                        bl = f"{brand} · {c.get('category_label') or 'для губ'}"[:120]
+                        zone = _USE_BUCKET_LABEL_RU.get(merge_scope) or c.get("category_label") or ""
+                        bl = f"{brand} · {zone}"[:120]
                     elif brand:
                         bl = f"{brand} · imtID {tgt_id}" if tgt_id else f"{brand} · {tgt_model or f'Связка {seq}'}"
                     else:
