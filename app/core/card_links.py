@@ -1840,27 +1840,36 @@ def _filter_rows_for_ai_scope(rows: List[dict], scope: str, marketplace: str) ->
 
 def _ai_system_prompt(marketplace: str) -> str:
     mp = (marketplace or "").strip().lower()
+    n = MAX_LINK_ITEMS
     common = (
-        "ГЛАВНОЕ: варианты одного товара (1 шт / 2 шт / 3 шт / набор / комплект) — ВСЕГДА в одной связке, "
-        "даже если сейчас разные imtID. Никогда не дроби фасовки по разным связкам.\n"
+        "ГЛАВНОЕ (приоритет №1): варианты ОДНОГО товара (1 шт / 2 шт / 3 шт / набор / комплект) "
+        "— ВСЕГДА в одной связке, даже если сейчас в разных imtID. Никогда не дроби фасовки по разным связкам.\n"
+        "\n"
         "ЖЁСТКИЕ ПРАВИЛА:\n"
-        "1) Одна категория на связку — не смешивать разные subject_id/category.\n"
-        f"2) Не более {MAX_LINK_ITEMS} товаров в одной связке; если больше — несколько связок (30+20).\n"
-        "3) Не смешивать разные продукты ради заполнения (лопатка ≠ шампунь, сухой шампунь ≠ обычный).\n"
+        "1) Одна категория (subject_id) на связку — не смешивать разные категории.\n"
+        f"2) Не более {n} карточек в одной связке. Если товаров в категории больше {n} — делить на несколько связок "
+        f"(пример: 42 → {n} + 12). Набивай каждую связку по максимуму до {n}: не делай связки по 1–3 карточки, "
+        f"если в ту же связку можно добавить другие логически близкие товары этой категории "
+        f"(15 карточек в одной связке — нормально, если они подходят по смыслу).\n"
+        "3) Не смешивать разные продукты ради заполнения (лопатка ≠ шампунь, крем для ног ≠ крем для рук, "
+        "сухой шампунь ≠ обычный). Разные линейки/ароматы/оттенки — разные продукты, но фасовки 1/2/3 каждой линейки — вместе.\n"
         "4) Бренд из колонки и названия; IKEA не смешивать с ноунейм; ноунейм не смешивать с именованными брендами.\n"
         "5) IKEA и аксессуары-хранение (сумки, косметички, контейнеры) — можно разные SKU одного класса в одной связке.\n"
         "6) Запчасти телефонов — группировать по модели устройства (iPhone 14, Samsung A54…).\n"
-        "7) Заполняй связки по максимуму внутри логической группы.\n"
-        "8) Анализируй ВСЕ товары, включая уже связанные — предлагай relocate/merge если текущая связка неоптимальна.\n"
+        "7) Заполняй связки по максимуму внутри логической группы (до лимита).\n"
+        "8) Анализируй ВСЕ товары, включая уже связанные — предлагай relocate/merge, если текущая связка неоптимальна.\n"
         "9) При сомнении — не объединяй.\n"
-        "10) Один именованный бренд + одна категория можно объединить в одну связку (оттенки/линейки), "
-        f"но только если фасовки 1/2/3 каждого SKU уже не разъединены.\n"
+        f"10) НЕ объединяй весь бренд категории в одну связку (300 кремов Balea — это много связок, не одна). "
+        f"В одной связке: фасовки 1/2/3 одной линейки + при необходимости другие близкие SKU той же категории, "
+        f"но суммарно не более {n} карточек и без смешения несовместимых продуктов (п.3).\n"
+        f"11) Итог: «красивые» связки — логично укомплектованные, до {n} карточек; товары категории распределены "
+        "между несколькими связками без лишних мелких обрывков по 1–2 SKU.\n"
     )
     if mp == "wb":
         return (
             "Ты эксперт по связкам карточек Wildberries (WB). Связка = общий imtID.\n"
             + common
-            + "Верни ТОЛЬКО JSON-массив без markdown. Элемент:\n"
+            + "Верни ТОЛЬКО JSON-массив без markdown. Каждый элемент — одна связка (до 30 article_ids). Формат элемента:\n"
             '{"cluster_id":"c1","kind":"new_link"|"attach"|"relocate"|"merge_groups",'
             '"article_ids":["vendor_code",...],"target_group_id":null|123456789,'
             '"suggested_model_name":null,"normalized_product_name":"...","detected_brand":"...",'
@@ -1969,18 +1978,6 @@ def _validate_ai_cluster_items(items: List[dict], marketplace: str) -> Optional[
     if not _items_brand_buckets_compatible(items):
         return "несовместимые бренды (IKEA/ноунейм)"
     return None
-
-
-def _brand_category_merge_key(items: List[dict], *, marketplace: str) -> str:
-    if not items:
-        return ""
-    if _brand_bucket(items[0]) == "noname":
-        return ""
-    brand = _row_brand_extended(items[0]).strip().lower()
-    if not brand or len(brand) < 2:
-        return ""
-    cat = _row_category_key(items[0], marketplace)
-    return f"{cat}|{brand}"
 
 
 def _pick_merge_target_group(
@@ -2108,104 +2105,6 @@ def _merge_ai_suggestions_by_pack_key(
     out = [c for c in suggestions if str(c.get("candidate_id") or "") not in consumed]
     out.extend(merged_out)
     return out, pack_merge_n
-
-
-def _merge_ai_suggestions_by_brand_category(
-    suggestions: List[dict],
-    groups: List[dict],
-    *,
-    marketplace: str,
-    start_seq: int = 0,
-) -> Tuple[List[dict], int]:
-    """
-    Сливает pack/AI-предложения одного бренда в одной категории в одну связку.
-    Решает «раскидало по 3 товара»: Balea/ARTDECO — одна связка на категорию.
-    """
-    mp = (marketplace or "").strip().lower()
-    if not suggestions:
-        return suggestions, 0
-
-    by_key: Dict[str, List[dict]] = {}
-    passthrough: List[dict] = []
-    for c in suggestions:
-        items = c.get("items") or []
-        key = _brand_category_merge_key(items, marketplace=mp)
-        if not key:
-            passthrough.append(c)
-            continue
-        by_key.setdefault(key, []).append(c)
-
-    consumed: set[str] = set()
-    merged_out: List[dict] = []
-    seq = start_seq
-    merge_groups_n = 0
-
-    for _key, cluster in by_key.items():
-        if len(cluster) < 2:
-            continue
-        all_items = _merge_candidate_items(cluster, marketplace=mp)
-        if len(all_items) < 2:
-            continue
-        brand_display = _row_brand_extended(all_items[0])
-        cat_label = _candidate_label(all_items, marketplace=mp)
-        chunks = _split_items_to_bundles(all_items)
-        tgt_imt, tgt_model = _pick_merge_target_group(all_items, cluster, marketplace=mp)
-        added_for_cluster = False
-
-        for chunk in chunks:
-            if len(chunk) < 2:
-                continue
-            err = _validate_ai_cluster_items(chunk, mp)
-            if err:
-                continue
-            seq += 1
-            if mp == "wb" and tgt_imt:
-                cl: Dict[str, Any] = {
-                    "kind": "merge_groups",
-                    "target_group_id": tgt_imt,
-                    "reason": f"Один бренд в категории · {brand_display} · {cat_label}",
-                    "confidence": "high",
-                    "normalized_product_name": brand_display,
-                    "detected_brand": brand_display,
-                    "suggested_model_name": f"{brand_display} · {cat_label}"[:120],
-                }
-            elif mp == "ozon" and tgt_model:
-                cl = {
-                    "kind": "merge_groups",
-                    "target_group_id": tgt_model,
-                    "suggested_model_name": tgt_model,
-                    "reason": f"Один бренд в категории · {brand_display} · {cat_label}",
-                    "confidence": "high",
-                    "normalized_product_name": brand_display,
-                    "detected_brand": brand_display,
-                }
-            else:
-                cl = {
-                    "kind": "new_link",
-                    "reason": f"Новая связка · {brand_display} · {cat_label}",
-                    "confidence": "high",
-                    "normalized_product_name": brand_display,
-                    "detected_brand": brand_display,
-                    "suggested_model_name": f"{brand_display} · {cat_label}"[:120],
-                }
-            merged_out.append(
-                _build_ai_candidate_entry(cl, chunk, groups, marketplace=mp, seq=seq, source="brand_merge")
-            )
-            added_for_cluster = True
-
-        if added_for_cluster:
-            for c in cluster:
-                cid = str(c.get("candidate_id") or "")
-                if cid:
-                    consumed.add(cid)
-            merge_groups_n += 1
-
-    if not consumed:
-        return suggestions, 0
-
-    out = [c for c in suggestions if str(c.get("candidate_id") or "") not in consumed]
-    out.extend(merged_out)
-    return out, merge_groups_n
 
 
 def _bundle_bucket_key(c: dict, *, marketplace: str) -> str:
@@ -2369,46 +2268,56 @@ def consolidate_ai_bundle_previews(
         items_list = list(final_by_art.values())
         if not items_list:
             continue
-        moving_items = [x for x in items_list if x.get("moving")]
-        moving_n = len(moving_items)
-        stay_n = len(items_list) - moving_n
-        if is_new:
-            summary = f"Новая связка · {len(items_list)} товаров"
-        else:
-            parts = []
-            if moving_n:
-                parts.append(f"+{moving_n} в связку")
-            if stay_n:
-                parts.append(f"{stay_n} уже там")
-            parts.append(f"итого {len(items_list)} шт.")
-            summary = " · ".join(parts)
 
-        apply_c = _merged_apply_candidate(b, moving_items, op_map, marketplace=mp)
-        if not apply_c or not moving_items:
-            continue
-        if len(items_list) > MAX_LINK_ITEMS:
-            summary += f" · ⚠ больше {MAX_LINK_ITEMS} — примените вручную или разделите"
+        item_chunks = _split_items_to_bundles(items_list) if len(items_list) > MAX_LINK_ITEMS else [items_list]
+        for part_idx, chunk_items in enumerate(item_chunks):
+            if len(chunk_items) < 2:
+                continue
+            chunk_moving = [x for x in chunk_items if x.get("moving")]
+            chunk_moving_n = len(chunk_moving)
+            chunk_stay_n = len(chunk_items) - chunk_moving_n
+            if is_new:
+                summary = f"Новая связка · {len(chunk_items)} товаров"
+            else:
+                parts = []
+                if chunk_moving_n:
+                    parts.append(f"+{chunk_moving_n} в связку")
+                if chunk_stay_n:
+                    parts.append(f"{chunk_stay_n} уже там")
+                parts.append(f"итого {len(chunk_items)} шт.")
+                summary = " · ".join(parts)
+            if len(item_chunks) > 1:
+                summary += f" · часть {part_idx + 1}/{len(item_chunks)}"
 
-        out.append(
-            {
-                "bundle_id": b["bundle_id"],
-                "bundle_label": b["bundle_label"],
-                "category_label": b["category_label"],
-                "is_new_bundle": is_new,
-                "target_group_id": b["target_group_id"],
-                "target_model_name": b["target_model_name"],
-                "suggested_target_imt": b.get("suggested_target_imt"),
-                "suggested_model_name": b.get("suggested_model_name"),
-                "item_count": len(items_list),
-                "moving_count": moving_n,
-                "stay_count": stay_n,
-                "summary": summary,
-                "items": items_list,
-                "operations": b["operations"],
-                "apply_candidate": apply_c,
-                "ai": True,
-            }
-        )
+            chunk_apply = _merged_apply_candidate(b, chunk_moving, op_map, marketplace=mp)
+            if not chunk_apply or not chunk_moving:
+                continue
+
+            bundle_id = b["bundle_id"] if len(item_chunks) == 1 else f"{b['bundle_id']}-p{part_idx + 1}"
+            bundle_label = b["bundle_label"]
+            if len(item_chunks) > 1:
+                bundle_label = f"{bundle_label} ({part_idx + 1}/{len(item_chunks)})"[:120]
+
+            out.append(
+                {
+                    "bundle_id": bundle_id,
+                    "bundle_label": bundle_label,
+                    "category_label": b["category_label"],
+                    "is_new_bundle": is_new,
+                    "target_group_id": b["target_group_id"],
+                    "target_model_name": b["target_model_name"],
+                    "suggested_target_imt": b.get("suggested_target_imt"),
+                    "suggested_model_name": b.get("suggested_model_name"),
+                    "item_count": len(chunk_items),
+                    "moving_count": chunk_moving_n,
+                    "stay_count": chunk_stay_n,
+                    "summary": summary,
+                    "items": chunk_items,
+                    "operations": b["operations"],
+                    "apply_candidate": chunk_apply,
+                    "ai": True,
+                }
+            )
 
     out.sort(
         key=lambda x: (
@@ -2748,10 +2657,6 @@ async def ai_suggest_card_links(
         out, groups, marketplace=mp, start_seq=seq,
     )
     meta["pack_merges"] = pack_merge_n
-    out, brand_merge_n = _merge_ai_suggestions_by_brand_category(
-        out, groups, marketplace=mp, start_seq=seq,
-    )
-    meta["brand_merges"] = brand_merge_n
     bundles = consolidate_ai_bundle_previews(out, groups, marketplace=mp)
     meta["bundles"] = len(bundles)
     covered_arts = set()

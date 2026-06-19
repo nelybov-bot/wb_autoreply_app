@@ -2395,9 +2395,8 @@
     const batchHint = meta.batches_skipped
       ? ` · категорий ${meta.batches_run || '?'}/${meta.batches_planned || '?'} (лимит)`
       : (meta.batches_run ? ` · категорий ${meta.batches_run}${meta.categories_total ? ` из ${meta.categories_total}` : ''}` : '');
-    const brandHint = meta.brand_merges ? ` · объединено по бренду: ${meta.brand_merges}` : '';
     setCardLinksStatus(
-      `ИИ: ${data.count || 0} итоговых связок · проверено ${meta.analyzed || '?'}/${meta.total_catalog || '?'} товаров${trunc}${uncov}${batchHint}${brandHint}`,
+      `ИИ: ${data.count || 0} итоговых связок · проверено ${meta.analyzed || '?'}/${meta.total_catalog || '?'} товаров${trunc}${uncov}${batchHint}`,
     );
     renderCardLinksTable();
   }
