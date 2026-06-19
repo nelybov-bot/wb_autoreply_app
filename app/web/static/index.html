@@ -858,6 +858,10 @@
         </div>
         <div id="card-links-catalog-filter" class="card-links-catalog-filter" hidden>
           <input type="search" id="card-links-catalog-search" class="input-grow" placeholder="Поиск по названию или артикулу в каталоге" autocomplete="off">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-catalog-select-all" title="Отметить все карточки на экране (с учётом фильтров)">Выбрать все на экране</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-catalog-select-unlinked" title="Только без связки на экране">Выбрать одиночных</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-catalog-clear-checks">Снять</button>
+          <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-auto-link-unlinked" title="Сгруппировать все одиночные по категории WB и связать пачками до 30">Автосвязка одиночных</button>
         </div>
         <div class="table-scroll" id="card-links-table-wrap">
           <table class="items-table card-links-table card-links--catalog" id="card-links-table">
@@ -1503,7 +1507,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=67"></script>
+  <script src="/static/app.js?v=68"></script>
   <script src="/static/card_links_master.js?v=3"></script>
 </body>
 </html>

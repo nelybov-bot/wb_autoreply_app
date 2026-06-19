@@ -2782,6 +2782,149 @@
     return cardLinksSortCatalogRows(out);
   }
 
+  function cardLinksItemRowKey(it, mp) {
+    if (!it) return '';
+    return mp === 'wb' ? `nm:${it.nm_id || ''}` : `off:${it.offer_id || ''}`;
+  }
+
+  function cardLinksCatalogFilteredItems(unlinkedOnly = false) {
+    const mp = cardLinksMarketplace();
+    let items = cardLinksCatalogFilterRows(cardLinksData.items || []);
+    if (unlinkedOnly) items = items.filter((it) => !it.linked);
+    return items;
+  }
+
+  function cardLinksSelectAllCatalogVisible({ unlinkedOnly = false } = {}) {
+    if (cardLinksView !== 'catalog') return;
+    const mp = cardLinksMarketplace();
+    const keys = new Set(
+      cardLinksCatalogFilteredItems(unlinkedOnly).map((it) => cardLinksItemRowKey(it, mp)),
+    );
+    document.querySelectorAll('.card-links-check').forEach((el) => {
+      const key = el.getAttribute('data-row-key') || '';
+      el.checked = keys.has(key);
+    });
+    renderCardLinksMergePickers();
+    syncCardLinksMergeBarVisibility();
+    syncCardLinksCheckAllState();
+    syncCardLinksBundleChecks();
+    const n = document.querySelectorAll('.card-links-check:checked').length;
+    toast(n ? `Отмечено ${n} карточек` : 'Нет карточек для выбора', n ? 'info' : 'error');
+  }
+
+  function cardLinksClearCatalogChecks() {
+    document.querySelectorAll('.card-links-check').forEach((el) => { el.checked = false; });
+    document.querySelectorAll('.card-links-bundle-check').forEach((el) => {
+      el.checked = false;
+      el.indeterminate = false;
+    });
+    renderCardLinksMergePickers();
+    syncCardLinksMergeBarVisibility();
+    syncCardLinksCheckAllState();
+  }
+
+  function cardLinksBuildAutoLinkBatches() {
+    const mp = cardLinksMarketplace();
+    const items = cardLinksCatalogFilteredItems(true);
+    const byCat = new Map();
+    for (const it of items) {
+      const k = cardLinkCategoryKey(it, mp);
+      if (!byCat.has(k)) byCat.set(k, { label: cardLinkItemCategory(it, mp) || k, items: [] });
+      byCat.get(k).items.push(it);
+    }
+    const batches = [];
+    for (const { label, items: group } of byCat.values()) {
+      for (let i = 0; i < group.length; i += MAX_LINK_ITEMS) {
+        const chunk = group.slice(i, i + MAX_LINK_ITEMS);
+        if (chunk.length >= 2) {
+          batches.push({ category_label: label, items: chunk });
+        }
+      }
+    }
+    return batches;
+  }
+
+  function cardLinksCandidateFromCatalogItems(items) {
+    const first = items[0] || {};
+    return {
+      kind: 'new_link',
+      candidate_id: `catalog-auto-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      items: items.map((it) => ({ ...it })),
+      suggested_target_imt: Number(first.imt_id || 0),
+    };
+  }
+
+  async function runCardLinksAutoLinkUnlinked() {
+    if (_cardLinksActionBusy) return;
+    if (cardLinksView !== 'catalog') {
+      toast('Перейдите на вкладку «Каталог»', 'error');
+      return;
+    }
+    const batches = cardLinksBuildAutoLinkBatches();
+    if (!batches.length) {
+      toast('Нет одиночных для автосвязки — нужно ≥2 товара без связки в одной категории WB', 'error');
+      return;
+    }
+    const totalItems = batches.reduce((s, b) => s + b.items.length, 0);
+    const catPreview = batches.slice(0, 5).map((b) => `${b.category_label}: ${b.items.length} шт.`).join('\n');
+    const pauseSec = Math.ceil(CARD_LINKS_ACTION_COOLDOWN_MS / 1000);
+    const more = batches.length > 5 ? `\n… и ещё ${batches.length - 5} связок` : '';
+    if (!confirm(
+      `Автосвязка одиночных:\n`
+      + `• ${batches.length} операций, ${totalItems} товаров\n`
+      + `• По категории WB, до ${MAX_LINK_ITEMS} в связке\n`
+      + `• Пауза ~${pauseSec} с между запросами\n\n`
+      + `${catPreview}${more}\n\nПродолжить?`,
+    )) return;
+
+    _cardLinksActionBusy = true;
+    setPanelLoading('card-links-loading', true, 'Автосвязка…');
+    let ok = 0;
+    let fail = 0;
+    let stopped = false;
+    let lastErr = '';
+    try {
+      for (let i = 0; i < batches.length; i++) {
+        if (stopped) break;
+        const batch = batches[i];
+        setCardLinksStatus(`Автосвязка ${i + 1}/${batches.length}: ${batch.category_label} (${batch.items.length} шт.)`);
+        const cand = cardLinksCandidateFromCatalogItems(batch.items);
+        const res = await mergeSelectedCardLinks({
+          candidate: cand,
+          targetImt: cand.suggested_target_imt,
+          bulk: true,
+          skipConfirm: true,
+          skipReload: true,
+          skipToast: true,
+          returnResult: true,
+          lightweight: true,
+        });
+        if (res?.ok) ok += 1;
+        else {
+          fail += 1;
+          if (res?.error) lastErr = res.error;
+          if (res?.rateLimited) stopped = true;
+        }
+        if (i < batches.length - 1 && !stopped) {
+          await new Promise((r) => setTimeout(r, CARD_LINKS_ACTION_COOLDOWN_MS));
+        }
+      }
+      if (ok > 0) cardLinksStartCooldown();
+      const errTail = lastErr ? ` (${lastErr})` : '';
+      toast(
+        stopped && fail
+          ? `Связано ${ok} из ${batches.length}, остановлено (лимит WB).${errTail}`
+          : `Связано ${ok} из ${batches.length}${fail ? `, ошибок: ${fail}` : ''}${errTail}`,
+        ok > 0 ? 'success' : 'error',
+      );
+      if (ok > 0) cardLinksAfterMergeHint();
+    } finally {
+      setPanelLoading('card-links-loading', false);
+      _cardLinksActionBusy = false;
+      cardLinksClearCatalogChecks();
+    }
+  }
+
   function syncCardLinksCatalogFilterBar() {
     const bar = document.getElementById('card-links-catalog-filter');
     if (!bar) return;
@@ -4606,7 +4749,7 @@
         <li><strong>Загрузите каталог</strong> — дальше работа только вручную, без автоперезагрузки.</li>
         <li><strong>Фильтр:</strong> бренд → категория → «Только без связки». Скрывайте ненужные категории (запчасти и т.п.).</li>
         <li><strong>Читайте названия</strong> в каталоге: одна категория ≠ одна связка. Делите по смыслу названия.</li>
-        <li><strong>Каталог:</strong> отметьте товары (или галочку у всей связки) → «Связать». После операции нажмите «Обновить».</li>
+        <li><strong>Каталог:</strong> «Выбрать все на экране» / «Автосвязка одиночных» — пачки до ${MAX_LINK_ITEMS} по категории WB → «Обновить».</li>
         <li><strong>ИИ</strong> — вкладка «ИИ»: анализ названий и текущих связок, правка предложений, пакетное применение.</li>
         <li><strong>Мелкие связки (2 шт.)</strong> — вкладка «Перепроверка» → «Запустить перепроверку».</li>
       </ol>
@@ -5569,6 +5712,18 @@
     document.getElementById('card-links-catalog-search')?.addEventListener('input', (e) => {
       _cardLinksCatalogSearch = String(e.target.value || '');
       renderCardLinksTable();
+    });
+    document.getElementById('btn-card-links-catalog-select-all')?.addEventListener('click', () => {
+      cardLinksSelectAllCatalogVisible({ unlinkedOnly: false });
+    });
+    document.getElementById('btn-card-links-catalog-select-unlinked')?.addEventListener('click', () => {
+      cardLinksSelectAllCatalogVisible({ unlinkedOnly: true });
+    });
+    document.getElementById('btn-card-links-catalog-clear-checks')?.addEventListener('click', () => {
+      cardLinksClearCatalogChecks();
+    });
+    document.getElementById('btn-card-links-auto-link-unlinked')?.addEventListener('click', () => {
+      void runCardLinksAutoLinkUnlinked();
     });
     const bindWorkFilter = (id, handler) => {
       document.getElementById(id)?.addEventListener('change', handler);
