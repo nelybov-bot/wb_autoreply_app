@@ -4,7 +4,7 @@
 
 ## Активная ветка
 
-- Локально: склейка по бренду (Balea ≠ Labello), fix блесков lavera
+- Локально: жёсткий список брендов + fix consolidate (Balea≠Labello)
 
 ---
 

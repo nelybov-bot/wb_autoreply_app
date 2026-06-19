@@ -5,7 +5,15 @@
 
 ---
 
-## 2026-06-18 — Склейка по бренду (Balea ≠ Labello)
+## 2026-06-18 — Жёсткий список брендов + fix UI consolidate
+
+### Backend
+- `_STRICT_SEPARATE_BRANDS` (Labello, Balea, ISANA, lavera, …) — детект в названии
+- `_bundle_bucket_key` с брендом — UI не склеивает «для губ» из разных брендов
+- ISANA гели: склейка по линейке, не весь бренд; объём мл/г не влияет
+- Заголовок связки: «Balea · для губ…» вместо «Нет бренда»
+
+---
 
 ### Backend
 - use-merge: subjectID + назначение + **бренд** (не смешивать Labello и Balea)

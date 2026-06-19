@@ -1758,20 +1758,6 @@ def _build_ai_category_batch_jobs(
     return jobs
 
 
-def _row_brand_extended(row: dict) -> str:
-    b = str(row.get("brand") or "").strip()
-    if b and not _NO_NAME_BRAND_RE.search(b):
-        return b
-    key = _row_brand_key(row)
-    if not key:
-        return ""
-    title = str(row.get("title") or "")
-    m = re.search(re.escape(key), title, re.I)
-    if m:
-        return m.group(0)
-    return key
-
-
 _TITLE_BRAND_STOP = frozenset(
     {
         "гигиеническая", "гигиенический", "гигиеническую", "помада", "помаду", "помады",
@@ -1789,11 +1775,48 @@ _TITLE_BRAND_EXTRACT_PATTERNS = [
 ]
 
 
+_STRICT_SEPARATE_BRANDS = frozenset(
+    {
+        "labello", "balea", "isana", "lavera", "alverde", "alviana",
+        "benecos", "cosnature", "denkmit", "sante", "sundance",
+    },
+)
+
+_STRICT_BRAND_RE = re.compile(
+    r"\b("
+    + "|".join(sorted(map(re.escape, _STRICT_SEPARATE_BRANDS), key=len, reverse=True))
+    + r")\b",
+    re.I,
+)
+
+_USE_MERGE_BRAND_SCOPE = frozenset({"lips", "lipstick", "lip_care"})
+
+
+def _strict_brands_in_text(text: str) -> set[str]:
+    return {m.group(1).lower() for m in _STRICT_BRAND_RE.finditer(text or "")}
+
+
+def _strict_brands_in_row(row: dict) -> set[str]:
+    parts = [str(row.get("brand") or ""), str(row.get("title") or "")]
+    found: set[str] = set()
+    for p in parts:
+        found |= _strict_brands_in_text(p)
+    return found
+
+
 def _row_brand_key(row: dict) -> str:
     b = str(row.get("brand") or "").strip()
     if b and not _NO_NAME_BRAND_RE.search(b):
-        return b.lower()
+        bk = b.lower()
+        if bk in _STRICT_SEPARATE_BRANDS:
+            return bk
     title = str(row.get("title") or "")
+    found = _strict_brands_in_text(f"{b} {title}")
+    if len(found) == 1:
+        return next(iter(found))
+    if found:
+        for m in _STRICT_BRAND_RE.finditer(title):
+            return m.group(1).lower()
     for pat in _TITLE_BRAND_EXTRACT_PATTERNS:
         m = pat.search(title)
         if m:
@@ -1804,9 +1827,55 @@ def _row_brand_key(row: dict) -> str:
 
 
 def _items_same_brand_key(items: List[dict]) -> bool:
-    keys = {_row_brand_key(x) for x in items}
-    keys.discard("")
-    return len(keys) <= 1
+    strict: set[str] = set()
+    fallback: set[str] = set()
+    for x in items:
+        sb = _strict_brands_in_row(x)
+        if len(sb) > 1:
+            return False
+        strict |= sb
+        fk = _row_brand_key(x)
+        if fk and fk not in _STRICT_SEPARATE_BRANDS:
+            fallback.add(fk)
+    if len(strict) > 1:
+        return False
+    if strict and fallback and not fallback <= strict:
+        return False
+    if len(strict) == 1:
+        return True
+    fallback.discard("")
+    return len(fallback) <= 1
+
+
+def _product_line_key(row: dict, *, marketplace: str = "wb") -> str:
+    """Линейка товара (бренд + название без фасовки). Объём в г/мл не используем для разделения."""
+    brand = _row_brand_key(row)
+    base = _title_base_key(row.get("title") or "")
+    base = re.sub(r"\b\d+[\.,]?\d*\s*(мл|ml|л|l|г|g)\b", " ", base, flags=re.I)
+    base = re.sub(r"\s+", " ", base).strip()
+    if brand:
+        return f"{brand}\x00{base}"
+    return base
+
+
+def _use_merge_scope_key(row: dict, merge_use: str, *, marketplace: str) -> str:
+    if merge_use in _USE_MERGE_BRAND_SCOPE:
+        return _row_brand_key(row) or _product_line_key(row, marketplace=marketplace)
+    return _product_line_key(row, marketplace=marketplace)
+
+
+def _row_brand_extended(row: dict) -> str:
+    b = str(row.get("brand") or "").strip()
+    if b and not _NO_NAME_BRAND_RE.search(b):
+        return b
+    key = _row_brand_key(row)
+    if not key:
+        return ""
+    title = str(row.get("title") or "")
+    m = re.search(re.escape(key), title, re.I)
+    if m:
+        return m.group(0)
+    return key
 
 
 def _brand_bucket(row: dict) -> str:
@@ -2040,13 +2109,14 @@ def default_ai_system_prompt(marketplace: str) -> str:
         f"если в ту же связку можно добавить другие логически близкие товары этой категории "
         f"(15 карточек в одной связке — нормально, если они подходят по смыслу).\n"
         "3) Сначала делить по НАЗНАЧЕНИЮ — разное назначение НИКОГДА вместе. "
-        "Затем в пределах одного subjectID и ОДНОГО БРЕНДА — одна связка до лимита "
-        "(все оттенки/вкусы Balea вместе; все оттенки lavera Liquid Pure вместе; "
-        "фасовки 1/2/3/5 шт одной линейки — всегда вместе). "
-        "ЗАПРЕТ: Balea + Labello + ISANA в одной связке — разные бренды всегда раздельно. "
-        "«Гигиеническая помада» = бальзам для губ. "
-        "ЗАПРЕТЫ по назначению: губы ≠ руки ≠ волосы ≠ тело; крем для лица ≠ для рук.\n"
-        "4) Бренд из колонки и названия (Balea, Labello, lavera…); один бренд на связку; "
+        "Затем в пределах одного subjectID и ОДНОГО БРЕНДА — одна связка до лимита. "
+        "НЕЛЬЗЯ смешивать в одной связке: Labello, Balea, ISANA, lavera, alverde, alviana, "
+        "benecos, Cosnature, Denkmit, Sante, SUNDANCE — даже если категория одна. "
+        "Внутри одного бренда: все оттенки/вкусы вместе (lavera 03+04); "
+        "фасовки 1/2/3/5 шт одной линейки — всегда вместе. "
+        "Гели/кремы для душа: разные линейки ISANA (Urea ≠ Cream & Care) — разные связки. "
+        "«Гигиеническая помада» = бальзам для губ. Не делить по объёму (мл/г) — только по бренду и линейке.\n"
+        "4) Один бренд на связку; бренд из колонки и названия; "
         "IKEA не смешивать с ноунейм; ноунейм не смешивать с именованными брендами.\n"
         "5) IKEA и аксессуары-хранение (сумки, косметички, контейнеры) — можно разные SKU одного класса в одной связке.\n"
         "6) Запчасти телефонов — группировать по модели устройства (iPhone 14, Samsung A54…).\n"
@@ -2179,7 +2249,7 @@ def _validate_ai_cluster_items(items: List[dict], marketplace: str) -> Optional[
     if not _items_brand_buckets_compatible(items):
         return "несовместимые бренды (IKEA/ноунейм)"
     if not _items_same_brand_key(items):
-        return "разные бренды (Balea ≠ Labello и т.п.)"
+        return "разные бренды (Labello/Balea/ISANA/… — не смешивать)"
     if not _items_product_use_compatible(items):
         return "разное назначение (губы/помады/руки/волосы/тело/лицо)"
     return None
@@ -2360,7 +2430,11 @@ def _merge_ai_suggestions_by_use_bucket(
             continue
         cat = _use_merge_category_key(c, items[0], marketplace=mp)
         merge_use = _use_bucket_merge_group(use)
-        by_key.setdefault(f"{cat}\x00{merge_use}\x00{brand}", []).append(c)
+        scope = _use_merge_scope_key(items[0], merge_use, marketplace=mp)
+        if not scope:
+            passthrough.append(c)
+            continue
+        by_key.setdefault(f"{cat}\x00{merge_use}\x00{scope}", []).append(c)
 
     consumed: set[str] = set()
     merged_out: List[dict] = []
@@ -2370,8 +2444,9 @@ def _merge_ai_suggestions_by_use_bucket(
     for bucket_key, cluster in by_key.items():
         if len(cluster) < 2:
             continue
-        use = bucket_key.split("\x00", 1)[-1]
-        use_label = _USE_BUCKET_LABEL_RU.get(use, use)
+        use = bucket_key.split("\x00")[-1]
+        merge_use = bucket_key.split("\x00")[1] if "\x00" in bucket_key else use
+        use_label = _USE_BUCKET_LABEL_RU.get(merge_use, merge_use)
         all_items: List[dict] = []
         seen: set[str] = set()
         for c in cluster:
@@ -2433,11 +2508,16 @@ def _bundle_bucket_key(c: dict, *, marketplace: str) -> str:
     mp = (marketplace or "").strip().lower()
     cat = _candidate_category_key(c, marketplace=mp)
     kind = str(c.get("kind") or "new_link")
+    items = c.get("items") or []
+    brand = _row_brand_key(items[0]) if items else ""
+    if not brand:
+        brand = str(c.get("detected_brand") or "").strip().lower()
     if kind == "new_link":
+        if brand:
+            return f"new:{cat}:{brand}"
         label = str(
             c.get("suggested_model_name")
             or c.get("normalized_product_name")
-            or c.get("detected_brand")
             or "",
         ).strip().lower()
         if label:
@@ -2450,6 +2530,8 @@ def _bundle_bucket_key(c: dict, *, marketplace: str) -> str:
         or c.get("target_group_label")
         or "",
     ).strip()
+    if brand:
+        return f"tgt:{cat}:{brand}:{tgt}"
     return f"tgt:{cat}:{tgt}"
 
 
@@ -2518,12 +2600,19 @@ def consolidate_ai_bundle_previews(
             ).strip()
             if mp == "wb":
                 if is_new:
-                    bl = str(
-                        c.get("suggested_model_name")
-                        or c.get("normalized_product_name")
-                        or c.get("category_label")
-                        or f"Новая связка {seq}",
-                    ).strip()
+                    brand = _row_brand_extended((c.get("items") or [{}])[0])
+                    if not brand:
+                        brand = str(c.get("detected_brand") or "").strip()
+                    bl = (
+                        f"{brand} · {c.get('normalized_product_name') or 'новая связка'}"[:120]
+                        if brand
+                        else str(
+                            c.get("suggested_model_name")
+                            or c.get("normalized_product_name")
+                            or c.get("category_label")
+                            or f"Новая связка {seq}",
+                        ).strip()
+                    )
                 else:
                     brand = str(c.get("detected_brand") or "").strip()
                     if brand:
@@ -2589,6 +2678,8 @@ def consolidate_ai_bundle_previews(
 
         items_list = list(final_by_art.values())
         if not items_list:
+            continue
+        if not _items_same_brand_key(items_list):
             continue
 
         item_chunks = _split_items_to_bundles(items_list) if len(items_list) > MAX_LINK_ITEMS else [items_list]
