@@ -5,7 +5,14 @@
 
 ---
 
-## 2026-06-18 — Жёсткий список брендов + fix UI consolidate
+## 2026-06-18 — lavera: все оттенки в одной связке
+
+### Backend
+- `_bundle_bucket_key`: для губ/блесков — один UI-блок на бренд (не на imtID)
+- lavera 03 + 04 → 6 товаров в одной связке; Balea отдельно
+- apply: target imtID выбирается по числу карточек в группе
+
+---
 
 ### Backend
 - `_STRICT_SEPARATE_BRANDS` (Labello, Balea, ISANA, lavera, …) — детект в названии

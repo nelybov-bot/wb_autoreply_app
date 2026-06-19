@@ -2504,6 +2504,14 @@ def _merge_ai_suggestions_by_use_bucket(
     return out, use_merge_n
 
 
+def _bundle_bucket_use_scope(c: dict) -> str:
+    items = c.get("items") or []
+    if not items:
+        return ""
+    use = _row_use_bucket(items[0])
+    return _use_bucket_merge_group(use) if use else ""
+
+
 def _bundle_bucket_key(c: dict, *, marketplace: str) -> str:
     mp = (marketplace or "").strip().lower()
     cat = _candidate_category_key(c, marketplace=mp)
@@ -2512,6 +2520,9 @@ def _bundle_bucket_key(c: dict, *, marketplace: str) -> str:
     brand = _row_brand_key(items[0]) if items else ""
     if not brand:
         brand = str(c.get("detected_brand") or "").strip().lower()
+    merge_scope = _bundle_bucket_use_scope(c)
+    if brand and merge_scope in _USE_MERGE_BRAND_SCOPE:
+        return f"brand:{cat}:{brand}:{merge_scope}"
     if kind == "new_link":
         if brand:
             return f"new:{cat}:{brand}"
@@ -2560,6 +2571,14 @@ def _merged_apply_candidate(
             base["suggested_target_imt"] = _wb_target_imt(moving_items)
         return base
     tgt = bucket.get("target_group_id") or bucket.get("suggested_target_imt")
+    if mp == "wb" and moving_items:
+        picked, _ = _pick_merge_target_group(
+            moving_items,
+            [op_map[oid] for oid in bucket.get("operations") or [] if oid in op_map],
+            marketplace=mp,
+        )
+        if picked:
+            tgt = picked
     base["kind"] = "merge_groups" if len(moving_items) > 1 else "attach"
     if mp == "wb" and tgt:
         base["target_group_id"] = str(tgt)
@@ -2615,7 +2634,13 @@ def consolidate_ai_bundle_previews(
                     )
                 else:
                     brand = str(c.get("detected_brand") or "").strip()
-                    if brand:
+                    c_items = c.get("items") or []
+                    if not brand and c_items:
+                        brand = _row_brand_extended(c_items[0])
+                    merge_scope = _bundle_bucket_use_scope(c)
+                    if brand and merge_scope in _USE_MERGE_BRAND_SCOPE:
+                        bl = f"{brand} · {c.get('category_label') or 'для губ'}"[:120]
+                    elif brand:
                         bl = f"{brand} · imtID {tgt_id}" if tgt_id else f"{brand} · {tgt_model or f'Связка {seq}'}"
                     else:
                         bl = f"imtID {tgt_id}" if tgt_id else (tgt_model or f"Связка {seq}")
@@ -2647,6 +2672,10 @@ def consolidate_ai_bundle_previews(
         cid = str(c.get("candidate_id") or "")
         if cid and cid not in b["operations"]:
             b["operations"].append(cid)
+        new_tgt = str(c.get("target_group_id") or c.get("suggested_target_imt") or "").strip()
+        if new_tgt and not b.get("target_group_id"):
+            b["target_group_id"] = new_tgt
+            b["suggested_target_imt"] = c.get("suggested_target_imt")
         for it in c.get("items") or []:
             art = _row_article(it, mp)
             if art:
