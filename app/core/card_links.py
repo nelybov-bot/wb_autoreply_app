@@ -2243,6 +2243,15 @@ def _chunk_needs_link_action(
             model = str(it.get("model_name") or "").strip()
             if model != tgt_model:
                 return True
+    if mp == "wb" and not tgt_imt and len(chunk) >= 2:
+        gids = {
+            str(it.get("link_group_id") or it.get("imt_id") or "").strip()
+            for it in chunk
+            if it.get("linked")
+        }
+        gids.discard("")
+        if len(gids) > 1:
+            return True
     return len(chunk) >= 2 and not all(it.get("linked") for it in chunk)
 
 
@@ -2871,6 +2880,35 @@ def _merged_apply_candidate(
     base["items"] = moving_items
     base["count"] = len(moving_items)
     if bucket.get("is_new_bundle"):
+        picked_tgt = 0
+        picked_model = ""
+        if mp == "wb" and moving_items:
+            picked_tgt, _ = _pick_merge_target_group(
+                moving_items,
+                [op_map[oid] for oid in bucket.get("operations") or [] if oid in op_map],
+                marketplace=mp,
+            )
+        elif mp == "ozon" and moving_items:
+            _, picked_model = _pick_merge_target_group(
+                moving_items,
+                [op_map[oid] for oid in bucket.get("operations") or [] if oid in op_map],
+                marketplace=mp,
+            )
+        if mp == "wb" and picked_tgt and len(moving_items) > 1:
+            base["kind"] = "merge_groups"
+            base["target_group_id"] = str(picked_tgt)
+            base["suggested_target_imt"] = int(picked_tgt)
+            base["target_group_label"] = f"imtID {picked_tgt}"
+            base["items"] = moving_items
+            base["count"] = len(moving_items)
+            return base
+        if mp == "ozon" and picked_model and len(moving_items) > 1:
+            base["kind"] = "merge_groups"
+            base["suggested_model_name"] = picked_model
+            base["target_group_label"] = picked_model
+            base["items"] = moving_items
+            base["count"] = len(moving_items)
+            return base
         base["kind"] = "new_link"
         if mp == "ozon" and bucket.get("suggested_model_name"):
             base["suggested_model_name"] = bucket["suggested_model_name"]
@@ -3050,6 +3088,16 @@ def consolidate_ai_bundle_previews(
                 continue
             if is_new:
                 chunk_moving = [x for x in chunk_items if x.get("moving")]
+                if mp == "wb" and chunk_moving:
+                    picked_tgt, _ = _pick_merge_target_group(
+                        chunk_moving, [], marketplace=mp,
+                    )
+                    if picked_tgt and not _external_moving_items(
+                        [{**x, "moving": True} for x in chunk_moving],
+                        str(picked_tgt),
+                        marketplace=mp,
+                    ):
+                        continue
             else:
                 chunk_moving = _external_moving_items(
                     chunk_items,

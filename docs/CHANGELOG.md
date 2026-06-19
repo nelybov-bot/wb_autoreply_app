@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-06-19 — Fix apply for bundles already in target imtID
+
+### Backend
+- `consolidate_ai_bundle_previews`: не показывать is_new связки без реального переноса
+- `_merged_apply_candidate`: is_new с известным imtID → `merge_groups`
+- `_chunk_needs_link_action`: linked в разных imtID при tgt=0
+
+### Frontend
+- `new_link` + target → `merge_groups`, фильтр nm_id перед merge
+- `cardLinksBundleMovingCount`: не давать применить «пустые» связки
+- Bulk-тост с текстом последней ошибки
+
+---
+
 ## 2026-06-18 — Точечная развязка перед перепривязкой
 
 ### Backend

@@ -2901,6 +2901,20 @@
     if (n > 1 && (out.kind === 'relocate' || out.kind === 'attach')) {
       out.kind = 'merge_groups';
     }
+    if (n > 1 && out.kind === 'new_link') {
+      const mp = cardLinksMarketplace();
+      const tgt = Number(out.suggested_target_imt || out.target_group_id || 0);
+      if (tgt) {
+        out.kind = 'merge_groups';
+        out.suggested_target_imt = tgt;
+        out.target_group_id = String(tgt);
+      } else if (mp === 'wb') {
+        const gids = new Set(
+          out.items.map((it) => cardLinksItemGroupId(findCatalogByNmId(it.nm_id, mp) || it, mp)).filter(Boolean),
+        );
+        if (gids.size > 1) out.kind = 'merge_groups';
+      }
+    }
     out.count = n;
     return out;
   }
@@ -3054,18 +3068,40 @@
     return Number(b?.target_group_id || b?.suggested_target_imt || 0);
   }
 
+  function cardLinksBundleMovingNmIds(b, c) {
+    const mp = cardLinksMarketplace();
+    const cand = c || cardLinksNormalizeApplyCandidate(getResolvedAiBundle(b));
+    if (!cand) return [];
+    const items = cand.items || [];
+    const nmIds = items.map((it) => Number(it.nm_id || 0)).filter((x) => x > 0);
+    if (mp !== 'wb' || !nmIds.length) return nmIds;
+    let targetImt = cardLinksBundleTargetImt(b);
+    if (!targetImt) targetImt = Number(cand.suggested_target_imt || cand.target_group_id || items[0]?.imt_id || 0);
+    if (!targetImt) {
+      const gids = new Set(
+        items.map((it) => cardLinksItemGroupId(findCatalogByNmId(it.nm_id, mp) || it, mp)).filter(Boolean),
+      );
+      return gids.size > 1 ? nmIds : items.filter((it) => !(findCatalogByNmId(it.nm_id, mp) || it).linked).map((it) => Number(it.nm_id || 0)).filter((x) => x > 0);
+    }
+    return cardLinksFilterNmIdsForTarget(nmIds, targetImt, mp);
+  }
+
+  function cardLinksBundleMovingCount(b) {
+    return cardLinksBundleMovingNmIds(b).length;
+  }
+
   function cardLinksBundleApplySizeOk(b) {
     const mp = cardLinksMarketplace();
     const c = cardLinksNormalizeApplyCandidate(getResolvedAiBundle(b));
     if (!c) return false;
+    const movingN = cardLinksBundleMovingCount(b);
+    if (!movingN) return false;
     if (b.is_new_bundle) {
-      const n = (c.items || []).length;
-      return n >= 1 && n <= MAX_LINK_ITEMS;
+      return movingN >= 1 && movingN <= MAX_LINK_ITEMS;
     }
     const targetImt = cardLinksBundleTargetImt(b);
-    const nmIds = (c.items || []).map((it) => Number(it.nm_id || 0)).filter((x) => x > 0);
+    const newIds = cardLinksBundleMovingNmIds(b, c);
     if (mp === 'wb') {
-      const newIds = cardLinksFilterNmIdsForTarget(nmIds, targetImt, mp);
       const targetSize = cardLinksTargetGroupSize(targetImt, null);
       return targetSize + newIds.length <= MAX_LINK_ITEMS;
     }
@@ -3337,7 +3373,7 @@
   function cardLinksCanBulkApplyBundle(b) {
     const c = cardLinksNormalizeApplyCandidate(getResolvedAiBundle(b));
     if (!c || !cardLinksCanBulkApplyCandidate(c)) return false;
-    const moving = (c.items || []).length;
+    const moving = cardLinksBundleMovingCount(b);
     if (moving < 1) return false;
     if ((c.kind === 'new_link' || c.kind === 'combine_suggestions') && moving < 2) return false;
     if (!cardLinksBundleApplySizeOk(b)) return false;
@@ -3732,6 +3768,7 @@
     let ok = 0;
     let fail = 0;
     let stopped = false;
+    let lastErr = '';
     for (let i = 0; i < cands.length; i++) {
       if (stopped) break;
       setCardLinksStatus(`Применение ${i + 1} из ${cands.length}…`);
@@ -3748,6 +3785,7 @@
       if (res?.ok) ok += 1;
       else {
         fail += 1;
+        if (res?.error) lastErr = res.error;
         if (res?.rateLimited) stopped = true;
       }
       if (i < cands.length - 1 && !stopped) {
@@ -3756,10 +3794,11 @@
     }
     cardLinksSelectedAi.clear();
     if (ok > 0) cardLinksStartCooldown();
+    const errTail = lastErr ? ` (${lastErr})` : '';
     toast(
       stopped && fail
-        ? `Применено ${ok} из ${cands.length}, остановлено (лимит WB).`
-        : `Применено ${ok} из ${cands.length}${fail ? `, ошибок: ${fail}` : ''}`,
+        ? `Применено ${ok} из ${cands.length}, остановлено (лимит WB).${errTail}`
+        : `Применено ${ok} из ${cands.length}${fail ? `, ошибок: ${fail}` : ''}${errTail}`,
       ok > 0 ? 'success' : 'error',
     );
     syncCardLinksAiBar();
@@ -5143,16 +5182,17 @@
       const nmIdsRaw = checked.length
         ? checked.map(el => Number(el.getAttribute('data-nm-id') || 0)).filter(x => x > 0)
         : (candidate?.items || []).map((it) => Number(it.nm_id || 0)).filter(x => x > 0);
-      const nmIds = (linkKind === 'attach' || linkKind === 'relocate' || linkKind === 'merge_groups')
-        ? cardLinksFilterNmIdsForTarget(nmIdsRaw, targetImt, mp)
-        : nmIdsRaw;
-      if (!nmIds.length && nmIdsRaw.length && (linkKind === 'merge_groups' || linkKind === 'attach')) {
-        return fail('Все выбранные товары уже в целевой связке');
-      }
       if ((linkKind === 'new_link' || kind === 'combine_suggestions') && !targetImt) {
         const first = (candidate?.items || [])[0];
         if (first) targetImt = Number(first.imt_id || 0);
         else if (checked[0]) targetImt = Number(checked[0].getAttribute('data-imt-id') || 0);
+      }
+      let nmIds = nmIdsRaw;
+      if (targetImt && (linkKind === 'attach' || linkKind === 'relocate' || linkKind === 'merge_groups' || linkKind === 'new_link')) {
+        nmIds = cardLinksFilterNmIdsForTarget(nmIdsRaw, targetImt, mp);
+      }
+      if (!nmIds.length && nmIdsRaw.length) {
+        return fail('Все выбранные товары уже в целевой связке — обновите каталог');
       }
       if ((kind === 'attach' || kind === 'attach_batch') && !targetImt) return fail('Выберите целевую связку');
       if (kind === 'relocate' && !targetImt) return fail('Выберите связку для перепривязки');
