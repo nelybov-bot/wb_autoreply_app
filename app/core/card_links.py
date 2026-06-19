@@ -630,7 +630,23 @@ def _wb_target_imt(items: List[dict]) -> int:
 
 
 def _candidate_label(items: List[dict], *, marketplace: str) -> str:
-    if marketplace == "wb":
+    return _items_display_category_label(items, marketplace=marketplace)
+
+
+def _items_display_category_label(items: List[dict], *, marketplace: str) -> str:
+    """Подпись категории: приоритет типа из названия (щетка/губка), иначе subject WB."""
+    if not items:
+        return ""
+    mp = (marketplace or "").strip().lower()
+    title_labels = [_row_title_category_label(it) for it in items]
+    title_labels = [x for x in title_labels if x]
+    if title_labels:
+        top = Counter(title_labels).most_common(1)[0][0]
+        if len(set(title_labels)) == 1:
+            return top
+        if len(title_labels) >= len(items) // 2 + 1:
+            return top
+    if mp == "wb":
         name = str(items[0].get("subject_name") or "").strip()
         sid = int(items[0].get("subject_id") or 0)
         parent = str(items[0].get("parent_name") or "").strip()
@@ -640,6 +656,44 @@ def _candidate_label(items: List[dict], *, marketplace: str) -> str:
         return base
     label = str(items[0].get("category_label") or items[0].get("category_key") or "").strip()
     return label or "категория Ozon"
+
+
+_TITLE_CATEGORY_PATTERNS: List[Tuple[str, str]] = [
+    ("Щетки для посуды", r"щетк"),
+    ("Губки для посуды", r"губк"),
+    ("Будильники электронные", r"будильник"),
+    ("Гирлянды", r"гирлянд"),
+    ("Держатели кухонные", r"держател"),
+    ("Крючки", r"крюч"),
+]
+
+
+def _row_title_category_label(row: dict) -> str:
+    title = str(row.get("title") or "")
+    if not title:
+        return ""
+    for label, pat in _TITLE_CATEGORY_PATTERNS:
+        if re.search(pat, title, re.IGNORECASE):
+            return label
+    return ""
+
+
+_HOUSEHOLD_LINE_PATTERNS: List[Tuple[str, str]] = [
+    ("sponge", r"губк"),
+    ("brush", r"щетк"),
+    ("alarm", r"будильник"),
+    ("garland", r"гирлянд"),
+    ("hook", r"крюч|держател"),
+]
+
+
+def _row_household_line_key(row: dict) -> str:
+    title = str(row.get("title") or "")
+    for key, pat in _HOUSEHOLD_LINE_PATTERNS:
+        if re.search(pat, title, re.IGNORECASE):
+            return key
+    base = _title_base_key(title)
+    return base[:48] if len(base) >= 8 else "misc"
 
 
 def _title_base_key(title: str) -> str:
@@ -2140,7 +2194,8 @@ def _bin_pack_pool_group_key(row: dict, *, marketplace: str) -> str:
             return f"{cat}\x00{merge_use}\x00{scope}"
     scope = _use_merge_scope_key(row, "brand_general", marketplace=mp)
     if scope:
-        return f"{cat}\x00brand_general\x00{scope}"
+        line = _row_household_line_key(row)
+        return f"{cat}\x00brand_general\x00{scope}\x00{line}"
     return ""
 
 
@@ -3136,7 +3191,9 @@ def consolidate_ai_bundle_previews(
                 {
                     "bundle_id": bundle_id,
                     "bundle_label": bundle_label,
-                    "category_label": b["category_label"],
+                    "category_label": _items_display_category_label(
+                        chunk_items, marketplace=mp,
+                    ) or b["category_label"],
                     "is_new_bundle": is_new,
                     "target_group_id": b["target_group_id"],
                     "target_model_name": b["target_model_name"],

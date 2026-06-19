@@ -5,6 +5,17 @@
 
 ---
 
+## 2026-06-19 — Ложный «лимит 30» и категория из title
+
+### Frontend
+- `cardLinksBundleApplyBlockReason`: «уже в связке» vs реальный лимит 30
+
+### Backend
+- `_items_display_category_label`, `_row_household_line_key`: щетка/губка/будильник из названия
+- bin-pack `brand_general` не смешивает разные типы товаров в одном subject
+
+---
+
 ## 2026-06-19 — Fix apply for bundles already in target imtID
 
 ### Backend

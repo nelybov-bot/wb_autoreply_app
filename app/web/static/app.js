@@ -3090,26 +3090,30 @@
     return cardLinksBundleMovingNmIds(b).length;
   }
 
-  function cardLinksBundleApplySizeOk(b) {
+  function cardLinksBundleApplyBlockReason(b) {
     const mp = cardLinksMarketplace();
     const c = cardLinksNormalizeApplyCandidate(getResolvedAiBundle(b));
-    if (!c) return false;
+    if (!c) return 'invalid';
     const movingN = cardLinksBundleMovingCount(b);
-    if (!movingN) return false;
+    if (!movingN) return 'noop';
     if (b.is_new_bundle) {
-      return movingN >= 1 && movingN <= MAX_LINK_ITEMS;
+      return movingN > MAX_LINK_ITEMS ? 'overlimit' : '';
     }
     const targetImt = cardLinksBundleTargetImt(b);
     const newIds = cardLinksBundleMovingNmIds(b, c);
     if (mp === 'wb') {
       const targetSize = cardLinksTargetGroupSize(targetImt, null);
-      return targetSize + newIds.length <= MAX_LINK_ITEMS;
+      return targetSize + newIds.length > MAX_LINK_ITEMS ? 'overlimit' : '';
     }
     const model = String(b.target_model_name || b.suggested_model_name || '').trim();
     const arts = (c.items || []).map((it) => cardLinksArticleKey(it, mp)).filter(Boolean);
     const newArts = cardLinksFilterArticlesForModel(arts, model, mp);
     const targetSize = cardLinksTargetGroupSize(null, model);
-    return targetSize + newArts.length <= MAX_LINK_ITEMS;
+    return targetSize + newArts.length > MAX_LINK_ITEMS ? 'overlimit' : '';
+  }
+
+  function cardLinksBundleApplySizeOk(b) {
+    return !cardLinksBundleApplyBlockReason(b);
   }
 
   function cardLinksTargetGroupSize(targetImt, modelName) {
@@ -4637,7 +4641,10 @@
     const typeBadge = b.is_new_bundle
       ? '<span class="card-links-ai-type card-links-ai-type--new">Новая связка</span>'
       : '<span class="card-links-ai-type card-links-ai-type--merge">Итоговая связка</span>';
-    const overLimit = !cardLinksBundleApplySizeOk(b);
+    const blockReason = cardLinksBundleApplyBlockReason(b);
+    const overLimit = blockReason === 'overlimit';
+    const alreadyOk = blockReason === 'noop';
+    const applyBlocked = !!blockReason;
     const itemCards = (b.items || []).map((it) => {
       const art = cardLinksArticleKey(it, mp);
       const role = it.role || (it.moving ? 'add' : 'stay');
@@ -4671,15 +4678,18 @@
           <button type="button" class="btn btn-secondary btn-sm card-links-ai-add-btn" data-bundle-id="${bid}">+</button>
         </div>`
       : '';
-    const rowCheckCell = canSelect && !overLimit
+    const rowCheckCell = canSelect && !applyBlocked
       ? `<td class="col-check card-links-cand-check-cell">
           <label class="card-links-cand-check-wrap" title="Применить эту связку">
             <input type="checkbox" class="card-links-row-check card-links-ai-cluster-check" data-bundle-id="${bid}"${rowChecked ? ' checked' : ''}>
           </label>
         </td>`
-      : `<td class="col-check card-links-cand-check-cell"${overLimit ? ' title="Более 30 — разделите вручную"' : ''}></td>`;
+      : `<td class="col-check card-links-cand-check-cell"${applyBlocked ? (alreadyOk ? ' title="Уже в целевой связке — обновите каталог"' : ' title="Более 30 — разделите вручную"') : ''}></td>`;
+    const warnHint = alreadyOk
+      ? ' · уже в связке'
+      : (overLimit ? ` · ⚠ лимит ${MAX_LINK_ITEMS}` : '');
     return `<tr class="card-links-cand-header card-links-ai-bundle-row">${rowCheckCell}<td colspan="6">
-      <div class="card-links-ai-bundle card-links-ai-block${overLimit ? ' card-links-ai-bundle--warn' : ''}">
+      <div class="card-links-ai-bundle card-links-ai-block${applyBlocked ? ' card-links-ai-bundle--warn' : ''}">
         <div class="card-links-ai-bundle-head">
           <div class="card-links-ai-bundle-title">
             ${typeBadge}
@@ -4689,7 +4699,7 @@
           <div class="card-links-ai-bundle-target">${targetLabel}</div>
         </div>
         ${b.category_label ? `<div class="card-links-ai-bundle-cat">${escapeHtml(b.category_label)}</div>` : ''}
-        <div class="card-links-ai-bundle-summary">${escapeHtml(b.summary || '')}${overLimit ? ` · ⚠ лимит ${MAX_LINK_ITEMS}` : ''}</div>
+        <div class="card-links-ai-bundle-summary">${escapeHtml(b.summary || '')}${warnHint}</div>
         <div class="card-links-ai-bundle-items">${itemCards || '<span class="form-hint">Нет товаров</span>'}</div>
         <div class="card-links-ai-bundle-foot">
           <label class="card-links-ai-merge-pick-wrap" title="Объединить 2 связки в одну (отдельно от массового применения)">
@@ -4698,7 +4708,7 @@
           </label>
           ${modelInput}
           ${addRow}
-          <button type="button" class="btn btn-primary btn-sm card-links-ai-apply-one" data-bundle-id="${bid}"${overLimit ? ' disabled' : ''}>Применить связку</button>
+          <button type="button" class="btn btn-primary btn-sm card-links-ai-apply-one" data-bundle-id="${bid}"${applyBlocked ? ' disabled' : ''}>Применить связку</button>
         </div>
       </div>
     </td></tr>`;
