@@ -32,7 +32,7 @@
 
 ### Риски / проверить на production
 
-- ~~Load: `apply_link_status(marketplace=...)` — исправлено (лишний аргумент)~~
+- ~~Plan: `_row_category_label(chunk)` — исправлено (`chunk[0]`)~~
 - Cross-brand merge мелких пачек в одном subject (дом) — может отклонить WB
 - OpenAI на шаге 4 опционален (правила + `unknown` для моделей)
 - После apply каталог WB не перезагружается автоматически — шаг 1 вручную

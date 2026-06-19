@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-06-19 — Fix master plan: category label from first item
+
+- `master_step_plan`: `_row_category_label(chunk[0])` вместо передачи всего списка (AttributeError на шаге Plan)
+
+---
+
 ## 2026-06-19 — Fix master load: apply_link_status extra arg
 
 - `card_links_master.py`: убран несуществующий `marketplace=` в вызове `apply_link_status` (TypeError на шаге Load)

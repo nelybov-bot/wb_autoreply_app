@@ -505,7 +505,7 @@ def master_step_plan(rows: List[dict]) -> Tuple[List[dict], List[dict], dict]:
             bid = f"mb-{seq}"
             imts = [int(x.get("imt_id") or 0) for x in chunk if int(x.get("imt_id") or 0)]
             target_imt = Counter(imts).most_common(1)[0][0] if imts else 0
-            cat = _row_category_label(chunk, marketplace="wb")
+            cat = _row_category_label(chunk[0], marketplace="wb")
             brand = _row_brand_extended(chunk[0]) or _row_brand_key(chunk[0])
             subtype = str(chunk[0].get("subtype") or chunk[0].get("phone_model") or "")
             nm_ids = []
