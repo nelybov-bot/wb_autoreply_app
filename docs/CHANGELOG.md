@@ -5,6 +5,17 @@
 
 ---
 
+## 2026-06-18 — Bin-pack по всему пулу (CARD_LINKING_REVIEW шаг 1)
+
+### Backend (`card_links.py`)
+- `deterministic_bin_pack_from_pool` — первичная упаковка пула по subject + бренд + назначение
+- `_facet_aware_pack_bins` — фасовки 1/2/3 как атомы; мягкий приоритет title_base при добивке до 30
+- Pack-артикулы больше не исключаются из `ai_pool`
+- `_merge_ai_suggestions_by_use_bucket`: без гейта `len(cluster)<2`, facet-aware split
+- `default_ai_system_prompt`: роль ИИ — дополнение bin-pack; не дублировать бренд+назначение
+
+---
+
 ## 2026-06-18 — ИИ-связки: применение, выбор, пагинация
 
 ### Backend

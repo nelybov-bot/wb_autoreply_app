@@ -2107,6 +2107,232 @@ def _split_items_to_bundles(items: List[dict], max_size: int = MAX_LINK_ITEMS) -
     return out
 
 
+def _bin_pack_pool_group_key(row: dict, *, marketplace: str) -> str:
+    """Ключ корзины: subjectID + назначение + бренд."""
+    mp = (marketplace or "").strip().lower()
+    use = _row_use_bucket(row)
+    if not use or use not in _USE_BUCKET_MERGEABLE:
+        return ""
+    brand = _row_brand_key(row)
+    if not brand:
+        return ""
+    cat = _use_merge_category_key({}, row, marketplace=mp)
+    merge_use = _use_bucket_merge_group(use)
+    scope = _use_merge_scope_key(row, merge_use, marketplace=mp)
+    if not scope:
+        return ""
+    return f"{cat}\x00{merge_use}\x00{scope}"
+
+
+def _pack_atoms_from_items(items: List[dict], *, marketplace: str) -> List[List[dict]]:
+    """Фасовки 1/2/3 шт — неделимые атомы; остальное по одной карточке."""
+    mp = (marketplace or "").strip().lower()
+    by_pack: Dict[str, List[dict]] = {}
+    singles: List[dict] = []
+    for it in items:
+        pk = _product_pack_key(it, mp)
+        if pk:
+            by_pack.setdefault(pk, []).append(it)
+        else:
+            singles.append(it)
+
+    atoms: List[List[dict]] = []
+    seen: set[str] = set()
+    for pk_items in by_pack.values():
+        if len(pk_items) >= 2 and _items_are_pack_variants(pk_items, marketplace=mp):
+            atoms.append(pk_items)
+            for it in pk_items:
+                art = _row_article(it, mp)
+                if art:
+                    seen.add(art)
+        else:
+            singles.extend(pk_items)
+    for it in singles:
+        art = _row_article(it, mp)
+        if art and art in seen:
+            continue
+        atoms.append([it])
+        if art:
+            seen.add(art)
+    return atoms
+
+
+def _facet_aware_pack_bins(
+    items: List[dict],
+    *,
+    marketplace: str,
+    max_size: int = MAX_LINK_ITEMS,
+) -> List[List[dict]]:
+    """
+    Упаковка в связки до max_size: атомы фасовок целиком,
+    мягкий приоритет — соседние title_base / pack_key, добивка до лимита.
+    """
+    if len(items) <= max_size:
+        return [items]
+    atoms = _pack_atoms_from_items(items, marketplace=marketplace)
+    atoms.sort(
+        key=lambda atom: (
+            _title_base_key(atom[0].get("title") or ""),
+            _product_pack_key(atom[0], marketplace) or "",
+            _row_article(atom[0], marketplace),
+        ),
+    )
+    bins: List[List[dict]] = []
+    current: List[dict] = []
+    current_n = 0
+    for atom in atoms:
+        atom_n = len(atom)
+        if atom_n > max_size:
+            if current:
+                bins.append(current)
+                current = []
+                current_n = 0
+            bins.extend(_split_items_to_bundles(atom, max_size=max_size))
+            continue
+        if current_n + atom_n > max_size:
+            if current:
+                bins.append(current)
+            current = list(atom)
+            current_n = atom_n
+        else:
+            current.extend(atom)
+            current_n += atom_n
+    if current:
+        bins.append(current)
+    return [b for b in bins if b]
+
+
+def _chunk_needs_link_action(
+    chunk: List[dict],
+    target_imt: int,
+    target_model: str,
+    *,
+    marketplace: str,
+) -> bool:
+    mp = (marketplace or "").strip().lower()
+    tgt_imt = str(target_imt or "")
+    tgt_model = str(target_model or "").strip()
+    for it in chunk:
+        if not it.get("linked"):
+            return True
+        if mp == "wb" and tgt_imt:
+            gid = str(it.get("link_group_id") or it.get("imt_id") or "")
+            if gid != tgt_imt:
+                return True
+        if mp == "ozon" and tgt_model:
+            model = str(it.get("model_name") or "").strip()
+            if model != tgt_model:
+                return True
+    return len(chunk) >= 2 and not all(it.get("linked") for it in chunk)
+
+
+def deterministic_bin_pack_from_pool(
+    rows: List[dict],
+    groups: List[dict],
+    *,
+    marketplace: str,
+    split_oversized: bool = True,
+    start_seq: int = 0,
+) -> Tuple[List[dict], set[str], int]:
+    """
+    Первичная детерминированная упаковка всего пула по (subject, бренд, назначение).
+    Фасовки 1/2/3 — атомы; сироты без соседа-кандидата ИИ не остаются.
+    """
+    mp = (marketplace or "").strip().lower()
+    by_key: Dict[str, List[dict]] = {}
+    for r in rows:
+        art = _row_article(r, mp)
+        if not art:
+            continue
+        key = _bin_pack_pool_group_key(r, marketplace=mp)
+        if not key:
+            continue
+        by_key.setdefault(key, []).append(r)
+
+    out: List[dict] = []
+    used: set[str] = set()
+    seq = start_seq
+
+    for bucket_key, raw_items in by_key.items():
+        seen_art: set[str] = set()
+        items: List[dict] = []
+        for it in raw_items:
+            art = _row_article(it, mp)
+            if not art or art in seen_art:
+                continue
+            seen_art.add(art)
+            items.append(it)
+        if not items:
+            continue
+        if not _items_same_brand_key(items) or not _items_product_use_compatible(items):
+            continue
+        err = _validate_ai_cluster_items(items, mp)
+        if err:
+            continue
+
+        merge_use = bucket_key.split("\x00")[1] if "\x00" in bucket_key else ""
+        use_label = _USE_BUCKET_LABEL_RU.get(merge_use, merge_use)
+        brand_label = _row_brand_extended(items[0]) or _row_brand_key(items[0])
+
+        chunks = (
+            _facet_aware_pack_bins(items, marketplace=mp)
+            if split_oversized
+            else [items]
+        )
+        for chunk in chunks:
+            if not chunk:
+                continue
+            tgt_imt, tgt_model = _pick_merge_target_group(chunk, [], marketplace=mp)
+            if not _chunk_needs_link_action(chunk, tgt_imt, tgt_model, marketplace=mp):
+                for a in (_row_article(x, mp) for x in chunk):
+                    if a:
+                        used.add(a)
+                continue
+            if len(chunk) < 2 and not tgt_imt and not tgt_model:
+                continue
+            err = _validate_ai_cluster_items(chunk, mp)
+            if err:
+                continue
+            seq += 1
+            if mp == "wb" and tgt_imt:
+                cl: Dict[str, Any] = {
+                    "kind": "merge_groups",
+                    "target_group_id": str(tgt_imt),
+                    "reason": f"{brand_label} · {use_label} · {len(chunk)} шт.",
+                    "confidence": "high",
+                    "normalized_product_name": use_label,
+                    "detected_brand": brand_label,
+                }
+            elif mp == "ozon" and tgt_model:
+                cl = {
+                    "kind": "merge_groups",
+                    "target_group_id": tgt_model,
+                    "suggested_model_name": tgt_model,
+                    "reason": f"{brand_label} · {use_label} · {len(chunk)} шт.",
+                    "confidence": "high",
+                    "normalized_product_name": use_label,
+                    "detected_brand": brand_label,
+                }
+            else:
+                cl = {
+                    "kind": "new_link",
+                    "reason": f"Новая связка · {brand_label} · {use_label} · {len(chunk)} шт.",
+                    "confidence": "high",
+                    "normalized_product_name": use_label,
+                    "detected_brand": brand_label,
+                }
+            out.append(
+                _build_ai_candidate_entry(
+                    cl, chunk, groups, marketplace=mp, seq=seq, source="bin_pack",
+                ),
+            )
+            for a in (_row_article(x, mp) for x in chunk):
+                if a:
+                    used.add(a)
+
+    return out, used, seq
+
+
 def _compact_product_for_ai(row: dict, marketplace: str) -> dict:
     mp = (marketplace or "").strip().lower()
     art = _row_article(row, mp)
@@ -2153,36 +2379,40 @@ def default_ai_system_prompt(marketplace: str) -> str:
     mp = (marketplace or "").strip().lower()
     n = MAX_LINK_ITEMS
     common = (
-        "ГЛАВНОЕ (приоритет №1): варианты ОДНОГО товара (1 шт / 2 шт / 3 шт / набор / комплект) "
-        "— ВСЕГДА в одной связке, даже если сейчас в разных imtID. Никогда не дроби фасовки по разным связкам.\n"
+        "КОНТЕКСТ ПАЙПЛАЙНА:\n"
+        "Перед тобой уже отработал детерминированный упаковщик (bin-pack): он собрал большую часть "
+        "косметики/дрогери по (subjectID + ОДИН бренд + назначение: губы, руки, ноги, тело, лицо, волосы…) "
+        f"в связки до {n}. Фасовки 1/2/3/5 шт одного товара — атомы, не дробить.\n"
+        "Твоя роль — ДОПОЛНИТЬ то, что упаковщик не покрыл: неясное назначение, не-косметика, "
+        "перенос из неоптимальных связок, редкие кейсы. Не дублируй очевидные связки того же бренда+назначения, "
+        "которые упаковщик уже собрал.\n"
         "\n"
         "ЖЁСТКИЕ ПРАВИЛА:\n"
         "1) Одна категория (subject_id) на связку — не смешивать разные категории.\n"
-        f"2) Не более {n} карточек в одной связке. Если товаров в категории больше {n} — делить на несколько связок "
-        f"(пример: 42 → {n} + 12). Набивай каждую связку по максимуму до {n}: не делай связки по 1–3 карточки, "
-        f"если в ту же связку можно добавить другие логически близкие товары этой категории "
-        f"(15 карточек в одной связке — нормально, если они подходят по смыслу).\n"
-        "3) Сначала делить по НАЗНАЧЕНИЮ — разное назначение НИКОГДА вместе. "
-        "Затем в пределах одного subjectID и ОДНОГО БРЕНДА — одна связка до лимита. "
-        "НЕЛЬЗЯ смешивать в одной связке: Labello, Balea, ISANA, lavera, alverde, alviana, "
-        "benecos, Cosnature, Denkmit, Sante, SUNDANCE — даже если категория одна. "
-        "Внутри одного бренда и назначения — ВСЁ вместе до лимита "
-        "(все оттенки lavera; все гели Balea MEN; все гели ISANA для душа; "
-        "фасовки 1/2/3/5 шт — всегда вместе). "
-        "НЕ делить по линейкам, вкусам, оттенкам, объёму (мл/г). "
-        "«Гигиеническая помада» = бальзам для губ.\n"
-        "4) Один бренд на связку; бренд из колонки и названия; "
-        "IKEA не смешивать с ноунейм; ноунейм не смешивать с именованными брендами.\n"
-        "5) IKEA и аксессуары-хранение (сумки, косметички, контейнеры) — можно разные SKU одного класса в одной связке.\n"
-        "6) Запчасти телефонов — группировать по модели устройства (iPhone 14, Samsung A54…).\n"
-        "7) Заполняй связки по максимуму внутри логической группы (до лимита).\n"
-        "8) Анализируй ВСЕ товары, включая уже связанные — предлагай relocate/merge, если текущая связка неоптимальна.\n"
-        "9) При сомнении — не объединяй.\n"
-        f"10) НЕ объединяй весь бренд категории в одну связку (300 кремов Balea — это много связок, не одна). "
-        f"В одной связке: фасовки 1/2/3 одной линейки + при необходимости другие близкие SKU той же категории, "
-        f"но суммарно не более {n} карточек и без смешения несовместимых продуктов (п.3).\n"
-        f"11) Итог: «красивые» связки — логично укомплектованные, до {n} карточек; товары категории распределены "
-        "между несколькими связками без лишних мелких обрывков по 1–2 SKU.\n"
+        f"2) Не более {n} карточек в одной связке. Набивай до лимита, не оставляй обрывки по 1–2 SKU, "
+        f"если рядом есть логически совместимые товары той же категории и бренда.\n"
+        "3) Назначение — главный разделитель: губы / руки / ноги / тело / лицо / волосы / гель для волос / "
+        "ополаскиватель — НИКОГДА вместе. «Гигиеническая помада» = бальзам для губ.\n"
+        "4) ОДИН бренд на связку. НИКОГДА не смешивать: Labello, Balea, ISANA, lavera, alverde, alviana, "
+        "benecos, Cosnature, Denkmit, Sante, SUNDANCE — даже при одной категории.\n"
+        "5) Внутри одного бренда и назначения — собирай вместе до лимита. "
+        "Приоритет при добивке (мягко, не жёсткий запрет): сначала похожие названия/линейка/вкус/оттенок, "
+        "затем другие SKU того же бренда и назначения, чтобы добить связку ближе к 30. "
+        "Можно смешивать оттенки и вкусы одного бренда+назначения.\n"
+        "6) Фасовки 1/2/3/5 шт одного товара — ВСЕГДА в одной связке, даже если сейчас в разных imtID.\n"
+        "7) Бренд из колонки и названия; IKEA не смешивать с ноунейм; ноунейм не смешивать с именованными.\n"
+        "8) IKEA и аксессуары-хранение — можно разные SKU одного класса в одной связке.\n"
+        "9) Запчасти телефонов — группировать по модели устройства (iPhone 14, Samsung A54…).\n"
+        "10) Анализируй ВСЕ товары, включая уже связанные — предлагай relocate/merge, если связка неоптимальна.\n"
+        "11) При сомнении — не объединяй (confidence: low — не включай в ответ).\n"
+        f"12) Не пытайся свалить весь бренд категории в одну связку (300 кремов Balea — много связок по {n}). "
+        "Но каждая связка — максимально полная в рамках бренда+назначения.\n"
+        "\n"
+        "ЧТО ПРЕДЛАГАТЬ В ПРИОРИТЕТЕ:\n"
+        "• Товары без очевидного назначения (не косметика/дрогери из словаря) — сгруппируй по смыслу названия.\n"
+        "• Товары, оставшиеся вне крупных связок упаковщика — добей в существующую imtID или новую связку.\n"
+        "• Перенос из слишком мелких или смешанных связок в более крупные того же бренда+назначения.\n"
+        "• Не предлагай связки, которые полностью дублируют уже очевидную группу того же бренда+назначения.\n"
     )
     if mp == "wb":
         return (
@@ -2497,8 +2727,6 @@ def _merge_ai_suggestions_by_use_bucket(
     use_merge_n = 0
 
     for bucket_key, cluster in by_key.items():
-        if len(cluster) < 2:
-            continue
         use = bucket_key.split("\x00")[-1]
         merge_use = bucket_key.split("\x00")[1] if "\x00" in bucket_key else use
         use_label = _USE_BUCKET_LABEL_RU.get(merge_use, merge_use)
@@ -2511,13 +2739,13 @@ def _merge_ai_suggestions_by_use_bucket(
                     continue
                 seen.add(art)
                 all_items.append(it)
-        if len(all_items) < 2 or not _items_product_use_compatible(all_items):
+        if len(all_items) < 1 or not _items_product_use_compatible(all_items):
             continue
         if not _items_same_brand_key(all_items):
             continue
         brand_label = _row_brand_extended(all_items[0]) or _row_brand_key(all_items[0])
-        for chunk in _split_items_to_bundles(all_items):
-            if len(chunk) < 2:
+        for chunk in _facet_aware_pack_bins(all_items, marketplace=mp):
+            if len(chunk) < 1:
                 continue
             tgt_imt, tgt_model = _pick_merge_target_group(chunk, cluster, marketplace=mp)
             seq += 1
@@ -3054,24 +3282,25 @@ async def ai_suggest_card_links(
         return [], [], meta
 
     out: List[dict] = []
-    used_articles: set[str] = set()
+    bin_covered: set[str] = set()
     seq = 0
 
     if deterministic_packs:
         if progress_cb:
-            progress_cb(0, 1, "Авто-фасовки 1/2/3 шт…")
+            progress_cb(0, 1, "Упаковка по бренду и назначению…")
         pack_rows = pool if include_linked else [r for r in pool if not r.get("linked")]
-        packs, used_articles, seq = deterministic_pack_suggestions(
+        bin_out, bin_covered, seq = deterministic_bin_pack_from_pool(
             pack_rows,
+            groups,
             marketplace=mp,
-            groups=groups,
             split_oversized=split_oversized,
             start_seq=seq,
         )
-        out.extend(packs)
-        meta["pack_clusters"] = len(packs)
+        out.extend(bin_out)
+        meta["pack_clusters"] = len(bin_out)
+        meta["bin_pack_clusters"] = len(bin_out)
 
-    ai_pool = [r for r in pool if _row_article(r, mp) not in used_articles]
+    ai_pool = list(pool)
     if len(ai_pool) >= 2:
         by_cat: Dict[str, List[dict]] = {}
         groups_by_cat: Dict[str, List[dict]] = {}
@@ -3117,13 +3346,17 @@ async def ai_suggest_card_links(
                 cl = br["cl"]
                 items = br["items"]
                 if split_oversized and len(items) > MAX_LINK_ITEMS:
-                    chunks = _split_items_to_bundles(items)
+                    chunks = _facet_aware_pack_bins(items, marketplace=mp)
                 else:
                     chunks = [items]
                 for chunk in chunks:
                     if len(chunk) < 2 and cl.get("kind") in ("new_link", "merge_groups"):
                         continue
-                    key = frozenset(_row_article(x, mp) for x in chunk)
+                    chunk_arts = {_row_article(x, mp) for x in chunk}
+                    chunk_arts.discard("")
+                    if chunk_arts and chunk_arts <= bin_covered:
+                        continue
+                    key = frozenset(chunk_arts)
                     if key in seen_clusters:
                         continue
                     seen_clusters.add(key)
