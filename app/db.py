@@ -326,6 +326,63 @@ class Database:
             c.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ozon_alerts_status ON ozon_important_alerts(status)"
             )
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS card_links_master_items (
+                    store_id INTEGER NOT NULL,
+                    nm_id INTEGER NOT NULL,
+                    vendor_code TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    subject_id INTEGER NOT NULL DEFAULT 0,
+                    subject_name TEXT NOT NULL DEFAULT '',
+                    parent_name TEXT NOT NULL DEFAULT '',
+                    imt_id INTEGER NOT NULL DEFAULT 0,
+                    linked INTEGER NOT NULL DEFAULT 0,
+                    brand TEXT NOT NULL DEFAULT '',
+                    segment TEXT NOT NULL DEFAULT '',
+                    subtype TEXT NOT NULL DEFAULT '',
+                    phone_model TEXT NOT NULL DEFAULT '',
+                    bundle_id TEXT NOT NULL DEFAULT '',
+                    group_key TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    row_json TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (store_id, nm_id)
+                )
+            """)
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS card_links_master_bundles (
+                    store_id INTEGER NOT NULL,
+                    bundle_id TEXT NOT NULL,
+                    segment TEXT NOT NULL DEFAULT '',
+                    category_label TEXT NOT NULL DEFAULT '',
+                    brand TEXT NOT NULL DEFAULT '',
+                    subtype_label TEXT NOT NULL DEFAULT '',
+                    item_count INTEGER NOT NULL DEFAULT 0,
+                    target_imt INTEGER NOT NULL DEFAULT 0,
+                    sort_size INTEGER NOT NULL DEFAULT 0,
+                    bundle_json TEXT NOT NULL DEFAULT '',
+                    apply_status TEXT NOT NULL DEFAULT 'pending',
+                    updated_at TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (store_id, bundle_id)
+                )
+            """)
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS card_links_master_state (
+                    store_id INTEGER PRIMARY KEY,
+                    steps_json TEXT NOT NULL DEFAULT '{}',
+                    catalog_at TEXT NOT NULL DEFAULT '',
+                    log_json TEXT NOT NULL DEFAULT '[]',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                )
+            """)
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_clm_items_store_seg "
+                "ON card_links_master_items(store_id, segment)"
+            )
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_clm_items_store_bundle "
+                "ON card_links_master_items(store_id, bundle_id)"
+            )
             for col, ddl in (
                 ("alert_category", "TEXT NOT NULL DEFAULT ''"),
                 ("product_skus", "TEXT NOT NULL DEFAULT ''"),
@@ -1692,3 +1749,332 @@ class Database:
             "ozon_chat_sent": ozon_chat_sent,
             "ozon_chat_sent_today": ozon_chat_sent_today,
         }
+
+    # ---------- Card links master (WB) ----------
+    def clm_clear_store(self, store_id: int) -> None:
+        with _DB_LOCK:
+            sid = int(store_id)
+            self._conn.execute("DELETE FROM card_links_master_items WHERE store_id=?", (sid,))
+            self._conn.execute("DELETE FROM card_links_master_bundles WHERE store_id=?", (sid,))
+            self._conn.commit()
+
+    def clm_save_items(self, store_id: int, rows: list[dict]) -> None:
+        ts = utc_now_iso()
+        sid = int(store_id)
+        with _DB_LOCK:
+            self._conn.execute("DELETE FROM card_links_master_items WHERE store_id=?", (sid,))
+            for r in rows:
+                nid = int(r.get("nm_id") or 0)
+                if not nid:
+                    continue
+                self._conn.execute(
+                    """INSERT INTO card_links_master_items(
+                        store_id, nm_id, vendor_code, title, subject_id, subject_name, parent_name,
+                        imt_id, linked, brand, segment, subtype, phone_model, bundle_id,
+                        group_key, status, row_json, updated_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        sid,
+                        nid,
+                        str(r.get("vendor_code") or ""),
+                        str(r.get("title") or "")[:240],
+                        int(r.get("subject_id") or 0),
+                        str(r.get("subject_name") or ""),
+                        str(r.get("parent_name") or ""),
+                        int(r.get("imt_id") or 0),
+                        1 if r.get("linked") else 0,
+                        str(r.get("brand") or ""),
+                        str(r.get("segment") or ""),
+                        str(r.get("subtype") or ""),
+                        str(r.get("phone_model") or ""),
+                        str(r.get("bundle_id") or ""),
+                        str(r.get("group_key") or ""),
+                        str(r.get("status") or "pending"),
+                        json.dumps(r, ensure_ascii=False, default=str),
+                        ts,
+                    ),
+                )
+            self._conn.commit()
+
+    def clm_load_items(self, store_id: int) -> list[dict]:
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                "SELECT row_json FROM card_links_master_items WHERE store_id=? ORDER BY subject_name, brand, title",
+                (int(store_id),),
+            )
+            out: list[dict] = []
+            for row in cur.fetchall():
+                try:
+                    out.append(json.loads(row["row_json"] or "{}"))
+                except Exception:
+                    pass
+            return out
+
+    def clm_save_bundles(self, store_id: int, bundles: list[dict]) -> None:
+        ts = utc_now_iso()
+        sid = int(store_id)
+        with _DB_LOCK:
+            self._conn.execute("DELETE FROM card_links_master_bundles WHERE store_id=?", (sid,))
+            for b in bundles:
+                bid = str(b.get("bundle_id") or "")
+                if not bid:
+                    continue
+                self._conn.execute(
+                    """INSERT INTO card_links_master_bundles(
+                        store_id, bundle_id, segment, category_label, brand, subtype_label,
+                        item_count, target_imt, sort_size, bundle_json, apply_status, updated_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        sid,
+                        bid,
+                        str(b.get("segment") or ""),
+                        str(b.get("category_label") or ""),
+                        str(b.get("brand") or ""),
+                        str(b.get("subtype_label") or ""),
+                        int(b.get("item_count") or 0),
+                        int(b.get("target_imt") or 0),
+                        int(b.get("sort_size") or b.get("item_count") or 0),
+                        json.dumps(b, ensure_ascii=False, default=str),
+                        str(b.get("apply_status") or "pending"),
+                        ts,
+                    ),
+                )
+            self._conn.commit()
+
+    def clm_load_bundles(
+        self,
+        store_id: int,
+        *,
+        segment: str = "",
+        brand: str = "",
+        category: str = "",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        where = ["store_id=?"]
+        params: list = [int(store_id)]
+        if segment:
+            where.append("segment=?")
+            params.append(segment)
+        if brand:
+            where.append("brand=?")
+            params.append(brand)
+        if category:
+            where.append("category_label=?")
+            params.append(category)
+        w = " AND ".join(where)
+        with _DB_LOCK:
+            cnt = self._conn.execute(
+                f"SELECT COUNT(*) AS n FROM card_links_master_bundles WHERE {w}",
+                params,
+            ).fetchone()
+            total = int(cnt["n"]) if cnt else 0
+            cur = self._conn.execute(
+                f"""SELECT bundle_json, apply_status FROM card_links_master_bundles
+                    WHERE {w} ORDER BY sort_size DESC, category_label, bundle_id
+                    LIMIT ? OFFSET ?""",
+                params + [int(limit), int(offset)],
+            )
+            out: list[dict] = []
+            for row in cur.fetchall():
+                try:
+                    b = json.loads(row["bundle_json"] or "{}")
+                    st = str(row["apply_status"] or b.get("apply_status") or "pending")
+                    b["apply_status"] = st
+                    out.append(b)
+                except Exception:
+                    pass
+            return out, total
+
+    def clm_list_bundle_ids(
+        self,
+        store_id: int,
+        *,
+        segment: str = "",
+        brand: str = "",
+        category: str = "",
+    ) -> list[str]:
+        where = ["store_id=?"]
+        params: list = [int(store_id)]
+        if segment:
+            where.append("segment=?")
+            params.append(segment)
+        if brand:
+            where.append("brand=?")
+            params.append(brand)
+        if category:
+            where.append("category_label=?")
+            params.append(category)
+        w = " AND ".join(where)
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                f"""SELECT bundle_id FROM card_links_master_bundles
+                    WHERE {w} ORDER BY sort_size DESC, category_label, bundle_id""",
+                params,
+            )
+            return [str(r[0]) for r in cur.fetchall() if r and r[0]]
+
+    def clm_set_bundle_apply_statuses(
+        self,
+        store_id: int,
+        *,
+        applied: Optional[list] = None,
+        skipped: Optional[list] = None,
+        failed: Optional[list] = None,
+    ) -> None:
+        sid = int(store_id)
+        mapping: list[tuple[str, str]] = []
+        for bid in applied or []:
+            b = str(bid or "").strip()
+            if b:
+                mapping.append((b, "applied"))
+        for bid in skipped or []:
+            b = str(bid or "").strip()
+            if b:
+                mapping.append((b, "skipped"))
+        for bid in failed or []:
+            b = str(bid or "").strip()
+            if b:
+                mapping.append((b, "failed"))
+        if not mapping:
+            return
+        ts = utc_now_iso()
+        with _DB_LOCK:
+            for bid, status in mapping:
+                self._conn.execute(
+                    """UPDATE card_links_master_bundles
+                       SET apply_status=?, updated_at=?
+                       WHERE store_id=? AND bundle_id=?""",
+                    (status, ts, sid, bid),
+                )
+            self._conn.commit()
+
+    def clm_get_state(self, store_id: int) -> dict:
+        with _DB_LOCK:
+            row = self._conn.execute(
+                "SELECT steps_json, catalog_at, log_json, updated_at FROM card_links_master_state WHERE store_id=?",
+                (int(store_id),),
+            ).fetchone()
+            if not row:
+                return {"steps": {}, "catalog_at": "", "log": [], "updated_at": ""}
+            try:
+                steps = json.loads(row["steps_json"] or "{}")
+            except Exception:
+                steps = {}
+            try:
+                log = json.loads(row["log_json"] or "[]")
+            except Exception:
+                log = []
+            return {
+                "steps": steps,
+                "catalog_at": str(row["catalog_at"] or ""),
+                "log": log,
+                "updated_at": str(row["updated_at"] or ""),
+            }
+
+    def clm_set_state(
+        self,
+        store_id: int,
+        *,
+        steps: Optional[dict] = None,
+        catalog_at: Optional[str] = None,
+        log: Optional[list] = None,
+    ) -> None:
+        ts = utc_now_iso()
+        sid = int(store_id)
+        cur = self.clm_get_state(sid)
+        if steps is not None:
+            cur["steps"] = steps
+        if catalog_at is not None:
+            cur["catalog_at"] = catalog_at
+        if log is not None:
+            cur["log"] = log[-200:]
+        with _DB_LOCK:
+            self._conn.execute(
+                """INSERT INTO card_links_master_state(store_id, steps_json, catalog_at, log_json, updated_at)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(store_id) DO UPDATE SET
+                     steps_json=excluded.steps_json,
+                     catalog_at=excluded.catalog_at,
+                     log_json=excluded.log_json,
+                     updated_at=excluded.updated_at""",
+                (
+                    sid,
+                    json.dumps(cur.get("steps") or {}, ensure_ascii=False),
+                    str(cur.get("catalog_at") or ""),
+                    json.dumps(cur.get("log") or [], ensure_ascii=False),
+                    ts,
+                ),
+            )
+            self._conn.commit()
+
+    def clm_append_log(self, store_id: int, message: str, *, level: str = "info") -> None:
+        st = self.clm_get_state(store_id)
+        log = list(st.get("log") or [])
+        log.append({"ts": utc_now_iso(), "level": level, "message": message[:500]})
+        self.clm_set_state(store_id, log=log[-200:])
+
+    def clm_filter_options(self, store_id: int) -> dict:
+        with _DB_LOCK:
+            sid = int(store_id)
+            brands = [
+                str(r[0])
+                for r in self._conn.execute(
+                    "SELECT DISTINCT brand FROM card_links_master_items WHERE store_id=? AND brand<>'' ORDER BY brand",
+                    (sid,),
+                ).fetchall()
+            ]
+            categories = [
+                str(r[0])
+                for r in self._conn.execute(
+                    "SELECT DISTINCT subject_name FROM card_links_master_items WHERE store_id=? AND subject_name<>'' ORDER BY subject_name",
+                    (sid,),
+                ).fetchall()
+            ]
+            segments = [
+                str(r[0])
+                for r in self._conn.execute(
+                    "SELECT DISTINCT segment FROM card_links_master_items WHERE store_id=? AND segment<>'' ORDER BY segment",
+                    (sid,),
+                ).fetchall()
+            ]
+            subtypes = [
+                str(r[0])
+                for r in self._conn.execute(
+                    """SELECT DISTINCT subtype FROM card_links_master_items
+                       WHERE store_id=? AND subtype<>'' ORDER BY subtype""",
+                    (sid,),
+                ).fetchall()
+            ]
+            return {
+                "brands": brands,
+                "categories": categories,
+                "segments": segments,
+                "subtypes": subtypes,
+            }
+
+    def clm_coverage(self, store_id: int) -> dict:
+        with _DB_LOCK:
+            sid = int(store_id)
+            total = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM card_links_master_items WHERE store_id=?",
+                (sid,),
+            ).fetchone()
+            planned = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM card_links_master_items WHERE store_id=? AND status='planned'",
+                (sid,),
+            ).fetchone()
+            solo = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM card_links_master_items WHERE store_id=? AND status='solo'",
+                (sid,),
+            ).fetchone()
+            bundles = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM card_links_master_bundles WHERE store_id=?",
+                (sid,),
+            ).fetchone()
+            return {
+                "total": int(total["n"]) if total else 0,
+                "planned_items": int(planned["n"]) if planned else 0,
+                "singles": int(solo["n"]) if solo else 0,
+                "bundles": int(bundles["n"]) if bundles else 0,
+            }

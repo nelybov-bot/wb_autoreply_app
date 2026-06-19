@@ -724,11 +724,48 @@
         </div>
         <div class="card-links-nav">
           <div class="segmented card-links-view-tabs" role="tablist" aria-label="Режим">
+            <button type="button" class="card-links-tab" data-cl-view="master" role="tab">Мастер связок</button>
             <button type="button" class="card-links-tab" data-cl-view="guide" role="tab">Справка</button>
             <button type="button" class="card-links-tab" data-cl-view="ai" role="tab">ИИ <span id="card-links-ai-badge" class="card-links-tab-badge" hidden></span></button>
             <button type="button" class="card-links-tab" data-cl-view="review" role="tab">Перепроверка <span id="card-links-review-badge" class="card-links-tab-badge" hidden></span></button>
             <button type="button" class="card-links-tab active" data-cl-view="catalog" role="tab">Каталог</button>
           </div>
+        </div>
+        <div id="card-links-master-panel" class="card-links-master-panel" hidden>
+          <div class="card-links-master-steps">
+            <button type="button" class="btn btn-secondary btn-sm clm-step" data-clm-step="load">1. Загрузить WB</button>
+            <button type="button" class="btn btn-secondary btn-sm clm-step" data-clm-step="brands">2. Бренды</button>
+            <button type="button" class="btn btn-secondary btn-sm clm-step" data-clm-step="segment">3. Сегмент</button>
+            <button type="button" class="btn btn-secondary btn-sm clm-step" data-clm-step="classify">4. Тип / модель</button>
+            <button type="button" class="btn btn-secondary btn-sm clm-step" data-clm-step="plan">5. План</button>
+            <button type="button" class="btn btn-secondary btn-sm btn-primary clm-step" data-clm-step="apply">6. Применить</button>
+          </div>
+          <p id="card-links-master-stats" class="form-hint card-links-master-stats">Выберите магазин WB и начните с шага 1.</p>
+          <div id="card-links-master-log" class="card-links-master-log" hidden></div>
+          <div class="card-links-master-filters">
+            <label><span class="toolbar-label">Сегмент</span>
+              <select id="clm-filter-segment" class="select-md"><option value="">Все</option><option value="cosmetic">Косметика</option><option value="home">Дом</option><option value="ikea">IKEA</option><option value="parts">Запчасти</option></select>
+            </label>
+            <label><span class="toolbar-label">Категория WB</span>
+              <select id="clm-filter-category" class="select-md"><option value="">Все</option></select>
+            </label>
+            <label><span class="toolbar-label">Бренд</span>
+              <select id="clm-filter-brand" class="select-md"><option value="">Все</option></select>
+            </label>
+            <label><span class="toolbar-label">На странице</span>
+              <select id="clm-page-size" class="select-md"><option value="100" selected>100</option><option value="200">200</option><option value="0">Все</option></select>
+            </label>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-clm-refresh">Обновить список</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-clm-select-all">Выбрать все</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-clm-clear">Снять</button>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-clm-apply-selected">Применить выбранные</button>
+          </div>
+          <div id="card-links-master-pagination" class="card-links-ai-pagination">
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-clm-page-prev">←</button>
+            <span id="clm-page-label" class="card-links-ai-page-label"></span>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-clm-page-next">→</button>
+          </div>
+          <div id="card-links-master-list" class="card-links-master-list"></div>
         </div>
         <details id="card-links-work-filter" class="card-links-work-filter" hidden>
           <summary class="card-links-work-filter-summary">Фильтры</summary>
@@ -1458,6 +1495,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=66"></script>
+  <script src="/static/app.js?v=67"></script>
+  <script src="/static/card_links_master.js?v=2"></script>
 </body>
 </html>

@@ -47,6 +47,9 @@
 | `buyer_chat_replies` | История ответов в чатах |
 | `card_error_alerts` | Ошибки карточек из отзывов/чатов |
 | `ozon_important_alerts` | Важные сообщения поддержки Ozon |
+| `card_links_master_items` | Кэш карточек WB для мастера связок |
+| `card_links_master_bundles` | План связок мастера (до 29 SKU) |
+| `card_links_master_state` | Шаги, лог, время загрузки каталога |
 
 ### Потокобезопасность
 
@@ -117,6 +120,17 @@
 Эвристики сопоставления названий: `_title_base_key`, `_titles_related_enough`, `_item_matches_group`, `_item_matches_group_attach`.
 
 Лимит: `MAX_LINK_ITEMS = 30`.
+
+### Card Links Master (`card_links_master.py`)
+
+Отдельный конвейер WB (вкладка «Мастер связок»), **не** заменяет ИИ/каталог/перепроверку:
+
+1. **Load** — каталог + группы в SQLite (`card_links_master_*`)
+2. **Brands / Segment / Classify** — правила + опционально OpenAI батчами по subject
+3. **Plan** — детерминированные связки до **29** SKU (IKEA / дом / косметика / запчасти)
+4. **Apply** — `wb_merge_cards(disconnect_first=True)`, крупные пачки первыми, store lock `card_links`
+
+Кэш: таблицы `card_links_master_items`, `card_links_master_bundles`, `card_links_master_state`.
 
 ### Безопасность секретов (`secret_mask.py`)
 

@@ -413,6 +413,107 @@ async def run_card_links_ai_suggest(
     return task_id
 
 
+async def run_card_links_master_step(
+    db: Any,
+    *,
+    store_id: int,
+    step: str,
+    api_key: str,
+    openai_key: str = "",
+    max_pages: int = 100,
+    bundle_ids: Optional[list] = None,
+) -> str:
+    from app.core.card_links_master import run_master_step
+    from app.core.net import HttpStatusError, UnauthorizedStoreError
+
+    task_id = _make_id()
+    labels = {
+        "load": "Загрузка WB",
+        "brands": "Бренды",
+        "segment": "Сегмент",
+        "classify": "Тип / модель",
+        "plan": "План связок",
+        "apply": "Применение",
+    }
+    sid = int(store_id)
+    sids = [sid]
+    lock_steps = {"load", "apply"}
+    if step in lock_steps:
+        try:
+            await store_locks.acquire(
+                sids, "card_links", task_id, store_names=_store_names(db, sids),
+            )
+        except StoreBusyError:
+            await store_locks.release_all_for_owner(task_id)
+            raise
+
+    ctrl = await _init_task(task_id, "card_links_master", labels.get(step, step), 1)
+    async with _tasks_lock:
+        _tasks[task_id]["store_ids"] = sids
+
+    def _progress(cur: int, tot: int, detail: str) -> None:
+        if _tasks.get(task_id, {}).get("status") != "running":
+            return
+        safe_tot = max(int(tot or 0), 1)
+        safe_cur = max(0, min(int(cur or 0), safe_tot))
+
+        async def _set() -> None:
+            async with _tasks_lock:
+                if task_id in _tasks:
+                    _tasks[task_id]["progress"] = [safe_cur, safe_tot]
+                    _tasks[task_id]["detail"] = detail
+
+        asyncio.create_task(_set())
+
+    async def _run() -> None:
+        try:
+            ctrl.raise_if_cancelled()
+            result = await run_master_step(
+                db,
+                sid,
+                step,
+                api_key=api_key,
+                openai_key=openai_key,
+                max_pages=max_pages,
+                bundle_ids=bundle_ids,
+                progress_cb=_progress,
+            )
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "done"
+                _tasks[task_id]["result"] = result
+                _tasks[task_id]["progress"] = [1, 1]
+                _tasks[task_id]["detail"] = f"Шаг «{labels.get(step, step)}» завершён"
+            _mark_finished(task_id, "done")
+        except asyncio.CancelledError:
+            async with _tasks_lock:
+                if task_id in _tasks and _tasks[task_id].get("status") == "running":
+                    _tasks[task_id]["status"] = "cancelled"
+                    _tasks[task_id]["error"] = "Остановлено пользователем"
+            _mark_finished(task_id, "cancelled")
+        except UnauthorizedStoreError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = f"Магазин «{e.store_name}»: неверный ключ или доступ запрещён."
+            _mark_finished(task_id, "error")
+        except HttpStatusError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e.body or e)[:400]
+            _mark_finished(task_id, "error")
+        except Exception as e:
+            log.exception("card_links_master step %s failed: %s", step, e)
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+        finally:
+            if step in lock_steps:
+                await store_locks.release(sids, task_id)
+
+    _handles[task_id] = asyncio.create_task(_run())
+    return task_id
+
+
 async def get_task(task_id: str) -> Optional[dict[str, Any]]:
     await _prune_tasks()
     async with _tasks_lock:

@@ -3911,6 +3911,104 @@ async def api_card_links_ozon_ai_suggest(
     return {"task_id": task_id, "status": "running"}
 
 
+class CardLinksMasterStepBody(BaseModel):
+    max_pages: int = 100
+    bundle_ids: list[str] = []
+
+
+@app.get("/api/card-links/master/{store_id}/status")
+def api_card_links_master_status(
+    store_id: int,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_permission("view_settings")),
+):
+    _require_wb_store_for_chats(db, store_id)
+    state = db.clm_get_state(store_id)
+    coverage = db.clm_coverage(store_id)
+    filters = db.clm_filter_options(store_id)
+    return {"ok": True, "state": state, "coverage": coverage, "filters": filters}
+
+
+@app.get("/api/card-links/master/{store_id}/bundles")
+def api_card_links_master_bundles(
+    store_id: int,
+    segment: str = Query(""),
+    brand: str = Query(""),
+    category: str = Query(""),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=5000),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_permission("view_settings")),
+):
+    _require_wb_store_for_chats(db, store_id)
+    offset = (page - 1) * page_size
+    bundles, total = db.clm_load_bundles(
+        store_id,
+        segment=segment.strip(),
+        brand=brand.strip(),
+        category=category.strip(),
+        limit=page_size,
+        offset=offset,
+    )
+    return {
+        "ok": True,
+        "bundles": bundles,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "page_count": max(1, (total + page_size - 1) // page_size),
+    }
+
+
+@app.get("/api/card-links/master/{store_id}/bundle-ids")
+def api_card_links_master_bundle_ids(
+    store_id: int,
+    segment: str = Query(""),
+    brand: str = Query(""),
+    category: str = Query(""),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_permission("view_settings")),
+):
+    _require_wb_store_for_chats(db, store_id)
+    ids = db.clm_list_bundle_ids(
+        store_id,
+        segment=segment.strip(),
+        brand=brand.strip(),
+        category=category.strip(),
+    )
+    return {"ok": True, "bundle_ids": ids, "total": len(ids)}
+
+
+@app.post("/api/card-links/master/{store_id}/step/{step_name}")
+async def api_card_links_master_step(
+    store_id: int,
+    step_name: str,
+    body: CardLinksMasterStepBody = CardLinksMasterStepBody(),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    s = _require_wb_store_for_chats(db, store_id)
+    step = (step_name or "").strip().lower()
+    allowed = {"load", "brands", "segment", "classify", "plan", "apply"}
+    if step not in allowed:
+        raise HTTPException(400, f"Шаг должен быть один из: {', '.join(sorted(allowed))}")
+    openai_key = (db.get_setting("openai_key") or "").strip()
+    bundle_ids = body.bundle_ids if step == "apply" else None
+    try:
+        task_id = await web_tasks.run_card_links_master_step(
+            db,
+            store_id=store_id,
+            step=step,
+            api_key=s.api_key,
+            openai_key=openai_key,
+            max_pages=min(int(body.max_pages or 100), 100),
+            bundle_ids=bundle_ids,
+        )
+    except StoreBusyError as e:
+        raise HTTPException(409, str(e)) from e
+    return {"task_id": task_id, "status": "running", "step": step}
+
+
 # ---------- API: stats ----------
 @app.get("/api/stats")
 def api_stats(db: Database = Depends(get_db), _: UserRow = Depends(require_user)):

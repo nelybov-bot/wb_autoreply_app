@@ -199,6 +199,10 @@
 | POST | `/api/card-links/ozon/{store_id}/link-qty-table` | Связка по таблице количеств (TMS) |
 | POST | `/api/card-links/wb/{store_id}/ai-suggest` | ИИ-подсказки WB |
 | POST | `/api/card-links/ozon/{store_id}/ai-suggest` | ИИ-подсказки Ozon |
+| GET | `/api/card-links/master/{store_id}/status` | Статус мастера связок (шаги, покрытие, фильтры) |
+| GET | `/api/card-links/master/{store_id}/bundles` | План связок (пагинация, фильтры) |
+| GET | `/api/card-links/master/{store_id}/bundle-ids` | ID всех связок плана (для «выбрать все») |
+| POST | `/api/card-links/master/{store_id}/step/{name}` | Шаг: `load` / `brands` / `segment` / `classify` / `plan` / `apply` → `{ task_id }` |
 | GET | `/api/card-links/ai-prompt/{marketplace}` | Системный промпт ИИ (`wb` / `ozon`) |
 | PUT | `/api/card-links/ai-prompt/{marketplace}` | Сохранить промпт ИИ |
 

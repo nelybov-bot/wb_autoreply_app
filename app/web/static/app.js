@@ -4469,7 +4469,9 @@
       btn.classList.toggle('active', btn.getAttribute('data-cl-view') === cardLinksView);
     });
     renderCardLinksGuide();
-    if (tableWrap) tableWrap.hidden = cardLinksView === 'guide';
+    if (tableWrap) tableWrap.hidden = cardLinksView === 'guide' || cardLinksView === 'master';
+    const masterPanel = document.getElementById('card-links-master-panel');
+    if (masterPanel) masterPanel.hidden = cardLinksView !== 'master';
     if (!table) return;
     table.classList.toggle('card-links--candidates', cardLinksView === 'review' || cardLinksView === 'ai');
     table.classList.toggle('card-links--catalog', cardLinksView === 'catalog');
@@ -5885,6 +5887,9 @@
       btn.addEventListener('click', () => {
         cardLinksView = btn.getAttribute('data-cl-view') || 'catalog';
         document.querySelectorAll('.card-links-tab').forEach(b => b.classList.toggle('active', b === btn));
+        if (cardLinksView === 'master' && typeof window.cardLinksMasterOnShow === 'function') {
+          window.cardLinksMasterOnShow();
+        }
         renderCardLinksTable();
       });
     });

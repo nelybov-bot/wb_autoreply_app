@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-06-19 — Мастер связок WB (новая вкладка)
+
+### Backend
+- `app/core/card_links_master.py` — 6 шагов: load → brands → segment → classify → plan → apply
+- SQLite-кэш: `card_links_master_items/bundles/state`, CRUD `clm_*` в `db.py`
+- План: лимит **29**, сегменты cosmetic/home/ikea/parts, укрупнение мелких пачек 3–9
+- Apply: moving-only disconnect, пропуск «уже в imtID», store lock `card_links`, статусы applied/skipped/failed
+
+### API / UI
+- `/api/card-links/master/{store_id}/*` — status, bundles, bundle-ids, step/{name}
+- Вкладка «Мастер связок», `card_links_master.js`, стили `.clm-*`
+- «Выбрать все» через `/bundle-ids` (весь план с учётом фильтров)
+
+---
+
 ## 2026-06-19 — Категория только из WB (+ hotfix NameError)
 
 - Откат подмены категории по названию; исправлен оставшийся вызов `_items_display_category_label` в `consolidate_ai_bundle_previews`
