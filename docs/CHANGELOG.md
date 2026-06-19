@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-06-19 — Fix master load: apply_link_status extra arg
+
+- `card_links_master.py`: убран несуществующий `marketplace=` в вызове `apply_link_status` (TypeError на шаге Load)
+
+---
+
 ## 2026-06-19 — Мастер связок WB (новая вкладка)
 
 ### Backend

@@ -211,7 +211,7 @@ async def master_step_load(
         progress_cb(0, 1, "Загрузка каталога WB…")
     rows, meta = await fetch_wb_catalog(api_key.strip(), max_pages=max_pages)
     groups = group_wb_rows(rows)
-    apply_link_status(rows, groups, marketplace="wb")
+    apply_link_status(rows, groups)
     if progress_cb:
         progress_cb(1, 1, f"Загружено {len(rows)} карточек")
     return rows, groups, meta
