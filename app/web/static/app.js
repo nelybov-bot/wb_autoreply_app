@@ -2855,6 +2855,96 @@
     return `${art} · ${title}`;
   }
 
+  const _AUTO_LINK_PARTS_RE = /запчаст|стекл|шлейф|батаре|аккумулятор|чехол|плёнк|пленк|защитн|диспле|камер|разъём|разъем|кабел|наушник|адаптер|iphone|samsung|xiaomi|redmi|huawei|honor|realme|vivo|asus|oppo|oneplus|nokia|motorola|tecno|infinix|poco/i;
+  const _AUTO_LINK_PHONE_MODEL_RE = new RegExp(
+    '(?:iphone|айфон)\\s*(\\d{1,2}(?:\\s*(?:pro|max|plus|mini|se))*)|'
+    + '(?:galaxy|samsung)\\s*([a-z]?\\d{2,4}[a-z]?\\d?)|'
+    + '(?:redmi|xiaomi|poco)\\s*(\\w+\\s*\\d+)|'
+    + '(?:honor|huawei|realme|vivo|oppo|oneplus|asus|nokia|motorola|tecno|infinix)\\s*(\\w+\\s*\\d+)|'
+    + '\\b([a-z]{1,2}\\d{3,4}[a-z]?)\\b',
+    'i',
+  );
+
+  function cardLinksAutoLinkIsParts(it) {
+    const subj = `${it?.subject_name || ''} ${it?.parent_name || ''} ${it?.title || ''}`.toLowerCase();
+    return _AUTO_LINK_PARTS_RE.test(subj);
+  }
+
+  function cardLinksAutoLinkPhoneModel(it) {
+    const raw = String(it?.phone_model || '').trim().toLowerCase();
+    if (raw) return raw.replace(/\s+/g, ' ').slice(0, 80);
+    const title = String(it?.title || '').toLowerCase();
+    const m = title.match(_AUTO_LINK_PHONE_MODEL_RE);
+    if (!m) return '';
+    for (let i = 1; i < m.length; i += 1) {
+      if (m[i]) return m[i].trim().replace(/\s+/g, ' ').slice(0, 80);
+    }
+    return '';
+  }
+
+  function cardLinksAutoLinkSubGroupKey(it) {
+    const sid = intOr0(it?.subject_id);
+    const pid = intOr0(it?.parent_id);
+    const isParts = cardLinksAutoLinkIsParts(it);
+    if (sid > 0) {
+      let key = `sid:${sid}:pid:${pid}`;
+      if (isParts) key += `:model:${cardLinksAutoLinkPhoneModel(it) || 'unknown'}`;
+      return key;
+    }
+    if (isParts) {
+      const model = cardLinksAutoLinkPhoneModel(it);
+      if (model) return `parts-model:${model}:pid:${pid}`;
+      return `solo:nm:${intOr0(it?.nm_id)}`;
+    }
+    const sn = String(it?.subject_name || '').trim().toLowerCase();
+    if (sn) return `sn:${sn}:pid:${pid}`;
+    return `solo:nm:${intOr0(it?.nm_id)}`;
+  }
+
+  function cardLinksAutoLinkIsSubjectMixError(err) {
+    return /разные предметы|subjectid|subject_id|не определён предмет/i.test(String(err || ''));
+  }
+
+  function cardLinksAutoLinkResplitItems(items) {
+    const byKey = new Map();
+    for (const it of items || []) {
+      const sid = intOr0(it.subject_id);
+      const isParts = cardLinksAutoLinkIsParts(it);
+      let key;
+      if (sid > 0) {
+        key = `sid:${sid}:pid:${intOr0(it.parent_id)}`;
+        if (isParts) key += `:model:${cardLinksAutoLinkPhoneModel(it) || 'unknown'}`;
+      } else if (isParts) {
+        key = `parts-model:${cardLinksAutoLinkPhoneModel(it) || `nm:${intOr0(it.nm_id)}`}`;
+      } else {
+        key = `sn:${String(it.subject_name || '').trim().toLowerCase()}:pid:${intOr0(it.parent_id)}`;
+      }
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push(it);
+    }
+    return [...byKey.values()];
+  }
+
+  function cardLinksAutoLinkChunkBatches(groupMeta, subItems, subjectMeta = {}) {
+    const out = [];
+    if (!subItems || subItems.length < 2) return out;
+    const parts = Math.ceil(subItems.length / MAX_LINK_ITEMS);
+    for (let i = 0; i < subItems.length; i += MAX_LINK_ITEMS) {
+      const chunk = subItems.slice(i, i + MAX_LINK_ITEMS);
+      if (chunk.length < 2) continue;
+      out.push({
+        category_label: groupMeta.category_label,
+        brand: groupMeta.brand,
+        subject_label: subjectMeta.subject_label || String(chunk[0]?.subject_name || chunk[0]?.subject_id || '—').trim(),
+        subject_id: intOr0(subjectMeta.subject_id || chunk[0]?.subject_id),
+        part: Math.floor(i / MAX_LINK_ITEMS) + 1,
+        parts,
+        items: chunk,
+      });
+    }
+    return out;
+  }
+
   function cardLinksBuildAutoLinkPlan() {
     const mp = cardLinksMarketplace();
     const items = cardLinksCatalogFilteredItems(true);
@@ -2875,53 +2965,41 @@
     const groups = [];
 
     for (const group of byCatBrand.values()) {
-      const bySubject = new Map();
+      const bySubGroup = new Map();
       for (const it of group.items) {
-        const sid = intOr0(it.subject_id);
-        const subjKey = sid > 0
-          ? `s:${sid}:p:${intOr0(it.parent_id)}`
-          : `sn:${String(it.subject_name || '').trim().toLowerCase()}`;
-        if (!bySubject.has(subjKey)) {
-          bySubject.set(subjKey, {
-            subject_id: sid,
+        const subjKey = cardLinksAutoLinkSubGroupKey(it);
+        if (!bySubGroup.has(subjKey)) {
+          bySubGroup.set(subjKey, {
+            subject_id: intOr0(it.subject_id),
             subject_label: String(it.subject_name || it.subject_id || subjKey).trim(),
             items: [],
           });
         }
-        bySubject.get(subjKey).items.push(it);
+        bySubGroup.get(subjKey).items.push(it);
       }
 
       const groupInfo = {
         category_label: group.category_label,
         brand: group.brand,
         total_items: group.items.length,
-        subject_count: bySubject.size,
+        subject_count: bySubGroup.size,
         batches: [],
       };
 
-      for (const sub of bySubject.values()) {
+      for (const sub of bySubGroup.values()) {
         if (sub.items.length === 1) {
           skippedSingles.push({
             category_label: group.category_label,
             brand: group.brand,
             item: sub.items[0],
-            reason: 'один товар в subject — связка мин. 2',
+            reason: sub.items[0] && cardLinksAutoLinkIsParts(sub.items[0]) && !cardLinksAutoLinkPhoneModel(sub.items[0])
+              ? 'одиночка (запчасть без модели) — связка мин. 2'
+              : 'один товар в группе — связка мин. 2',
           });
           continue;
         }
-        const parts = Math.ceil(sub.items.length / MAX_LINK_ITEMS);
-        for (let i = 0; i < sub.items.length; i += MAX_LINK_ITEMS) {
-          const chunk = sub.items.slice(i, i + MAX_LINK_ITEMS);
-          if (chunk.length < 2) continue;
-          const batch = {
-            category_label: group.category_label,
-            brand: group.brand,
-            subject_label: sub.subject_label,
-            subject_id: sub.subject_id,
-            part: Math.floor(i / MAX_LINK_ITEMS) + 1,
-            parts,
-            items: chunk,
-          };
+        const chunkBatches = cardLinksAutoLinkChunkBatches(group, sub.items, sub);
+        for (const batch of chunkBatches) {
           batches.push(batch);
           groupInfo.batches.push(batch);
         }
@@ -2971,7 +3049,8 @@
     if (!confirm(
       `Автосвязка одиночных:\n`
       + `• ${totalUnlinked} одиночных → ${batches.length} операций (${totalItems} товаров)\n`
-      + `• Группировка: категория + бренд, до ${MAX_LINK_ITEMS} в пачке\n`
+      + `• Группировка: категория + бренд + subject; запчасти — по модели телефона\n`
+      + `• При ошибке subjectID — перепроверка и разбивка пачки\n`
       + `• Ошибки пропускаются, всё пишется в лог\n`
       + `• Пауза ~${pauseSec} с между запросами\n\n`
       + `${groupPreview}${more}\n\nПродолжить?`,
@@ -2998,27 +3077,38 @@
     let ok = 0;
     let fail = 0;
     let lastErr = '';
+    const queue = batches.map((batch, idx) => ({
+      batch,
+      label: `Пачка ${idx + 1}/${batches.length}`,
+      depth: 0,
+    }));
+    let resplitSingles = 0;
 
     try {
-      for (let i = 0; i < batches.length; i++) {
-        const batch = batches[i];
+      for (let qi = 0; qi < queue.length; qi += 1) {
+        const job = queue[qi];
+        const batch = job.batch;
         const nmList = batch.items.map((it) => intOr0(it.nm_id)).filter((x) => x > 0);
         const arts = batch.items.map((it) => cardLinksAutoLinkItemSummary(it, mp)).join('; ');
         const targetImt = Number(batch.items[0]?.imt_id || 0);
+        const modelHint = cardLinksAutoLinkIsParts(batch.items[0])
+          ? cardLinksAutoLinkPhoneModel(batch.items[0])
+          : '';
 
         setCardLinksStatus(
-          `Автосвязка ${i + 1}/${batches.length}: ${batch.category_label} · ${batch.brand} (${batch.items.length} шт.)`,
+          `Автосвязка ${qi + 1}/${queue.length}: ${batch.category_label} · ${batch.brand} (${batch.items.length} шт.)`,
         );
         cardLinksAutoLinkLogLine(
-          `Пачка ${i + 1}/${batches.length}: «${batch.category_label}» · ${batch.brand} · subject «${batch.subject_label}»`
+          `${job.label}: «${batch.category_label}» · ${batch.brand} · subject «${batch.subject_label}»`
+          + (modelHint ? ` · модель «${modelHint}»` : '')
           + ` · часть ${batch.part}/${batch.parts} · ${batch.items.length} шт · imtID ${targetImt || 'новая'}`,
         );
         cardLinksAutoLinkLogLine(`  nmID: ${nmList.join(', ')}`);
         cardLinksAutoLinkLogLine(`  ${arts}`);
 
-        const batchId = `catalog-auto-${i + 1}-${Date.now()}`;
+        const batchId = `catalog-auto-${qi + 1}-${Date.now()}`;
         const cand = cardLinksCandidateFromCatalogItems(batch.items, batchId);
-        cardLinksAutoLinkLogLine(`  → Отправка в WB…`);
+        cardLinksAutoLinkLogLine('  → Отправка в WB…');
 
         const res = await mergeSelectedCardLinks({
           candidate: cand,
@@ -3041,9 +3131,48 @@
           cardLinksAutoLinkLogLine('  — отменено пользователем', 'warn');
           break;
         } else {
-          fail += 1;
           const err = res?.error || 'неизвестная ошибка';
           lastErr = err;
+          if (cardLinksAutoLinkIsSubjectMixError(err) && job.depth < 2 && batch.items.length >= 2) {
+            const groups = cardLinksAutoLinkResplitItems(batch.items);
+            const viable = groups.filter((g) => g.length >= 2);
+            const splitCount = viable.length;
+            const splitItems = viable.reduce((s, g) => s + g.length, 0);
+            const actuallySplit = splitCount > 1 || (splitCount === 1 && splitItems < batch.items.length);
+            if (actuallySplit && splitCount) {
+              cardLinksAutoLinkLogLine(
+                `  ↻ Перепроверка subject/модель: ${batch.items.length} шт → ${splitCount} под-пачек`,
+                'warn',
+              );
+              for (const subItems of groups) {
+                if (subItems.length < 2) {
+                  resplitSingles += 1;
+                  cardLinksAutoLinkLogLine(
+                    `  ↻ Одиночка после перепроверки: ${cardLinksAutoLinkItemSummary(subItems[0], mp)}`,
+                    'warn',
+                  );
+                  continue;
+                }
+                const subBatches = cardLinksAutoLinkChunkBatches(
+                  { category_label: batch.category_label, brand: batch.brand },
+                  subItems,
+                  {
+                    subject_id: intOr0(subItems[0]?.subject_id),
+                    subject_label: String(subItems[0]?.subject_name || subItems[0]?.subject_id || batch.subject_label).trim(),
+                  },
+                );
+                for (const sb of subBatches) {
+                  queue.push({
+                    batch: sb,
+                    label: `↻ ${job.label}`,
+                    depth: job.depth + 1,
+                  });
+                }
+              }
+              continue;
+            }
+          }
+          fail += 1;
           cardLinksAutoLinkLogLine(`  ✗ Ошибка: ${err}`, 'error');
           if (res?.rateLimited) {
             cardLinksAutoLinkLogLine('  ⏳ Лимит WB — пауза 60 с, затем следующая пачка', 'warn');
@@ -3052,16 +3181,17 @@
           }
         }
 
-        if (i < batches.length - 1) {
+        if (qi < queue.length - 1) {
           await new Promise((r) => setTimeout(r, CARD_LINKS_ACTION_COOLDOWN_MS));
         }
       }
 
-      cardLinksAutoLinkLogLine(`=== Итог: OK ${ok} · ошибок ${fail} · пропущено одиночек ${skippedSingles.length} ===`, ok > 0 ? 'ok' : (fail ? 'error' : 'info'));
+      const skippedTotal = skippedSingles.length + resplitSingles;
+      cardLinksAutoLinkLogLine(`=== Итог: OK ${ok} · ошибок ${fail} · пропущено одиночек ${skippedTotal} ===`, ok > 0 ? 'ok' : (fail ? 'error' : 'info'));
       if (ok > 0) cardLinksStartCooldown();
       const errTail = lastErr ? `\nПоследняя ошибка: ${lastErr}` : '';
       toast(
-        `Автосвязка: OK ${ok} · ошибок ${fail} · пропусков ${skippedSingles.length}${errTail}`,
+        `Автосвязка: OK ${ok} · ошибок ${fail} · пропусков ${skippedTotal}${errTail}`,
         ok > 0 ? 'success' : (fail ? 'error' : 'info'),
       );
       if (ok > 0) cardLinksAfterMergeHint();
@@ -4896,7 +5026,7 @@
         <li><strong>Загрузите каталог</strong> — дальше работа только вручную, без автоперезагрузки.</li>
         <li><strong>Фильтр:</strong> бренд → категория → «Только без связки». Скрывайте ненужные категории (запчасти и т.п.).</li>
         <li><strong>Читайте названия</strong> в каталоге: одна категория ≠ одна связка. Делите по смыслу названия.</li>
-        <li><strong>Каталог:</strong> «Автосвязка одиночных» — категория + бренд, пачки до ${MAX_LINK_ITEMS}, подробный лог под таблицей.</li>
+        <li><strong>Каталог:</strong> «Автосвязка одиночных» — категория + бренд + subject; запчасти по модели телефона; при ошибке subjectID — перепроверка и разбивка; подробный лог под таблицей.</li>
         <li><strong>ИИ</strong> — вкладка «ИИ»: анализ названий и текущих связок, правка предложений, пакетное применение.</li>
         <li><strong>Мелкие связки (2 шт.)</strong> — вкладка «Перепроверка» → «Запустить перепроверку».</li>
       </ol>

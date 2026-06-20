@@ -75,9 +75,85 @@ _TITLE_BRUSH_RE = re.compile(r"щетк", re.I)
 _TITLE_SPONGE_RE = re.compile(r"губк", re.I)
 _SUBJECT_SPONGE_RE = re.compile(r"губк", re.I)
 
+AI_CLASSIFY_BATCH_SIZE = 20
+AI_TITLE_MAX_CHARS = 72
+
+_CLASSIFY_SYS_COSMETIC = (
+    "Классифицируй косметику для группировки SKU одной линейки. "
+    'Верни JSON-массив: {"nm_id":123,"subtype":"крем для лица"}. '
+    "subtype — 2–5 слов на русском: зона (лицо/руки/глаз/тело/волосы/ноги/губы) + формат "
+    "(крем/гель/дезодорант/маска/лак/воск/сыворотка/салфетки/шампунь). "
+    "Разные зоны и форматы — разные subtype. Только JSON, без markdown."
+)
+
+_CLASSIFY_SYS_PARTS = (
+    "Извлеки модель телефона из названия запчасти. "
+    'Верни JSON-массив: {"nm_id":123,"phone_model":"samsung a52"}. '
+    "phone_model — бренд+модель строчными, без памяти/цвета. "
+    'Если модель неясна — "unknown". Только JSON, без markdown.'
+)
+
 
 def _title_hash(title: str) -> str:
     return hashlib.sha256((title or "").encode("utf-8")).hexdigest()[:16]
+
+
+def _compact_title_for_ai(title: str, max_len: int = AI_TITLE_MAX_CHARS) -> str:
+    """Сжать шумное название WB для промпта ИИ (без потери зоны/формата в начале)."""
+    t = re.sub(r"\s+", " ", (title or "").strip())
+    if len(t) <= max_len:
+        return t
+    for sep in (" | ", " / ", ", ", "; "):
+        if sep in t:
+            chunk = sep.join(t.split(sep)[:3]).strip()
+            if len(chunk) <= max_len:
+                return chunk
+            cut = chunk[:max_len].rsplit(" ", 1)[0]
+            return cut or chunk[:max_len]
+    cut = t[:max_len].rsplit(" ", 1)[0]
+    return cut or t[:max_len]
+
+
+def _parse_ai_classify_json(raw: str) -> List[dict]:
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```\w*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text)
+    parsed = json.loads(text)
+    if isinstance(parsed, dict):
+        for key in ("items", "results", "data"):
+            inner = parsed.get(key)
+            if isinstance(inner, list):
+                return inner
+        return [parsed]
+    if isinstance(parsed, list):
+        return parsed
+    return []
+
+
+def _apply_ai_classify_chunk(
+    chunk: List[dict],
+    parsed: List[dict],
+    meta: dict,
+) -> None:
+    by_nm = {int(x.get("nm_id") or 0): x for x in chunk}
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        nid = int(item.get("nm_id") or 0)
+        row = by_nm.get(nid)
+        if not row:
+            continue
+        if str(row.get("segment")) == SEGMENT_PARTS:
+            m = str(item.get("phone_model") or "").strip().lower()
+            if m and m != "unknown":
+                row["phone_model"] = m[:80]
+                meta["ai_filled"] += 1
+        elif str(row.get("segment")) == SEGMENT_COSMETIC:
+            st = str(item.get("subtype") or "").strip()
+            if st and st.lower() not in ("", "косметика", "unknown"):
+                row["subtype"] = st[:80]
+                meta["ai_filled"] += 1
 
 
 def _normalize_phone_model(title: str, raw: str = "") -> str:
@@ -275,60 +351,59 @@ async def master_step_classify(
         return rows, meta
 
     client = OpenAIClient(openai_key.strip())
-    batches: Dict[int, List[dict]] = defaultdict(list)
+    batch_groups: Dict[Tuple[int, str, str], List[dict]] = defaultdict(list)
     for r in need_ai:
-        batches[int(r.get("subject_id") or 0)].append(r)
-    total = len(batches)
+        seg = str(r.get("segment") or "")
+        sid = int(r.get("subject_id") or 0)
+        brand = _row_brand_key(r) if seg == SEGMENT_COSMETIC else ""
+        batch_groups[(sid, seg, brand)].append(r)
+
+    chunks_total = sum(
+        (len(batch) + AI_CLASSIFY_BATCH_SIZE - 1) // AI_CLASSIFY_BATCH_SIZE
+        for batch in batch_groups.values()
+    )
     done = 0
-    for sid, batch in batches.items():
-        if len(batch) < 1:
-            continue
-        done += 1
-        if progress_cb:
-            progress_cb(done, max(total, 1), f"ИИ: subject {sid} ({len(batch)} шт)")
-        payload = [
-            {
-                "nm_id": int(x.get("nm_id") or 0),
-                "title": str(x.get("title") or "")[:120],
-                "segment": str(x.get("segment") or ""),
+    for (sid, seg, brand), batch in batch_groups.items():
+        sys_p = _CLASSIFY_SYS_COSMETIC if seg == SEGMENT_COSMETIC else _CLASSIFY_SYS_PARTS
+        subject_ctx = str(batch[0].get("subject_name") or "")[:60]
+        for i in range(0, len(batch), AI_CLASSIFY_BATCH_SIZE):
+            chunk = batch[i : i + AI_CLASSIFY_BATCH_SIZE]
+            done += 1
+            if progress_cb:
+                label = f"{seg} subject {sid}"
+                if brand:
+                    label += f" · {brand}"
+                progress_cb(done, max(chunks_total, 1), f"ИИ: {label} ({len(chunk)} шт)")
+            payload = {
+                "subject": subject_ctx,
+                "segment": seg,
+                "items": [
+                    {
+                        "nm_id": int(x.get("nm_id") or 0),
+                        "title": _compact_title_for_ai(str(x.get("title") or "")),
+                        **(
+                            {"brand": str(x.get("brand") or brand)[:40]}
+                            if seg == SEGMENT_COSMETIC
+                            else {}
+                        ),
+                    }
+                    for x in chunk
+                ],
             }
-            for x in batch[:80]
-        ]
-        sys_p = (
-            "Верни JSON-массив объектов: "
-            '{"nm_id":123,"subtype":"крем для рук"} для косметики или '
-            '{"nm_id":123,"phone_model":"samsung a52"} для запчастей. '
-            "Только JSON, без markdown."
-        )
-        try:
-            raw = await client.generate(sys_p, json.dumps(payload, ensure_ascii=False))
-            text = (raw or "").strip()
-            if text.startswith("```"):
-                text = re.sub(r"^```\w*\n?", "", text)
-                text = re.sub(r"\n?```$", "", text)
-            parsed = json.loads(text)
-            if isinstance(parsed, list):
-                by_nm = {int(x.get("nm_id") or 0): x for x in batch}
-                for item in parsed:
-                    if not isinstance(item, dict):
-                        continue
-                    nid = int(item.get("nm_id") or 0)
-                    if nid not in by_nm:
-                        continue
-                    row = by_nm[nid]
-                    if str(row.get("segment")) == SEGMENT_PARTS:
-                        m = str(item.get("phone_model") or "").strip().lower()
-                        if m:
-                            row["phone_model"] = m[:80]
-                            meta["ai_filled"] += 1
-                    elif str(row.get("segment")) == SEGMENT_COSMETIC:
-                        st = str(item.get("subtype") or "").strip()
-                        if st:
-                            row["subtype"] = st[:80]
-                            meta["ai_filled"] += 1
+            try:
+                raw = await client.generate(sys_p, json.dumps(payload, ensure_ascii=False))
+                parsed = _parse_ai_classify_json(raw)
+                _apply_ai_classify_chunk(chunk, parsed, meta)
                 meta["ai_batches"] += 1
-        except Exception as e:
-            log.warning("master classify AI subject %s: %s", sid, e)
+            except Exception as e:
+                log.warning(
+                    "master classify AI subject %s seg %s brand %s chunk %s: %s",
+                    sid,
+                    seg,
+                    brand or "-",
+                    i // AI_CLASSIFY_BATCH_SIZE + 1,
+                    e,
+                )
 
     for r in rows:
         if str(r.get("segment")) == SEGMENT_PARTS and not r.get("phone_model"):

@@ -1949,6 +1949,48 @@ _PRODUCT_USE_PATTERNS: List[Tuple[str, str]] = [
         r"face\s+creams?|gesichtscreme|"
         r"дневной\s+крем|ночной\s+крем|увлажняющий\s+крем",
     ),
+    (
+        "eye",
+        r"крем\s+для\s+глаз|крем\s+вокруг\s+глаз|"
+        r"eye\s+cream|augencreme|augen\s+pflege|contour\s+des\s+yeux",
+    ),
+    (
+        "deodorant",
+        r"дезодорант|deospray|deodorant|antiperspirant|deo\s+spray",
+    ),
+    (
+        "mask_face",
+        r"маска\s+для\s+лица|tuchmaske|gesichtsmaske|face\s+mask|sheet\s+mask",
+    ),
+    (
+        "wipes",
+        r"салфетк|wet\s+wipes|feuchttücher|reinigungstücher|cleansing\s+wipes",
+    ),
+    (
+        "wax",
+        r"воск\s+для|depil\w*|hair\s+remov\w*|enthaar\w*|wachs\s+streifen",
+    ),
+    (
+        "nail",
+        r"лак\s+для\s+ногт|nagellack|nail\s+polish|nail\s+varnish",
+    ),
+    (
+        "serum",
+        r"сыворотк|serum\s+f|gesichtsserum|face\s+serum",
+    ),
+    (
+        "cleanser",
+        r"мицелляр|micellar|очищающ\w*\s+(?:гель|молочко|средство)|"
+        r"reinigungs(?:gel|milch|wasser)|cleansing\s+(?:gel|milk|water)",
+    ),
+    (
+        "mousse_hair",
+        r"мусс\s+для\s+волос|haarmousse|styling\s+mousse|mousse\s+coiffante",
+    ),
+    (
+        "teeth",
+        r"зубн\w*\s+паст|toothpaste|zahnpasta|mundspül|mouthwash",
+    ),
 ]
 
 _CATEGORY_USE_HINTS: List[Tuple[str, str]] = [
@@ -1961,6 +2003,15 @@ _CATEGORY_USE_HINTS: List[Tuple[str, str]] = [
     ("feet", r"для\s+ног"),
     ("body", r"для\s+тела|душ|duschgel|duschcreme|körper"),
     ("face", r"для\s+лица|gesicht"),
+    ("eye", r"глаз|augen"),
+    ("deodorant", r"дезодорант|deodorant|deo"),
+    ("mask_face", r"маск|mask"),
+    ("wipes", r"салфет|wipes|tücher"),
+    ("nail", r"лак|nagel"),
+    ("serum", r"сыворот|serum"),
+    ("cleanser", r"очища|cleans|мицелл|reinigung"),
+    ("wax", r"воск|depil|enthaar|wachs"),
+    ("teeth", r"зубн|tooth|zahn"),
 ]
 
 _USE_BUCKET_MERGEABLE = frozenset(
@@ -1974,6 +2025,16 @@ _USE_BUCKET_MERGEABLE = frozenset(
         "hair_rinse",
         "hair",
         "hair_gel",
+        "eye",
+        "deodorant",
+        "mask_face",
+        "wipes",
+        "wax",
+        "nail",
+        "serum",
+        "cleanser",
+        "mousse_hair",
+        "teeth",
         "balm_unspecified",
         "cream_unspecified",
         "brand_general",
@@ -1997,6 +2058,16 @@ _USE_BUCKET_LABEL_RU: Dict[str, str] = {
     "feet": "для ног",
     "body": "для тела",
     "face": "для лица",
+    "eye": "крем для глаз",
+    "deodorant": "дезодорант",
+    "mask_face": "маска для лица",
+    "wipes": "салфетки",
+    "wax": "воск для депиляции",
+    "nail": "лак для ногтей",
+    "serum": "сыворотка",
+    "cleanser": "очищение",
+    "mousse_hair": "мусс для волос",
+    "teeth": "уход за зубами",
     "hair_rinse": "для волос (ополаскиватель)",
     "hair": "для волос",
     "hair_gel": "гель для волос",
