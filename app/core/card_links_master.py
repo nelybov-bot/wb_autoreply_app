@@ -569,7 +569,7 @@ def master_step_plan(rows: List[dict]) -> Tuple[List[dict], List[dict], dict]:
         "singles": singles,
         "pending": len(rows) - covered - singles,
     }
-    return out
+    return rows, bundles_out, meta
 
 
 def master_merge_bundles(
@@ -893,11 +893,10 @@ async def run_master_step(
     from app.db import utc_now_iso
 
     sid = int(store_id)
-    st = db.clm_get_state(sid)
-    steps = dict(st.get("steps") or {})
 
     if step == STEP_LOAD:
         db.clm_clear_store(sid)
+        steps: dict = {}
         rows, groups, meta = await master_step_load(
             api_key, max_pages=max_pages, progress_cb=progress_cb,
         )
@@ -910,6 +909,8 @@ async def run_master_step(
         cov = db.clm_coverage(sid)
         return {"step": step, "coverage": cov, "meta": meta}
 
+    st = db.clm_get_state(sid)
+    steps = dict(st.get("steps") or {})
     rows = _clm_ensure_items_cache(db, sid, steps)
 
     if step == STEP_BRANDS:

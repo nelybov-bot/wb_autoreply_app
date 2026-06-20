@@ -311,7 +311,18 @@
       )) return;
     }
     try {
-      setStats('Запуск…');
+      if (step === 'load') {
+        selected.clear();
+        updateMergeButton();
+        setLog([]);
+        setStats('Загрузка каталога WB…');
+        const list = document.getElementById('card-links-master-list');
+        if (list) {
+          list.innerHTML = '<p class="empty-cell empty-cell--muted">Загрузка каталога…</p>';
+        }
+      } else {
+        setStats('Запуск…');
+      }
       const body = { max_pages: step === 'load' ? masterMaxPages() : 100, ...extraBody };
       if (step === 'apply') {
         body.bundle_ids = selected.size ? [...selected] : [];

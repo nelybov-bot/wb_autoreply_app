@@ -4038,6 +4038,8 @@ async def api_card_links_master_step(
         raise HTTPException(400, f"Шаг должен быть один из: {', '.join(sorted(allowed))}")
     openai_key = (db.get_setting("openai_key") or "").strip()
     bundle_ids = body.bundle_ids if step == "apply" else None
+    if step == "load":
+        db.clm_clear_store(store_id)
     try:
         task_id = await web_tasks.run_card_links_master_step(
             db,

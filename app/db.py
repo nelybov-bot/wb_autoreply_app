@@ -1752,10 +1752,12 @@ class Database:
 
     # ---------- Card links master (WB) ----------
     def clm_clear_store(self, store_id: int) -> None:
+        """Полный сброс кэша мастера: карточки, план, шаги и журнал."""
         with _DB_LOCK:
             sid = int(store_id)
             self._conn.execute("DELETE FROM card_links_master_items WHERE store_id=?", (sid,))
             self._conn.execute("DELETE FROM card_links_master_bundles WHERE store_id=?", (sid,))
+            self._conn.execute("DELETE FROM card_links_master_state WHERE store_id=?", (sid,))
             self._conn.commit()
 
     def clm_save_items(self, store_id: int, rows: list[dict]) -> None:
