@@ -264,7 +264,13 @@
         if (t.status === 'done') {
           await refreshStatus();
           await loadBundles();
-          onDone(null, t.result || {});
+          const result = t.result || {};
+          if (result.step === 'load' && result.meta?.truncated) {
+            setStats(
+              `Загружено ${result.meta?.count || result.coverage?.total || '?'} — не всё: лимит ${result.meta?.max_pages || '?'} стр. Увеличьте «Страниц каталога WB» сверху.`,
+            );
+          }
+          onDone(null, result);
         } else {
           onDone(t.error || 'Ошибка задачи');
         }
@@ -273,6 +279,15 @@
         onDone(e.message || String(e));
       }
     }, 1200);
+  }
+
+  function masterMaxPages() {
+    if (typeof window.cardLinksMaxPages === 'function') {
+      return window.cardLinksMaxPages();
+    }
+    const el = document.getElementById('card-links-max-pages');
+    const v = Number(el?.value || 0);
+    return v > 0 ? v : 150;
   }
 
   async function runStep(step, extraBody = {}) {
@@ -288,11 +303,16 @@
         : 'Применить все связки из плана?';
       if (!confirm(msg)) return;
     } else if (step === 'load') {
-      if (!confirm('Загрузить каталог WB? Текущий кэш мастера будет заменён.')) return;
+      const pages = masterMaxPages();
+      const approx = pages * 100;
+      if (!confirm(
+        `Загрузить каталог WB (до ${approx.toLocaleString('ru-RU')} карточек, ${pages} стр.)?\n`
+        + 'Текущий кэш мастера будет заменён. Фильтры плана на загрузку не влияют.',
+      )) return;
     }
     try {
       setStats('Запуск…');
-      const body = { max_pages: 100, ...extraBody };
+      const body = { max_pages: step === 'load' ? masterMaxPages() : 100, ...extraBody };
       if (step === 'apply') {
         body.bundle_ids = selected.size ? [...selected] : [];
       }

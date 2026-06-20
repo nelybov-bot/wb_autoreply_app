@@ -4045,7 +4045,7 @@ async def api_card_links_master_step(
             step=step,
             api_key=s.api_key,
             openai_key=openai_key,
-            max_pages=min(int(body.max_pages or 100), 100),
+            max_pages=min(int(body.max_pages or 100), 150),
             bundle_ids=bundle_ids,
         )
     except StoreBusyError as e:

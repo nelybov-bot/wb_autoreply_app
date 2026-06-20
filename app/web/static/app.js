@@ -2524,6 +2524,7 @@
         : 'Страниц каталога WB (×100 карточек)';
     }
   }
+  window.cardLinksMaxPages = cardLinksMaxPages;
 
   function cardLinksSortCatalogRows(rows) {
     const mp = cardLinksMarketplace();
