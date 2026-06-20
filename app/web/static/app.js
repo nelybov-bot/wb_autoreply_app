@@ -2823,78 +2823,119 @@
     syncCardLinksCheckAllState();
   }
 
-  function cardLinksAutoLinkGroupKey(it, mp) {
-    if (mp !== 'wb') return cardLinkCategoryKey(it, mp);
-    const sid = intOr0(it.subject_id);
-    const pid = intOr0(it.parent_id);
-    if (sid > 0) return `wb:s:${sid}:p:${pid}`;
-    const subj = String(it.subject_name || '').trim().toLowerCase();
-    if (subj) return `wb:sn:${subj}:p:${pid}`;
-    return `wb:one:${intOr0(it.nm_id)}`;
+  function cardLinksAutoLinkLogClear() {
+    const el = document.getElementById('card-links-auto-link-log');
+    if (!el) return;
+    el.textContent = '';
+    el.hidden = true;
   }
 
-  function cardLinksValidateCatalogBatchItems(items) {
-    const mp = cardLinksMarketplace();
-    if (mp !== 'wb' || !items || items.length < 2) return '';
-    const sids = new Set();
-    const parents = new Set();
-    for (const it of items) {
-      const sid = intOr0(it.subject_id);
-      if (sid > 0) sids.add(sid);
-      const pid = intOr0(it.parent_id);
-      if (pid > 0) parents.add(pid);
-    }
-    if (sids.size > 1) {
-      return `Разные предметы WB (subjectID: ${[...sids].join(', ')}) — выберите одну категорию в фильтре`;
-    }
-    if (parents.size > 1) {
-      return 'Разные родительские категории WB — уточните фильтр категории';
-    }
-    return '';
+  function cardLinksAutoLinkLogShow() {
+    const el = document.getElementById('card-links-auto-link-log');
+    if (el) el.hidden = false;
   }
 
-  function cardLinksSplitItemsByWbSubject(items) {
-    const by = new Map();
-    for (const it of items) {
-      const sid = intOr0(it.subject_id);
-      let key;
-      if (sid > 0) key = `s:${sid}:p:${intOr0(it.parent_id)}`;
-      else key = `sn:${String(it.subject_name || '').trim().toLowerCase()}:p:${intOr0(it.parent_id)}`;
-      if (!by.has(key)) by.set(key, []);
-      by.get(key).push(it);
-    }
-    return [...by.values()];
+  function cardLinksAutoLinkLogLine(text, level = 'info') {
+    const el = document.getElementById('card-links-auto-link-log');
+    if (!el) return;
+    el.hidden = false;
+    const ts = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const cls = level === 'ok' ? 'autolink-ok' : (level === 'error' ? 'autolink-err' : (level === 'warn' ? 'autolink-warn' : 'autolink-info'));
+    const line = document.createElement('div');
+    line.className = cls;
+    line.textContent = `[${ts}] ${text}`;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
   }
 
-  function cardLinksBuildAutoLinkBatches() {
+  function cardLinksAutoLinkItemSummary(it, mp) {
+    const art = mp === 'wb' ? (it.vendor_code || it.nm_id) : (it.offer_id || it.sku);
+    const title = String(it.title || '').slice(0, 50);
+    return `${art} · ${title}`;
+  }
+
+  function cardLinksBuildAutoLinkPlan() {
     const mp = cardLinksMarketplace();
     const items = cardLinksCatalogFilteredItems(true);
-    const byCat = new Map();
+    const skippedSingles = [];
+    const byCatBrand = new Map();
+
     for (const it of items) {
-      const k = cardLinksAutoLinkGroupKey(it, mp);
-      if (!byCat.has(k)) byCat.set(k, { label: cardLinkItemCategory(it, mp) || k, items: [] });
-      byCat.get(k).items.push(it);
+      const cat = cardLinkItemCategory(it, mp) || 'Без категории';
+      const brand = cardLinkItemBrand(it) || 'Без бренда';
+      const key = `${cat}\x00${brand.toLowerCase()}`;
+      if (!byCatBrand.has(key)) {
+        byCatBrand.set(key, { category_label: cat, brand, items: [] });
+      }
+      byCatBrand.get(key).items.push(it);
     }
+
     const batches = [];
-    for (const { label, items: group } of byCat.values()) {
-      const homogenous = cardLinksSplitItemsByWbSubject(group);
-      for (const subGroup of homogenous) {
-        for (let i = 0; i < subGroup.length; i += MAX_LINK_ITEMS) {
-          const chunk = subGroup.slice(i, i + MAX_LINK_ITEMS);
-          if (chunk.length >= 2 && !cardLinksValidateCatalogBatchItems(chunk)) {
-            batches.push({ category_label: label, items: chunk });
-          }
+    const groups = [];
+
+    for (const group of byCatBrand.values()) {
+      const bySubject = new Map();
+      for (const it of group.items) {
+        const sid = intOr0(it.subject_id);
+        const subjKey = sid > 0
+          ? `s:${sid}:p:${intOr0(it.parent_id)}`
+          : `sn:${String(it.subject_name || '').trim().toLowerCase()}`;
+        if (!bySubject.has(subjKey)) {
+          bySubject.set(subjKey, {
+            subject_id: sid,
+            subject_label: String(it.subject_name || it.subject_id || subjKey).trim(),
+            items: [],
+          });
+        }
+        bySubject.get(subjKey).items.push(it);
+      }
+
+      const groupInfo = {
+        category_label: group.category_label,
+        brand: group.brand,
+        total_items: group.items.length,
+        subject_count: bySubject.size,
+        batches: [],
+      };
+
+      for (const sub of bySubject.values()) {
+        if (sub.items.length === 1) {
+          skippedSingles.push({
+            category_label: group.category_label,
+            brand: group.brand,
+            item: sub.items[0],
+            reason: 'один товар в subject — связка мин. 2',
+          });
+          continue;
+        }
+        const parts = Math.ceil(sub.items.length / MAX_LINK_ITEMS);
+        for (let i = 0; i < sub.items.length; i += MAX_LINK_ITEMS) {
+          const chunk = sub.items.slice(i, i + MAX_LINK_ITEMS);
+          if (chunk.length < 2) continue;
+          const batch = {
+            category_label: group.category_label,
+            brand: group.brand,
+            subject_label: sub.subject_label,
+            subject_id: sub.subject_id,
+            part: Math.floor(i / MAX_LINK_ITEMS) + 1,
+            parts,
+            items: chunk,
+          };
+          batches.push(batch);
+          groupInfo.batches.push(batch);
         }
       }
+      if (groupInfo.batches.length) groups.push(groupInfo);
     }
-    return batches;
+
+    return { batches, groups, skippedSingles, totalUnlinked: items.length };
   }
 
-  function cardLinksCandidateFromCatalogItems(items) {
+  function cardLinksCandidateFromCatalogItems(items, batchId = '') {
     const first = items[0] || {};
     return {
       kind: 'new_link',
-      candidate_id: `catalog-auto-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      candidate_id: batchId || `catalog-auto-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       items: items.map((it) => ({ ...it })),
       suggested_target_imt: Number(first.imt_id || 0),
     };
@@ -2906,38 +2947,81 @@
       toast('Перейдите на вкладку «Каталог»', 'error');
       return;
     }
-    const batches = cardLinksBuildAutoLinkBatches();
-    if (!batches.length) {
-      toast('Нет одиночных для автосвязки — нужно ≥2 товара без связки в одной категории WB', 'error');
+    const mp = cardLinksMarketplace();
+    const plan = cardLinksBuildAutoLinkPlan();
+    const { batches, groups, skippedSingles, totalUnlinked } = plan;
+
+    if (!batches.length && !skippedSingles.length) {
+      toast('Нет одиночных для автосвязки', 'error');
       return;
     }
+    if (!batches.length) {
+      toast(`Только одиночки по 1 шт. в subject (${skippedSingles.length}) — связка мин. 2`, 'error');
+      return;
+    }
+
     const totalItems = batches.reduce((s, b) => s + b.items.length, 0);
-    const catPreview = batches.slice(0, 5).map((b) => `${b.category_label}: ${b.items.length} шт.`).join('\n');
     const pauseSec = Math.ceil(CARD_LINKS_ACTION_COOLDOWN_MS / 1000);
-    const more = batches.length > 5 ? `\n… и ещё ${batches.length - 5} связок` : '';
+    const groupPreview = groups.slice(0, 8).map(
+      (g) => `  ${g.category_label} · ${g.brand}: ${g.total_items} шт (${g.batches.length} пач.)`,
+    ).join('\n');
+    const more = groups.length > 8 ? `\n  … ещё ${groups.length - 8} групп` : '';
+
     if (!confirm(
       `Автосвязка одиночных:\n`
-      + `• ${batches.length} операций, ${totalItems} товаров\n`
-      + `• По категории WB, до ${MAX_LINK_ITEMS} в связке\n`
+      + `• ${totalUnlinked} одиночных → ${batches.length} операций (${totalItems} товаров)\n`
+      + `• Группировка: категория + бренд, до ${MAX_LINK_ITEMS} в пачке\n`
+      + `• Ошибки пропускаются, всё пишется в лог\n`
       + `• Пауза ~${pauseSec} с между запросами\n\n`
-      + `${catPreview}${more}\n\nПродолжить?`,
+      + `${groupPreview}${more}\n\nПродолжить?`,
     )) return;
+
+    cardLinksAutoLinkLogClear();
+    cardLinksAutoLinkLogShow();
+    cardLinksAutoLinkLogLine(`=== Старт: ${totalUnlinked} одиночных, ${groups.length} групп (кат+бренд), ${batches.length} пачек ===`);
+
+    for (const g of groups) {
+      cardLinksAutoLinkLogLine(
+        `Группа «${g.category_label}» · ${g.brand}: ${g.total_items} шт, subject-ов: ${g.subject_count}, пачек: ${g.batches.length}`,
+      );
+    }
+    for (const sk of skippedSingles) {
+      cardLinksAutoLinkLogLine(
+        `Пропуск: «${sk.category_label}» · ${sk.brand} — ${cardLinksAutoLinkItemSummary(sk.item, mp)} (${sk.reason})`,
+        'warn',
+      );
+    }
 
     _cardLinksActionBusy = true;
     setPanelLoading('card-links-loading', true, 'Автосвязка…');
     let ok = 0;
     let fail = 0;
-    let stopped = false;
     let lastErr = '';
+
     try {
       for (let i = 0; i < batches.length; i++) {
-        if (stopped) break;
         const batch = batches[i];
-        setCardLinksStatus(`Автосвязка ${i + 1}/${batches.length}: ${batch.category_label} (${batch.items.length} шт.)`);
-        const cand = cardLinksCandidateFromCatalogItems(batch.items);
+        const nmList = batch.items.map((it) => intOr0(it.nm_id)).filter((x) => x > 0);
+        const arts = batch.items.map((it) => cardLinksAutoLinkItemSummary(it, mp)).join('; ');
+        const targetImt = Number(batch.items[0]?.imt_id || 0);
+
+        setCardLinksStatus(
+          `Автосвязка ${i + 1}/${batches.length}: ${batch.category_label} · ${batch.brand} (${batch.items.length} шт.)`,
+        );
+        cardLinksAutoLinkLogLine(
+          `Пачка ${i + 1}/${batches.length}: «${batch.category_label}» · ${batch.brand} · subject «${batch.subject_label}»`
+          + ` · часть ${batch.part}/${batch.parts} · ${batch.items.length} шт · imtID ${targetImt || 'новая'}`,
+        );
+        cardLinksAutoLinkLogLine(`  nmID: ${nmList.join(', ')}`);
+        cardLinksAutoLinkLogLine(`  ${arts}`);
+
+        const batchId = `catalog-auto-${i + 1}-${Date.now()}`;
+        const cand = cardLinksCandidateFromCatalogItems(batch.items, batchId);
+        cardLinksAutoLinkLogLine(`  → Отправка в WB…`);
+
         const res = await mergeSelectedCardLinks({
           candidate: cand,
-          targetImt: cand.suggested_target_imt,
+          targetImt,
           bulk: true,
           skipConfirm: true,
           skipReload: true,
@@ -2945,23 +3029,39 @@
           returnResult: true,
           lightweight: true,
         });
-        if (res?.ok) ok += 1;
-        else {
+
+        if (res?.ok) {
+          ok += 1;
+          cardLinksAutoLinkLogLine(
+            `  ✓ OK: связано ${batch.items.length} шт → imtID ${targetImt || '—'}`,
+            'ok',
+          );
+        } else if (res?.cancelled) {
+          cardLinksAutoLinkLogLine('  — отменено пользователем', 'warn');
+          break;
+        } else {
           fail += 1;
-          if (res?.error) lastErr = res.error;
-          if (res?.rateLimited) stopped = true;
+          const err = res?.error || 'неизвестная ошибка';
+          lastErr = err;
+          cardLinksAutoLinkLogLine(`  ✗ Ошибка: ${err}`, 'error');
+          if (res?.rateLimited) {
+            cardLinksAutoLinkLogLine('  ⏳ Лимит WB — пауза 60 с, затем следующая пачка', 'warn');
+            _cardLinksCooldownUntil = Date.now() + 60000;
+            await new Promise((r) => setTimeout(r, 60000));
+          }
         }
-        if (i < batches.length - 1 && !stopped) {
+
+        if (i < batches.length - 1) {
           await new Promise((r) => setTimeout(r, CARD_LINKS_ACTION_COOLDOWN_MS));
         }
       }
+
+      cardLinksAutoLinkLogLine(`=== Итог: OK ${ok} · ошибок ${fail} · пропущено одиночек ${skippedSingles.length} ===`, ok > 0 ? 'ok' : (fail ? 'error' : 'info'));
       if (ok > 0) cardLinksStartCooldown();
-      const errTail = lastErr ? ` (${lastErr})` : '';
+      const errTail = lastErr ? `\nПоследняя ошибка: ${lastErr}` : '';
       toast(
-        stopped && fail
-          ? `Связано ${ok} из ${batches.length}, остановлено (лимит WB).${errTail}`
-          : `Связано ${ok} из ${batches.length}${fail ? `, ошибок: ${fail}` : ''}${errTail}`,
-        ok > 0 ? 'success' : 'error',
+        `Автосвязка: OK ${ok} · ошибок ${fail} · пропусков ${skippedSingles.length}${errTail}`,
+        ok > 0 ? 'success' : (fail ? 'error' : 'info'),
       );
       if (ok > 0) cardLinksAfterMergeHint();
     } finally {
@@ -4795,7 +4895,7 @@
         <li><strong>Загрузите каталог</strong> — дальше работа только вручную, без автоперезагрузки.</li>
         <li><strong>Фильтр:</strong> бренд → категория → «Только без связки». Скрывайте ненужные категории (запчасти и т.п.).</li>
         <li><strong>Читайте названия</strong> в каталоге: одна категория ≠ одна связка. Делите по смыслу названия.</li>
-        <li><strong>Каталог:</strong> «Выбрать все на экране» / «Автосвязка одиночных» — пачки до ${MAX_LINK_ITEMS} по категории WB → «Обновить».</li>
+        <li><strong>Каталог:</strong> «Автосвязка одиночных» — категория + бренд, пачки до ${MAX_LINK_ITEMS}, подробный лог под таблицей.</li>
         <li><strong>ИИ</strong> — вкладка «ИИ»: анализ названий и текущих связок, правка предложений, пакетное применение.</li>
         <li><strong>Мелкие связки (2 шт.)</strong> — вкладка «Перепроверка» → «Запустить перепроверку».</li>
       </ol>
@@ -5345,10 +5445,6 @@
       }
       if (kind === 'merge_groups' && candidate.items.length < 1) {
         return fail('Нет товаров для объединения');
-      }
-      if (mp === 'wb') {
-        const batchErr = cardLinksValidateCatalogBatchItems(candidate.items);
-        if (batchErr) return fail(batchErr);
       }
     } else {
       const valErr = validateCardLinkSelection(checked);
