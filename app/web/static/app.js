@@ -2823,21 +2823,67 @@
     syncCardLinksCheckAllState();
   }
 
+  function cardLinksAutoLinkGroupKey(it, mp) {
+    if (mp !== 'wb') return cardLinkCategoryKey(it, mp);
+    const sid = intOr0(it.subject_id);
+    const pid = intOr0(it.parent_id);
+    if (sid > 0) return `wb:s:${sid}:p:${pid}`;
+    const subj = String(it.subject_name || '').trim().toLowerCase();
+    if (subj) return `wb:sn:${subj}:p:${pid}`;
+    return `wb:one:${intOr0(it.nm_id)}`;
+  }
+
+  function cardLinksValidateCatalogBatchItems(items) {
+    const mp = cardLinksMarketplace();
+    if (mp !== 'wb' || !items || items.length < 2) return '';
+    const sids = new Set();
+    const parents = new Set();
+    for (const it of items) {
+      const sid = intOr0(it.subject_id);
+      if (sid > 0) sids.add(sid);
+      const pid = intOr0(it.parent_id);
+      if (pid > 0) parents.add(pid);
+    }
+    if (sids.size > 1) {
+      return `Разные предметы WB (subjectID: ${[...sids].join(', ')}) — выберите одну категорию в фильтре`;
+    }
+    if (parents.size > 1) {
+      return 'Разные родительские категории WB — уточните фильтр категории';
+    }
+    return '';
+  }
+
+  function cardLinksSplitItemsByWbSubject(items) {
+    const by = new Map();
+    for (const it of items) {
+      const sid = intOr0(it.subject_id);
+      let key;
+      if (sid > 0) key = `s:${sid}:p:${intOr0(it.parent_id)}`;
+      else key = `sn:${String(it.subject_name || '').trim().toLowerCase()}:p:${intOr0(it.parent_id)}`;
+      if (!by.has(key)) by.set(key, []);
+      by.get(key).push(it);
+    }
+    return [...by.values()];
+  }
+
   function cardLinksBuildAutoLinkBatches() {
     const mp = cardLinksMarketplace();
     const items = cardLinksCatalogFilteredItems(true);
     const byCat = new Map();
     for (const it of items) {
-      const k = cardLinkCategoryKey(it, mp);
+      const k = cardLinksAutoLinkGroupKey(it, mp);
       if (!byCat.has(k)) byCat.set(k, { label: cardLinkItemCategory(it, mp) || k, items: [] });
       byCat.get(k).items.push(it);
     }
     const batches = [];
     for (const { label, items: group } of byCat.values()) {
-      for (let i = 0; i < group.length; i += MAX_LINK_ITEMS) {
-        const chunk = group.slice(i, i + MAX_LINK_ITEMS);
-        if (chunk.length >= 2) {
-          batches.push({ category_label: label, items: chunk });
+      const homogenous = cardLinksSplitItemsByWbSubject(group);
+      for (const subGroup of homogenous) {
+        for (let i = 0; i < subGroup.length; i += MAX_LINK_ITEMS) {
+          const chunk = subGroup.slice(i, i + MAX_LINK_ITEMS);
+          if (chunk.length >= 2 && !cardLinksValidateCatalogBatchItems(chunk)) {
+            batches.push({ category_label: label, items: chunk });
+          }
         }
       }
     }
@@ -5277,7 +5323,7 @@
     const storeId = Number(document.getElementById('card-links-store')?.value || 0);
     const candidate = cardLinksNormalizeApplyCandidate(opts.candidate || null);
     let checked = opts.checked || getSelectedCardLinkRows();
-    if (!checked.length && candidate) {
+    if (!checked.length && candidate && !String(candidate.candidate_id || '').startsWith('catalog-auto-')) {
       document.querySelectorAll('.card-links-check').forEach((el) => {
         el.checked = el.getAttribute('data-candidate-id') === String(candidate.candidate_id || '');
       });
@@ -5299,6 +5345,10 @@
       }
       if (kind === 'merge_groups' && candidate.items.length < 1) {
         return fail('Нет товаров для объединения');
+      }
+      if (mp === 'wb') {
+        const batchErr = cardLinksValidateCatalogBatchItems(candidate.items);
+        if (batchErr) return fail(batchErr);
       }
     } else {
       const valErr = validateCardLinkSelection(checked);

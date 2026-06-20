@@ -686,6 +686,47 @@ def master_merge_bundles(
     return rows, new_bundles, meta
 
 
+def _clm_rows_from_bundles(bundles: List[dict]) -> List[dict]:
+    """Восстановить строки items из сохранённого плана (если кэш карточек пропал)."""
+    rows: List[dict] = []
+    seen: Set[int] = set()
+    for b in bundles:
+        bid = str(b.get("bundle_id") or "")
+        for it in b.get("items") or []:
+            nid = int(it.get("nm_id") or 0)
+            if not nid or nid in seen:
+                continue
+            seen.add(nid)
+            row = dict(it)
+            row["bundle_id"] = bid
+            row["status"] = "planned"
+            rows.append(row)
+    return rows
+
+
+def _clm_ensure_items_cache(db: Any, store_id: int, steps: dict) -> List[dict]:
+    sid = int(store_id)
+    rows = db.clm_load_items(sid)
+    if rows:
+        return rows
+    bundles, bc = db.clm_load_bundles(sid, limit=100000, offset=0)
+    if bc:
+        restored = _clm_rows_from_bundles(bundles)
+        if restored:
+            db.clm_save_items(sid, restored)
+            db.clm_append_log(
+                sid,
+                f"Восстановлено {len(restored)} карточек из плана (кэш items был пуст)",
+            )
+            return restored
+    if steps.get(STEP_PLAN) or steps.get(STEP_LOAD):
+        raise ValueError(
+            "Кэш мастера пуст — вероятно после деплоя Render без Disk. "
+            "Выполните заново шаги 1 «Загрузить WB» → 5 «План», затем Apply."
+        )
+    raise ValueError("Сначала выполните шаг «Загрузить WB»")
+
+
 async def master_apply_bundles(
     api_key: str,
     bundles: List[dict],
@@ -869,9 +910,7 @@ async def run_master_step(
         cov = db.clm_coverage(sid)
         return {"step": step, "coverage": cov, "meta": meta}
 
-    rows = db.clm_load_items(sid)
-    if not rows:
-        raise ValueError("Сначала выполните шаг «Загрузить WB»")
+    rows = _clm_ensure_items_cache(db, sid, steps)
 
     if step == STEP_BRANDS:
         rows, meta = master_step_brands(rows)
