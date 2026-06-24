@@ -423,6 +423,7 @@ async def run_card_links_master_step(
     max_pages: int = 100,
     bundle_ids: Optional[list] = None,
 ) -> str:
+    from app.core.card_links import wb_content_api_error_message
     from app.core.card_links_master import run_master_step
     from app.core.net import HttpStatusError, UnauthorizedStoreError
 
@@ -468,7 +469,7 @@ async def run_card_links_master_step(
     async def _run() -> None:
         try:
             ctrl.raise_if_cancelled()
-            result = await run_master_step(
+            run_coro = run_master_step(
                 db,
                 sid,
                 step,
@@ -478,6 +479,10 @@ async def run_card_links_master_step(
                 bundle_ids=bundle_ids,
                 progress_cb=_progress,
             )
+            if step == "load":
+                result = await asyncio.wait_for(run_coro, timeout=600.0)
+            else:
+                result = await run_coro
             async with _tasks_lock:
                 _tasks[task_id]["status"] = "done"
                 _tasks[task_id]["result"] = result
@@ -498,7 +503,14 @@ async def run_card_links_master_step(
         except HttpStatusError as e:
             async with _tasks_lock:
                 _tasks[task_id]["status"] = "error"
-                _tasks[task_id]["error"] = str(e.body or e)[:400]
+                _tasks[task_id]["error"] = wb_content_api_error_message(e.status, e.body or "")[:500]
+            _mark_finished(task_id, "error")
+        except asyncio.TimeoutError:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = (
+                    "Загрузка каталога WB превысила 10 минут — уменьшите «Страниц каталога» или повторите позже."
+                )
             _mark_finished(task_id, "error")
         except Exception as e:
             log.exception("card_links_master step %s failed: %s", step, e)

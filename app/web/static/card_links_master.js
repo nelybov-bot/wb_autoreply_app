@@ -272,7 +272,7 @@
           }
           onDone(null, result);
         } else {
-          onDone(t.error || 'Ошибка задачи');
+          onDone(taskErrorMessage(t.error));
         }
       } catch (e) {
         clearInterval(pollTimer);
@@ -290,10 +290,27 @@
     return v > 0 ? v : 150;
   }
 
+  function taskErrorMessage(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return 'Ошибка задачи';
+    if (text.startsWith('{') && text.includes('errorText')) {
+      try {
+        const j = JSON.parse(text);
+        if (j.errorText) return String(j.errorText);
+      } catch (_) { /* ignore */ }
+    }
+    return text;
+  }
+
   async function runStep(step, extraBody = {}) {
     const sid = storeId();
     if (!sid) {
       alert('Выберите магазин WB');
+      return;
+    }
+    const mp = String(document.getElementById('card-links-marketplace')?.value || 'wb').trim();
+    if (mp !== 'wb') {
+      alert('Мастер связок работает только для магазинов Wildberries. Переключите маркетплейс на WB.');
       return;
     }
     if (step === 'apply') {

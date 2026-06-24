@@ -3675,6 +3675,43 @@ async def _wb_subject_map(api_key: str) -> Dict[int, dict]:
 _WB_SUBJECT_MAP_CACHE: Dict[str, Tuple[float, Dict[int, dict]]] = {}
 
 
+def wb_content_api_error_message(status: int, body: str) -> str:
+    """Человекочитаемая ошибка WB Content API (каталог, предметы)."""
+    text = (body or "").strip()
+    low = text.lower()
+    err = ""
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            err = str(
+                data.get("errorText") or data.get("message") or data.get("detail") or ""
+            ).strip()
+            if not err and isinstance(data.get("title"), str):
+                err = str(data.get("title") or "").strip()
+    except json.JSONDecodeError:
+        err = text[:300]
+    err_low = err.lower()
+    if status in (401, 403) or "unauthorized" in low or "unauthenticated" in low:
+        return (
+            "Wildberries: доступ запрещён. Проверьте API-ключ магазина во вкладке «Магазины» — "
+            "нужен токен категории «Контент» (content-api.wildberries.ru)."
+        )
+    if status == 429 or "too many requests" in low or "rate_limit" in low:
+        return (
+            "Wildberries: слишком много запросов (лимит API). "
+            "Подождите 1–2 минуты и повторите загрузку."
+        )
+    if "internal error" in low or "internal error" in err_low:
+        return (
+            "Wildberries Content API: внутренняя ошибка (Internal error). "
+            "Чаще всего — неверный или просроченный токен «Контент» у этого магазина, либо временный сбой WB. "
+            "Обновите токен в кабинете продавца, проверьте ключ в «Магазины» и повторите через 1–2 мин."
+        )
+    if err:
+        return f"Wildberries: {err}"
+    return f"Wildberries API {status}: {text[:300]}"
+
+
 def wb_merge_error_message(body: str) -> str:
     """Человекочитаемая ошибка WB moveNm."""
     text = (body or "").strip()
@@ -3706,7 +3743,7 @@ def wb_merge_error_message(body: str) -> str:
         return f"WB: {err}"
     if err:
         return f"WB: {err}"
-    return f"WB API: {text[:300]}"
+    return wb_content_api_error_message(0, text)
 
 
 async def _wb_fetch_row_by_nm(
@@ -3892,6 +3929,11 @@ async def fetch_wb_catalog(
             catalog_meta["missing_articles"] = missing[:50]
             catalog_meta["missing_count"] = len(missing)
     catalog_meta["count"] = len(rows)
+    if catalog_meta.get("partial"):
+        catalog_meta["partial_message"] = wb_content_api_error_message(
+            int(catalog_meta.get("wb_error_status") or 0),
+            str(catalog_meta.get("wb_error_body") or ""),
+        )
     return rows, catalog_meta
 
 

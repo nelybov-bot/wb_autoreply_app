@@ -104,6 +104,7 @@ from app.core.card_links import (
     wb_disconnect_cards,
     wb_merge_cards,
     wb_merge_error_message,
+    wb_content_api_error_message,
     default_ai_system_prompt,
     get_card_links_ai_prompt_stored,
     set_card_links_ai_prompt_stored,
@@ -3451,18 +3452,13 @@ def api_card_links_ai_prompt_put(
 
 def _card_links_http_error(marketplace: str, e: HttpStatusError) -> HTTPException:
     mp = "Wildberries" if marketplace == "wb" else "Ozon"
-    body = redact_secrets_in_text((e.body or "")[:500])
-    if e.status in (401, 403):
-        hint = (
-            "Проверьте API-ключ: для WB нужен токен категории «Контент» (content-api)."
-            if marketplace == "wb"
-            else "Проверьте Client-Id и Api-Key Ozon."
-        )
-        return HTTPException(e.status, f"{mp}: доступ запрещён. {hint}")
     if marketplace == "wb" and e.status == 400:
         return HTTPException(400, wb_merge_error_message(e.body or ""))
-    if marketplace == "wb" and e.status == 429:
-        return HTTPException(429, wb_merge_error_message(e.body or ""))
+    if marketplace == "wb":
+        return HTTPException(e.status, wb_content_api_error_message(e.status, e.body or ""))
+    body = redact_secrets_in_text((e.body or "")[:500])
+    if e.status in (401, 403):
+        return HTTPException(e.status, f"{mp}: доступ запрещён. Проверьте Client-Id и Api-Key Ozon.")
     if e.status == 429:
         return HTTPException(
             429,
@@ -3920,7 +3916,7 @@ class CardLinksMasterStepBody(BaseModel):
 def api_card_links_master_status(
     store_id: int,
     db: Database = Depends(get_db),
-    _: UserRow = Depends(require_permission("view_settings")),
+    _: UserRow = Depends(require_user),
 ):
     _require_wb_store_for_chats(db, store_id)
     state = db.clm_get_state(store_id)
@@ -3940,7 +3936,7 @@ def api_card_links_master_bundles(
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=5000),
     db: Database = Depends(get_db),
-    _: UserRow = Depends(require_permission("view_settings")),
+    _: UserRow = Depends(require_user),
 ):
     _require_wb_store_for_chats(db, store_id)
     offset = (page - 1) * page_size
@@ -3973,7 +3969,7 @@ def api_card_links_master_bundle_ids(
     category: str = Query(""),
     min_bundles_in_category: int = Query(0, ge=0, le=100),
     db: Database = Depends(get_db),
-    _: UserRow = Depends(require_permission("view_settings")),
+    _: UserRow = Depends(require_user),
 ):
     _require_wb_store_for_chats(db, store_id)
     ids = db.clm_list_bundle_ids(

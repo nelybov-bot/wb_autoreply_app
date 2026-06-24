@@ -981,6 +981,12 @@ async def run_master_step(
         steps[STEP_LOAD] = {"ok": True, "at": utc_now_iso(), "count": len(rows), "meta": meta}
         db.clm_set_state(sid, steps=steps, catalog_at=utc_now_iso())
         db.clm_append_log(sid, f"Загружено {len(rows)} карточек WB")
+        if meta.get("partial"):
+            db.clm_append_log(
+                sid,
+                f"Частичная загрузка: {meta.get('partial_message') or 'ошибка WB на следующей странице'}",
+                level="error",
+            )
         cov = db.clm_coverage(sid)
         return {"step": step, "coverage": cov, "meta": meta}
 

@@ -240,17 +240,46 @@ class WbContentClient:
             connect=15,
             total=max(120.0, float(getattr(self.timeout, "total", None) or 45.0)),
         )
+        page_retry_delays = (1.5, 3.0, 6.0)
         connector = aiohttp.TCPConnector(force_close=True, family=socket.AF_INET)
         async with connector:
             async with aiohttp.ClientSession(timeout=bulk_timeout, connector=connector) as session:
                 for _ in range(max_p):
-                    page = await self._list_cards_with_session(
-                        session,
-                        limit=_PAGE_LIMIT,
-                        text_search=text_search,
-                        cursor_updated_at=updated_at,
-                        cursor_nm_id=nm_id,
-                    )
+                    page: dict = {}
+                    last_page_exc: Optional[HttpStatusError] = None
+                    for attempt in range(len(page_retry_delays) + 1):
+                        try:
+                            page = await self._list_cards_with_session(
+                                session,
+                                limit=_PAGE_LIMIT,
+                                text_search=text_search,
+                                cursor_updated_at=updated_at,
+                                cursor_nm_id=nm_id,
+                            )
+                            last_page_exc = None
+                            break
+                        except HttpStatusError as e:
+                            last_page_exc = e
+                            if e.status in (429, 500, 502, 503, 504) and attempt < len(page_retry_delays):
+                                await asyncio.sleep(page_retry_delays[attempt])
+                                continue
+                            if pages_fetched > 0 and e.status >= 500:
+                                log.warning(
+                                    "WB catalog: page %s failed after %s ok pages: %s %s",
+                                    pages_fetched + 1,
+                                    pages_fetched,
+                                    e.status,
+                                    (e.body or "")[:200],
+                                )
+                                truncated = True
+                                if meta_out is not None:
+                                    meta_out["partial"] = True
+                                    meta_out["wb_error_status"] = e.status
+                                    meta_out["wb_error_body"] = (e.body or "")[:500]
+                                break
+                            raise
+                    if last_page_exc is not None and pages_fetched > 0:
+                        break
                     pages_fetched += 1
                     batch = page.get("cards") or []
                     if not isinstance(batch, list) or not batch:
