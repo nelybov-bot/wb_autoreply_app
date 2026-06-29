@@ -172,7 +172,21 @@ def _export_ozon_actions(db: Database, id_to_key: dict[int, str]) -> dict:
                     watched.append(int(x))
                 except (TypeError, ValueError):
                     continue
-            stores_out[key] = {"watched_action_ids": watched}
+            exclude: list[int] = []
+            for x in ent.get("exclude_action_ids") or []:
+                try:
+                    exclude.append(int(x))
+                except (TypeError, ValueError):
+                    continue
+            stores_out[key] = {
+                "watched_action_ids": watched,
+                "sync_mode": ent.get("sync_mode"),
+                "discount_threshold_percent": ent.get("discount_threshold_percent"),
+                "sync_enable_remove": ent.get("sync_enable_remove"),
+                "sync_enable_add": ent.get("sync_enable_add"),
+                "exclude_voucher_actions": ent.get("exclude_voucher_actions"),
+                "exclude_action_ids": exclude,
+            }
     cfg["stores"] = stores_out
     return cfg
 
@@ -321,7 +335,28 @@ def _import_ozon_actions(db: Database, data: dict, key_to_id: dict[str, int]) ->
                     watched.append(int(x))
                 except (TypeError, ValueError):
                     continue
-            stores_out[str(int(sid))] = {"watched_action_ids": watched}
+            exclude: list[int] = []
+            for x in ent.get("exclude_action_ids") or []:
+                try:
+                    exclude.append(int(x))
+                except (TypeError, ValueError):
+                    continue
+            mode = str(ent.get("sync_mode") or "discount_threshold").strip()
+            if mode not in ("discount_threshold", "legacy_auto_remove"):
+                mode = "discount_threshold"
+            try:
+                threshold = float(ent.get("discount_threshold_percent", 3.0))
+            except (TypeError, ValueError):
+                threshold = 3.0
+            stores_out[str(int(sid))] = {
+                "watched_action_ids": watched,
+                "sync_mode": mode,
+                "discount_threshold_percent": max(0.0, min(threshold, 99.0)),
+                "sync_enable_remove": bool(ent.get("sync_enable_remove", True)),
+                "sync_enable_add": bool(ent.get("sync_enable_add", True)),
+                "exclude_voucher_actions": bool(ent.get("exclude_voucher_actions", False)),
+                "exclude_action_ids": exclude,
+            }
     cfg = {
         "auto_remove_on_schedule": bool(data.get("auto_remove_on_schedule")),
         "only_auto_add": bool(data.get("only_auto_add", True)),

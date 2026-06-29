@@ -154,6 +154,7 @@ from app.core.workflows import (
     load_new_items,
     ozon_buyer_chats_mass_generate_send_for_store,
     ozon_actions_auto_remove_for_store,
+    ozon_actions_sync_discount_for_store,
     send_mass_all,
     wb_buyer_chats_mass_generate_send_for_store,
     _buyer_chat_reply_from,
@@ -487,6 +488,12 @@ class OzonActionsSettingsBody(BaseModel):
     auto_remove_on_schedule: bool = False
     only_auto_add: bool = True
     watched_action_ids: list[int] = []
+    sync_mode: str = "discount_threshold"
+    discount_threshold_percent: float = 3.0
+    sync_enable_remove: bool = True
+    sync_enable_add: bool = True
+    exclude_voucher_actions: bool = False
+    exclude_action_ids: list[int] = []
 
 
 class OzonAlertsScanBody(BaseModel):
@@ -555,6 +562,39 @@ def _store_watched_action_ids(cfg: dict, store_id: int) -> list[int]:
         except (TypeError, ValueError):
             continue
     return out
+
+
+def _store_ozon_sync_settings(cfg: dict, store_id: int) -> dict:
+    """Настройки синхронизации акций для магазина Ozon."""
+    stores = cfg.get("stores") or {}
+    ent = stores.get(str(int(store_id))) or {} if isinstance(stores, dict) else {}
+    if not isinstance(ent, dict):
+        ent = {}
+    mode = str(ent.get("sync_mode") or cfg.get("default_sync_mode") or "discount_threshold").strip()
+    if mode not in ("discount_threshold", "legacy_auto_remove"):
+        mode = "discount_threshold"
+    try:
+        threshold = float(ent.get("discount_threshold_percent", cfg.get("default_discount_threshold_percent", 3.0)))
+    except (TypeError, ValueError):
+        threshold = 3.0
+    threshold = max(0.0, min(threshold, 99.0))
+    exclude: list[int] = []
+    for x in ent.get("exclude_action_ids") or []:
+        try:
+            exclude.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    watched = _store_watched_action_ids(cfg, store_id)
+    return {
+        "sync_mode": mode,
+        "discount_threshold_percent": threshold,
+        "sync_enable_remove": bool(ent.get("sync_enable_remove", True)),
+        "sync_enable_add": bool(ent.get("sync_enable_add", True)),
+        "exclude_voucher_actions": bool(ent.get("exclude_voucher_actions", False)),
+        "exclude_action_ids": exclude,
+        "only_action_ids": watched if watched else None,
+        "only_auto_add": bool(cfg.get("only_auto_add", True)),
+    }
 
 
 _AUTO_MP_REVIEW_KEYS = ("run_reviews_wb", "run_reviews_yam", "run_reviews_ozon")
@@ -890,25 +930,43 @@ async def _process_auto_store(
             and (store.api_key or "").strip()
         ):
             watched = _store_watched_action_ids(ozon_actions_cfg, store.id)
-            result["ozon_actions"] = await ozon_actions_auto_remove_for_store(
-                store,
-                only_auto_add=bool(ozon_actions_cfg.get("only_auto_add", True)),
-                action_ids=watched if watched else None,
-            )
+            sync_cfg = _store_ozon_sync_settings(ozon_actions_cfg, store.id)
+            if sync_cfg.get("sync_mode") == "discount_threshold":
+                result["ozon_actions"] = await ozon_actions_sync_discount_for_store(
+                    store,
+                    threshold_percent=float(sync_cfg.get("discount_threshold_percent") or 3.0),
+                    enable_remove=bool(sync_cfg.get("sync_enable_remove", True)),
+                    enable_add=bool(sync_cfg.get("sync_enable_add", True)),
+                    exclude_voucher_actions=bool(sync_cfg.get("exclude_voucher_actions", False)),
+                    exclude_action_ids=sync_cfg.get("exclude_action_ids") or None,
+                    only_action_ids=sync_cfg.get("only_action_ids"),
+                )
+                audit_action = "ozon_actions_discount_sync"
+            else:
+                result["ozon_actions"] = await ozon_actions_auto_remove_for_store(
+                    store,
+                    only_auto_add=bool(sync_cfg.get("only_auto_add", True)),
+                    action_ids=watched if watched else None,
+                )
+                audit_action = "ozon_actions_auto_remove"
             oa = result["ozon_actions"] if isinstance(result.get("ozon_actions"), dict) else {}
             log.info(
-                "auto_run store_id=%s ozon_actions: matched=%s processed=%s removed=%s skipped=%s reason=%s",
+                "auto_run store_id=%s ozon_actions mode=%s: matched=%s processed=%s "
+                "removed=%s added=%s kept=%s skipped_data=%s reason=%s",
                 store.id,
+                oa.get("mode") or sync_cfg.get("sync_mode"),
                 oa.get("actions_matched"),
                 oa.get("actions_processed"),
-                oa.get("products_removed"),
-                oa.get("skipped"),
+                oa.get("products_removed") or oa.get("participants_removed"),
+                oa.get("products_added") or oa.get("candidates_added"),
+                oa.get("participants_kept"),
+                oa.get("skipped_data_count"),
                 oa.get("reason") or "",
             )
             try:
                 db.add_audit_event(
                     actor="system",
-                    action="ozon_actions_auto_remove",
+                    action=audit_action,
                     item_type="ozon_action",
                     store_id=store.id,
                     result="skipped" if oa.get("skipped") else "ok",
@@ -973,6 +1031,14 @@ async def _process_auto_store(
     if oa:
         if oa.get("skipped"):
             summary_parts.append(f"Акции Ozon: пропуск ({oa.get('reason') or oa.get('message') or '—'})")
+        elif oa.get("mode") == "discount_threshold":
+            thr = oa.get("threshold_percent", "?")
+            summary_parts.append(
+                f"Акции Ozon (≤{thr}%): −{int(oa.get('participants_removed') or oa.get('products_removed') or 0)} "
+                f"+{int(oa.get('candidates_added') or oa.get('products_added') or 0)}, "
+                f"оставлено {int(oa.get('participants_kept') or 0)}, "
+                f"пропусков данных {int(oa.get('skipped_data_count') or 0)}"
+            )
         else:
             summary_parts.append(
                 f"Акции Ozon: удалено {int(oa.get('products_removed') or 0)} товаров "
@@ -1016,9 +1082,13 @@ def _aggregate_ozon_actions_stats(stores_results: list[dict]) -> dict:
         "actions_matched": 0,
         "actions_processed": 0,
         "products_removed": 0,
+        "products_added": 0,
+        "participants_kept": 0,
+        "skipped_data_count": 0,
         "products_rejected": 0,
         "stores_skipped": 0,
         "stores_with_removals": 0,
+        "stores_with_sync": 0,
     }
     for row in stores_results:
         oa = row.get("ozon_actions")
@@ -1027,11 +1097,16 @@ def _aggregate_ozon_actions_stats(stores_results: list[dict]) -> dict:
         if oa.get("skipped"):
             out["stores_skipped"] += 1
             continue
+        out["stores_with_sync"] += 1
         out["actions_matched"] += int(oa.get("actions_matched") or 0)
         out["actions_processed"] += int(oa.get("actions_processed") or 0)
-        out["products_removed"] += int(oa.get("products_removed") or 0)
+        removed = int(oa.get("products_removed") or oa.get("participants_removed") or 0)
+        out["products_removed"] += removed
+        out["products_added"] += int(oa.get("products_added") or oa.get("candidates_added") or 0)
+        out["participants_kept"] += int(oa.get("participants_kept") or 0)
+        out["skipped_data_count"] += int(oa.get("skipped_data_count") or 0)
         out["products_rejected"] += int(oa.get("products_rejected") or 0)
-        if int(oa.get("products_removed") or 0) > 0:
+        if removed > 0:
             out["stores_with_removals"] += 1
     return out
 
@@ -3182,11 +3257,17 @@ def api_ozon_actions_settings_get(
 ):
     _require_ozon_store_for_chats(db, store_id)
     cfg = _get_ozon_actions_settings(db)
-    watched = _store_watched_action_ids(cfg, store_id)
+    sync = _store_ozon_sync_settings(cfg, store_id)
     return {
         "auto_remove_on_schedule": bool(cfg.get("auto_remove_on_schedule")),
         "only_auto_add": bool(cfg.get("only_auto_add", True)),
-        "watched_action_ids": watched,
+        "watched_action_ids": _store_watched_action_ids(cfg, store_id),
+        "sync_mode": sync.get("sync_mode"),
+        "discount_threshold_percent": sync.get("discount_threshold_percent"),
+        "sync_enable_remove": sync.get("sync_enable_remove"),
+        "sync_enable_add": sync.get("sync_enable_add"),
+        "exclude_voucher_actions": sync.get("exclude_voucher_actions"),
+        "exclude_action_ids": sync.get("exclude_action_ids") or [],
     }
 
 
@@ -3201,18 +3282,34 @@ def api_ozon_actions_settings_set(
     cfg = _get_ozon_actions_settings(db)
     cfg["auto_remove_on_schedule"] = bool(body.auto_remove_on_schedule)
     cfg["only_auto_add"] = bool(body.only_auto_add)
+    mode = str(body.sync_mode or "discount_threshold").strip()
+    if mode not in ("discount_threshold", "legacy_auto_remove"):
+        mode = "discount_threshold"
+    try:
+        threshold = float(body.discount_threshold_percent)
+    except (TypeError, ValueError):
+        threshold = 3.0
+    threshold = max(0.0, min(threshold, 99.0))
     stores = cfg.get("stores") or {}
     if not isinstance(stores, dict):
         stores = {}
     stores[str(int(store_id))] = {
         "watched_action_ids": [int(x) for x in (body.watched_action_ids or [])],
+        "sync_mode": mode,
+        "discount_threshold_percent": threshold,
+        "sync_enable_remove": bool(body.sync_enable_remove),
+        "sync_enable_add": bool(body.sync_enable_add),
+        "exclude_voucher_actions": bool(body.exclude_voucher_actions),
+        "exclude_action_ids": [int(x) for x in (body.exclude_action_ids or [])],
     }
     cfg["stores"] = stores
     db.set_setting(OZON_ACTIONS_SETTINGS_KEY, json.dumps(cfg, ensure_ascii=False))
+    sync = _store_ozon_sync_settings(cfg, store_id)
     return {
         "auto_remove_on_schedule": cfg["auto_remove_on_schedule"],
         "only_auto_add": cfg["only_auto_add"],
         "watched_action_ids": stores[str(int(store_id))]["watched_action_ids"],
+        **sync,
     }
 
 
@@ -3304,6 +3401,41 @@ async def api_ozon_actions_remove(
             store_id=store_id,
             result="ok",
             meta=dict(stats),
+        )
+    except Exception:
+        pass
+    return stats
+
+
+@app.post("/api/ozon/actions/{store_id}/sync-discount")
+async def api_ozon_actions_sync_discount(
+    store_id: int,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    s = _require_ozon_store_for_chats(db, store_id)
+    cfg = _get_ozon_actions_settings(db)
+    sync_cfg = _store_ozon_sync_settings(cfg, store_id)
+    try:
+        stats = await ozon_actions_sync_discount_for_store(
+            s,
+            threshold_percent=float(sync_cfg.get("discount_threshold_percent") or 3.0),
+            enable_remove=bool(sync_cfg.get("sync_enable_remove", True)),
+            enable_add=bool(sync_cfg.get("sync_enable_add", True)),
+            exclude_voucher_actions=bool(sync_cfg.get("exclude_voucher_actions", False)),
+            exclude_action_ids=sync_cfg.get("exclude_action_ids") or None,
+            only_action_ids=sync_cfg.get("only_action_ids"),
+        )
+    except HttpStatusError as e:
+        raise _ozon_chat_http_error(e) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="ozon_actions_discount_sync",
+            item_type="ozon_action",
+            store_id=store_id,
+            result="skipped" if stats.get("skipped") else "ok",
+            meta=dict(stats) if isinstance(stats, dict) else {"stats": str(stats)},
         )
     except Exception:
         pass

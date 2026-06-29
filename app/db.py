@@ -44,6 +44,9 @@ def _empty_activity_stats() -> dict:
         "reviews_sent": 0,
         "questions_sent": 0,
         "ozon_products_removed": 0,
+        "ozon_products_added": 0,
+        "ozon_promo_kept": 0,
+        "ozon_promo_skipped_data": 0,
         "wb_chat_replies": 0,
         "ozon_chat_replies": 0,
         "chat_replies_total": 0,
@@ -1591,7 +1594,11 @@ class Database:
             ).fetchone()
             audit_rows = self._conn.execute(
                 f"""SELECT meta_json FROM audit_events
-                   WHERE action IN ('ozon_actions_auto_remove', 'ozon_actions_remove')
+                   WHERE action IN (
+                     'ozon_actions_auto_remove',
+                     'ozon_actions_remove',
+                     'ozon_actions_discount_sync'
+                   )
                      AND result IN ('ok', 'skipped')
                      AND {ts_rng}""",
                 tuple(ae_params),
@@ -1604,13 +1611,23 @@ class Database:
                 tuple(item_params),
             ).fetchall()
         products_removed = 0
+        products_added = 0
+        participants_kept = 0
+        skipped_data_count = 0
         for row in audit_rows:
             raw = row["meta_json"] if isinstance(row, dict) else row[0]
             if not raw:
                 continue
             try:
                 meta = json.loads(str(raw))
-                products_removed += int(meta.get("products_removed") or 0)
+                products_removed += int(
+                    meta.get("products_removed") or meta.get("participants_removed") or 0
+                )
+                products_added += int(
+                    meta.get("products_added") or meta.get("candidates_added") or 0
+                )
+                participants_kept += int(meta.get("participants_kept") or 0)
+                skipped_data_count += int(meta.get("skipped_data_count") or 0)
             except Exception:
                 continue
         reviews_by_rating: dict[int, int] = {}
@@ -1630,6 +1647,9 @@ class Database:
             "reviews_by_rating": reviews_by_rating,
             "questions_sent": int(qu["n"]) if qu else 0,
             "ozon_products_removed": products_removed,
+            "ozon_products_added": products_added,
+            "ozon_promo_kept": participants_kept,
+            "ozon_promo_skipped_data": skipped_data_count,
             "wb_chat_replies": wb_chats,
             "ozon_chat_replies": oz_chats,
             "chat_replies_total": wb_chats + oz_chats,

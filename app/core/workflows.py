@@ -1824,6 +1824,55 @@ async def ozon_actions_auto_remove_for_store(
         return {"skipped": 1, "reason": "error", "error": str(e)[:300]}
 
 
+async def ozon_actions_sync_discount_for_store(
+    store: Store,
+    *,
+    threshold_percent: float = 3.0,
+    enable_remove: bool = True,
+    enable_add: bool = True,
+    exclude_voucher_actions: bool = False,
+    exclude_action_ids: Optional[List[int]] = None,
+    only_action_ids: Optional[List[int]] = None,
+    progress_cb: Optional[Callable[[int, int, str], None]] = None,
+) -> Dict[str, Any]:
+    """Синхронизация акций Ozon по порогу скидки (все акции)."""
+    from .ozon_actions import sync_actions_by_discount_threshold
+
+    if store.marketplace != "ozon":
+        return {"skipped": 1, "reason": "not_ozon_store"}
+    if not (store.client_id or "").strip() or not (store.api_key or "").strip():
+        return {"skipped": 1, "reason": "no_ozon_keys"}
+    client = OzonClient(store.client_id or "", store.api_key)
+    try:
+        return await sync_actions_by_discount_threshold(
+            client,
+            threshold_percent=threshold_percent,
+            enable_remove=enable_remove,
+            enable_add=enable_add,
+            exclude_voucher_actions=exclude_voucher_actions,
+            exclude_action_ids=exclude_action_ids,
+            only_action_ids=only_action_ids,
+            progress_cb=progress_cb,
+        )
+    except HttpStatusError as e:
+        reason = ozon_http_skip_reason(e.status, e.body or "", feature="actions")
+        if reason:
+            log.info("ozon_actions_sync store=%s skipped: %s (HTTP %s)", store.id, reason, e.status)
+            return {
+                "skipped": 1,
+                "reason": reason,
+                "message": ozon_feature_unavailable_user_message(reason, feature="actions"),
+                "mode": "discount_threshold",
+            }
+        log.warning("ozon_actions_sync store=%s: HTTP %s", store.id, e.status)
+        return {"skipped": 1, "reason": "http_error", "status": e.status, "body": (e.body or "")[:300]}
+    except (asyncio.CancelledError, GeneratorExit):
+        raise
+    except Exception as e:
+        log.exception("ozon_actions_sync store=%s", store.id)
+        return {"skipped": 1, "reason": "error", "error": str(e)[:300]}
+
+
 async def scan_ozon_important_alerts_for_store(
     db: Database,
     store: Store,

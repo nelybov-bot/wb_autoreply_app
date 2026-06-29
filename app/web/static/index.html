@@ -107,7 +107,7 @@
             <div class="nav-mega-col">
               <div class="nav-mega-title">Акции</div>
               <button type="button" class="nav-dd-item" data-tab="ozon-actions" data-actions-section="list">Список акций</button>
-              <button type="button" class="nav-dd-item" data-tab="ozon-actions" data-actions-section="settings">Настройки автоудаления</button>
+              <button type="button" class="nav-dd-item" data-tab="ozon-actions" data-actions-section="settings">Настройки синхронизации</button>
               <button type="button" class="nav-dd-item" data-tab="ozon-actions" data-actions-section="manual">Удаление товаров</button>
             </div>
           </div>
@@ -572,21 +572,41 @@
           </div>
         </div>
         <div class="form-card form-card-wide" id="ozon-actions-settings">
-          <h2>Настройки автоудаления</h2>
+          <h2>Настройки синхронизации акций</h2>
           <div class="form-group">
-            <label class="toggle-row"><span>Только автоакции <em class="toggle-hint">Ozon сам добавляет товары</em></span><input type="checkbox" class="toggle-input" id="ozon-actions-only-auto" checked><span class="toggle-track" aria-hidden="true"></span></label>
-            <div class="form-group ozon-actions-ids-field">
-              <label>ID акций для отслеживания (через запятую)</label>
-              <input type="text" id="ozon-actions-watched-ids" placeholder="71342, 66011">
-            </div>
-            <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-actions-save-settings">Сохранить</button>
+            <label>Режим</label>
+            <select id="ozon-actions-sync-mode" class="select-md">
+              <option value="discount_threshold">По порогу скидки</option>
+              <option value="legacy_auto_remove">Старое автоудаление</option>
+            </select>
           </div>
+          <div class="form-group" id="ozon-actions-discount-fields">
+            <label>Порог скидки, %</label>
+            <input type="number" id="ozon-actions-threshold" min="0" max="99" step="0.1" value="3" class="input-sm">
+            <p class="form-hint">≤ порога — оставить или добавить; &gt; порога — снять. SKU с нулевыми/странными ценами пропускаются.</p>
+            <label class="toggle-row"><span>Снимать товары с высокой скидкой</span><input type="checkbox" class="toggle-input" id="ozon-actions-sync-remove" checked><span class="toggle-track" aria-hidden="true"></span></label>
+            <label class="toggle-row"><span>Добавлять подходящие кандидаты</span><input type="checkbox" class="toggle-input" id="ozon-actions-sync-add" checked><span class="toggle-track" aria-hidden="true"></span></label>
+            <label class="toggle-row"><span>Исключить ваучерные акции</span><input type="checkbox" class="toggle-input" id="ozon-actions-exclude-voucher"><span class="toggle-track" aria-hidden="true"></span></label>
+            <div class="form-group ozon-actions-ids-field">
+              <label>ID акций для исключения (через запятую)</label>
+              <input type="text" id="ozon-actions-exclude-ids" placeholder="12345, 67890">
+            </div>
+          </div>
+          <div class="form-group" id="ozon-actions-legacy-fields">
+            <label class="toggle-row"><span>Только автоакции <em class="toggle-hint">Ozon сам добавляет товары</em></span><input type="checkbox" class="toggle-input" id="ozon-actions-only-auto" checked><span class="toggle-track" aria-hidden="true"></span></label>
+          </div>
+          <div class="form-group ozon-actions-ids-field">
+            <label>ID акций для отслеживания (пусто = все акции)</label>
+            <input type="text" id="ozon-actions-watched-ids" placeholder="71342, 66011">
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-actions-save-settings">Сохранить</button>
         </div>
         <div class="form-card form-card-wide" id="ozon-actions-manual">
-          <h2>Удаление товаров</h2>
+          <h2>Запуск вручную</h2>
           <div class="settings-actions ozon-actions-buttons">
+            <button type="button" class="btn btn-primary" id="btn-ozon-actions-sync-discount">Синхронизировать по порогу</button>
+            <button type="button" class="btn btn-secondary" id="btn-ozon-actions-auto-remove">Автоудаление (legacy)</button>
             <button type="button" class="btn btn-secondary" id="btn-ozon-actions-remove-selected">Удалить товары из выбранных акций</button>
-            <button type="button" class="btn btn-secondary" id="btn-ozon-actions-auto-remove">Автоудаление сейчас</button>
           </div>
         </div>
       </div>
@@ -953,7 +973,7 @@
                 <label class="toggle-row"><span>Вопросы</span><input type="checkbox" class="toggle-input" id="auto-run-questions-ozon" checked><span class="toggle-track" aria-hidden="true"></span></label>
                 <label class="toggle-row"><span>Чаты с покупателями</span><input type="checkbox" class="toggle-input" id="auto-run-ozon-chats"><span class="toggle-track" aria-hidden="true"></span></label>
                 <label class="toggle-row"><span>Уведомления поддержки</span><input type="checkbox" class="toggle-input" id="auto-run-ozon-alerts"><span class="toggle-track" aria-hidden="true"></span></label>
-                <label class="toggle-row"><span>Удаление из автоакций</span><input type="checkbox" class="toggle-input" id="auto-run-ozon-actions-remove"><span class="toggle-track" aria-hidden="true"></span></label>
+                <label class="toggle-row"><span>Синхронизация акций Ozon <em class="toggle-hint">по порогу скидки или legacy</em></span><input type="checkbox" class="toggle-input" id="auto-run-ozon-actions-remove"><span class="toggle-track" aria-hidden="true"></span></label>
               </div>
             </div>
             <p class="form-hint auto-task-hint">

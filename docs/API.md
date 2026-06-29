@@ -175,12 +175,13 @@
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/api/ozon/actions/settings/{store_id}` | Настройки автоудаления для магазина |
-| POST | `/api/ozon/actions/settings/{store_id}` | Сохранить |
+| GET | `/api/ozon/actions/settings/{store_id}` | Настройки синхронизации акций для магазина |
+| POST | `/api/ozon/actions/settings/{store_id}` | Сохранить (режим `discount_threshold` / `legacy_auto_remove`, порог %, watched/exclude IDs) |
 | GET | `/api/ozon/actions/{store_id}` | Список акций |
 | GET | `/api/ozon/actions/{store_id}/{action_id}/products` | Товары в акции |
 | POST | `/api/ozon/actions/{store_id}/remove` | Удалить товары из акций |
-| POST | `/api/ozon/actions/{store_id}/auto-remove` | Автоудаление по правилам |
+| POST | `/api/ozon/actions/{store_id}/sync-discount` | Синхронизация по порогу скидки (≤ порога — оставить/добавить, > — снять) |
+| POST | `/api/ozon/actions/{store_id}/auto-remove` | Legacy-автоудаление по правилам |
 
 Глобальные настройки акций хранятся в `app_settings.ozon_actions_settings_json`.
 

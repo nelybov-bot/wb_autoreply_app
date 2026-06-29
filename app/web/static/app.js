@@ -2181,18 +2181,60 @@
       .filter(n => Number.isFinite(n) && n > 0);
   }
 
+  function updateOzonActionsModeUi() {
+    const mode = document.getElementById('ozon-actions-sync-mode')?.value || 'discount_threshold';
+    const discountBlock = document.getElementById('ozon-actions-discount-fields');
+    const legacyBlock = document.getElementById('ozon-actions-legacy-fields');
+    const syncBtn = document.getElementById('btn-ozon-actions-sync-discount');
+    const legacyBtn = document.getElementById('btn-ozon-actions-auto-remove');
+    const isDiscount = mode === 'discount_threshold';
+    if (discountBlock) discountBlock.hidden = !isDiscount;
+    if (legacyBlock) legacyBlock.hidden = isDiscount;
+    if (syncBtn) syncBtn.hidden = !isDiscount;
+    if (legacyBtn) legacyBtn.hidden = isDiscount;
+  }
+
   async function loadOzonActionsSettings() {
     const sid = getOzonActionsStoreId();
     if (!sid) return;
     try {
       const cfg = await api(`/ozon/actions/settings/${sid}`);
+      const modeEl = document.getElementById('ozon-actions-sync-mode');
+      const thresholdEl = document.getElementById('ozon-actions-threshold');
       const onlyAuto = document.getElementById('ozon-actions-only-auto');
       const watched = document.getElementById('ozon-actions-watched-ids');
+      const syncRemove = document.getElementById('ozon-actions-sync-remove');
+      const syncAdd = document.getElementById('ozon-actions-sync-add');
+      const excludeVoucher = document.getElementById('ozon-actions-exclude-voucher');
+      const excludeIds = document.getElementById('ozon-actions-exclude-ids');
+      if (modeEl) modeEl.value = cfg.sync_mode === 'legacy_auto_remove' ? 'legacy_auto_remove' : 'discount_threshold';
+      if (thresholdEl) thresholdEl.value = cfg.discount_threshold_percent ?? 3;
       if (onlyAuto) onlyAuto.checked = cfg.only_auto_add !== false;
       if (watched) watched.value = (cfg.watched_action_ids || []).join(', ');
+      if (syncRemove) syncRemove.checked = cfg.sync_enable_remove !== false;
+      if (syncAdd) syncAdd.checked = cfg.sync_enable_add !== false;
+      if (excludeVoucher) excludeVoucher.checked = !!cfg.exclude_voucher_actions;
+      if (excludeIds) excludeIds.value = (cfg.exclude_action_ids || []).join(', ');
+      updateOzonActionsModeUi();
     } catch (err) {
       toast(err.message, 'error');
     }
+  }
+
+  function collectOzonActionsSettingsBody() {
+    const mode = document.getElementById('ozon-actions-sync-mode')?.value || 'discount_threshold';
+    const thresholdRaw = parseFloat(document.getElementById('ozon-actions-threshold')?.value || '3');
+    return {
+      auto_remove_on_schedule: false,
+      only_auto_add: !!document.getElementById('ozon-actions-only-auto')?.checked,
+      watched_action_ids: parseWatchedActionIds(document.getElementById('ozon-actions-watched-ids')?.value || ''),
+      sync_mode: mode,
+      discount_threshold_percent: Number.isFinite(thresholdRaw) ? thresholdRaw : 3,
+      sync_enable_remove: !!document.getElementById('ozon-actions-sync-remove')?.checked,
+      sync_enable_add: !!document.getElementById('ozon-actions-sync-add')?.checked,
+      exclude_voucher_actions: !!document.getElementById('ozon-actions-exclude-voucher')?.checked,
+      exclude_action_ids: parseWatchedActionIds(document.getElementById('ozon-actions-exclude-ids')?.value || ''),
+    };
   }
 
   async function saveOzonActionsSettings() {
@@ -2201,16 +2243,58 @@
       toast('Выберите магазин Ozon', 'error');
       return;
     }
-    const only_auto_add = !!document.getElementById('ozon-actions-only-auto')?.checked;
-    const watched_action_ids = parseWatchedActionIds(document.getElementById('ozon-actions-watched-ids')?.value || '');
     try {
       await api(`/ozon/actions/settings/${sid}`, {
         method: 'POST',
-        body: JSON.stringify({ only_auto_add, watched_action_ids, auto_remove_on_schedule: false }),
+        body: JSON.stringify(collectOzonActionsSettingsBody()),
       });
       toast('Настройки акций сохранены');
     } catch (err) {
       toast(err.message, 'error');
+    }
+  }
+
+  function formatOzonActionsResult(r) {
+    if (r.skipped && r.reason && String(r.reason).startsWith('no_')) {
+      return { toast: r.message || 'Акции недоступны — пропущено.', status: r.message || 'Магазин пропущен.' };
+    }
+    if (r.mode === 'discount_threshold' || r.participants_kept != null || r.products_added != null) {
+      const skipped = r.skipped_data_count ?? 0;
+      const msg = `Синхронизация: −${r.participants_removed ?? r.products_removed ?? 0} / +${r.products_added ?? r.candidates_added ?? 0}, `
+        + `оставлено ${r.participants_kept ?? 0}, пропусков данных ${skipped}, акций ${r.actions_processed ?? 0}`;
+      return { toast: msg, status: msg };
+    }
+    const msg = `Автоудаление: удалено ${r.products_removed ?? 0} из ${r.actions_processed ?? 0} акций`;
+    return { toast: msg, status: msg };
+  }
+
+  async function ozonActionsSyncDiscountNow() {
+    const sid = getOzonActionsStoreId();
+    if (!sid) {
+      toast('Выберите магазин Ozon', 'error');
+      return;
+    }
+    const threshold = document.getElementById('ozon-actions-threshold')?.value || '3';
+    if (!confirm(`Синхронизировать акции по порогу ${threshold}%?`)) return;
+    await saveOzonActionsSettings();
+    const btn = document.getElementById('btn-ozon-actions-sync-discount');
+    if (btn) btn.disabled = true;
+    setPanelLoading('ozon-actions-loading', true, 'Синхронизация акций…');
+    try {
+      const r = await api(`/ozon/actions/${sid}/sync-discount`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+        timeoutMs: 600000,
+      });
+      const fmt = formatOzonActionsResult(r);
+      toast(fmt.toast);
+      setOzonActionsStatus(fmt.status);
+      await loadOzonActionsList(true);
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+      setPanelLoading('ozon-actions-loading', false);
     }
   }
 
@@ -2287,7 +2371,7 @@
     }
     const onlyAuto = !!document.getElementById('ozon-actions-only-auto')?.checked;
     const hint = onlyAuto ? 'всех автоакций с вашими товарами' : 'выбранных/всех акций по настройкам';
-    if (!confirm(`Запустить автоудаление (${hint})?`)) return;
+    if (!confirm(`Запустить legacy-автоудаление (${hint})?`)) return;
     await saveOzonActionsSettings();
     const btn = document.getElementById('btn-ozon-actions-auto-remove');
     if (btn) btn.disabled = true;
@@ -2296,15 +2380,11 @@
       const r = await api(`/ozon/actions/${sid}/auto-remove`, {
         method: 'POST',
         body: JSON.stringify({}),
-        timeoutMs: 300000,
+        timeoutMs: 600000,
       });
-      if (r.skipped && r.reason && String(r.reason).startsWith('no_')) {
-        toast(r.message || 'Акции недоступны для этого магазина — пропущено.');
-        setOzonActionsStatus(r.message || 'Магазин пропущен (нет доступа к акциям).');
-        return;
-      }
-      toast(`Автоудаление: товаров ${r.products_removed ?? 0}, акций ${r.actions_processed ?? 0}, подошло ${r.actions_matched ?? 0}`);
-      setOzonActionsStatus(`Автоудаление: удалено ${r.products_removed ?? 0} позиций из ${r.actions_processed ?? 0} акций.`);
+      const fmt = formatOzonActionsResult(r);
+      toast(fmt.toast);
+      setOzonActionsStatus(fmt.status);
       await loadOzonActionsList(true);
     } catch (err) {
       toast(err.message, 'error');
@@ -2342,8 +2422,10 @@
     });
     document.getElementById('btn-ozon-actions-load')?.addEventListener('click', () => { void loadOzonActionsList(true); });
     document.getElementById('btn-ozon-actions-remove-selected')?.addEventListener('click', () => { void ozonActionsRemoveSelected(); });
+    document.getElementById('btn-ozon-actions-sync-discount')?.addEventListener('click', () => { void ozonActionsSyncDiscountNow(); });
     document.getElementById('btn-ozon-actions-auto-remove')?.addEventListener('click', () => { void ozonActionsAutoRemoveNow(); });
     document.getElementById('btn-ozon-actions-save-settings')?.addEventListener('click', () => { void saveOzonActionsSettings(); });
+    document.getElementById('ozon-actions-sync-mode')?.addEventListener('change', updateOzonActionsModeUi);
     document.getElementById('ozon-actions-check-all')?.addEventListener('change', (e) => {
       const checked = !!e.target.checked;
       document.querySelectorAll('.ozon-action-check:not(:disabled)').forEach(el => { el.checked = checked; });
@@ -7264,7 +7346,7 @@
         toast(
           `Отчёт отправлен: отзывы ${res.reviews_sent || 0}, вопросы ${res.questions_sent || 0}, `
           + `чаты ${res.chat_replies_total || 0}, документы Ozon ${res.ozon_cert_requests_products || 0}, `
-          + `скрытия ${res.ozon_hidden_products || 0}, акции −${res.ozon_products_removed || 0}`,
+          + `скрытия ${res.ozon_hidden_products || 0}, акции −${res.ozon_products_removed || 0} / +${res.ozon_products_added || 0}`,
         );
       } catch (err) {
         toast(err.message, 'error');
@@ -7293,6 +7375,7 @@
       store_ozon_alerts_auto: 'Автозапуск: уведомления Ozon',
       ozon_alert_detected: 'Ozon: важное уведомление',
       ozon_actions_auto_remove: 'Акции Ozon: автоудаление',
+      ozon_actions_discount_sync: 'Акции Ozon: синхронизация по порогу',
       ozon_actions_remove: 'Акции Ozon: удаление',
       wb_buyer_chat_generate: 'Чат WB: генерация',
       wb_buyer_chat_send: 'Чат WB: отправка',
@@ -7328,6 +7411,11 @@
     if (oa) {
       if (oa.skipped) {
         parts.push(`акции: пропуск (${oa.reason || oa.message || '—'})`);
+      } else if (oa.mode === 'discount_threshold' || oa.participants_kept != null) {
+        parts.push(
+          `акции: −${oa.participants_removed ?? oa.products_removed ?? 0} / +${oa.products_added ?? 0}, `
+          + `оставлено ${oa.participants_kept ?? 0}, пропусков ${oa.skipped_data_count ?? 0}`,
+        );
       } else {
         parts.push(`акции: ${oa.products_removed || 0} товаров из ${oa.actions_processed || 0} акций (подошло ${oa.actions_matched || 0})`);
       }
@@ -7342,11 +7430,15 @@
     if (action === 'auto_run_skipped') {
       return `Слот ${meta.slot || '—'} не запущен: ${meta.reason === 'previous_run_still_running' ? 'предыдущий цикл ещё идёт' : (meta.reason || '—')}${meta.current_store_id ? ` (был на маг. ${meta.current_store_id})` : ''}`;
     }
-    if (action === 'ozon_actions_auto_remove' || action === 'ozon_actions_remove') {
+    if (action === 'ozon_actions_auto_remove' || action === 'ozon_actions_remove' || action === 'ozon_actions_discount_sync') {
       if (meta.skipped) {
         return `Пропуск: ${meta.message || meta.reason || 'нет доступа'}`;
       }
       const errs = Array.isArray(meta.errors) && meta.errors.length ? `, ошибок ${meta.errors.length}` : '';
+      if (action === 'ozon_actions_discount_sync' || meta.mode === 'discount_threshold') {
+        return `Акций: ${meta.actions_processed ?? 0}, −${meta.participants_removed ?? meta.products_removed ?? 0} / +${meta.products_added ?? 0}, `
+          + `оставлено ${meta.participants_kept ?? 0}, пропусков данных ${meta.skipped_data_count ?? 0}${errs}`;
+      }
       return `Акций: подошло ${meta.actions_matched ?? 0}, обработано ${meta.actions_processed ?? 0}, удалено товаров ${meta.products_removed ?? 0}, отклонено ${meta.products_rejected ?? 0}${errs}`;
     }
     if (action === 'auto_run') {
@@ -7370,8 +7462,9 @@
       if (meta.run_ozon_actions_remove) {
         const oa = meta.ozon_actions_totals || {};
         lines.push(
-          `Акции Ozon: удалено ${oa.products_removed ?? 0} товаров из ${oa.actions_processed ?? 0} акций`
-          + ` (магазинов с удалением: ${oa.stores_with_removals ?? 0}, пропущено: ${oa.stores_skipped ?? 0})`,
+          `Акции Ozon: −${oa.products_removed ?? 0} / +${oa.products_added ?? 0}, `
+          + `оставлено ${oa.participants_kept ?? 0}, пропусков данных ${oa.skipped_data_count ?? 0} `
+          + `(акций ${oa.actions_processed ?? 0}, магазинов: ${oa.stores_with_sync ?? 0}, пропущено: ${oa.stores_skipped ?? 0})`,
         );
       }
       const perStore = (meta.stores_results || []).map(formatStoreAutoLine).filter(Boolean);
@@ -7417,7 +7510,10 @@
       const intervalRu = meta.interval === 'day' ? 'за сутки' : 'за час';
       let line = `${intervalRu}: отзывы ${meta.reviews_sent ?? 0}, вопросы ${meta.questions_sent ?? 0}, `
         + `чаты ${meta.chat_replies_total ?? 0} (WB ${meta.wb_chat_replies ?? 0}, Ozon ${meta.ozon_chat_replies ?? 0}), `
-        + `уведомл. Ozon ${meta.ozon_alerts ?? 0}, удалено с акций ${meta.ozon_products_removed ?? 0}`;
+        + `уведомл. Ozon ${meta.ozon_alerts ?? 0}, акции −${meta.ozon_products_removed ?? 0} / +${meta.ozon_products_added ?? 0}`;
+      if (meta.ozon_promo_kept || meta.ozon_promo_skipped_data) {
+        line += `, оставлено ${meta.ozon_promo_kept ?? 0}, пропусков данных ${meta.ozon_promo_skipped_data ?? 0}`;
+      }
       if (meta.interval === 'day' && meta.reviews_by_rating && typeof meta.reviews_by_rating === 'object') {
         const stars = Object.keys(meta.reviews_by_rating)
           .map((k) => parseInt(k, 10))

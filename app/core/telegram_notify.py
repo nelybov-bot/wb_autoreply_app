@@ -441,6 +441,9 @@ def format_activity_report(
     ozon_chats = int(stats.get("ozon_chat_replies") or 0)
     chat_total = int(stats.get("chat_replies_total") or 0) or (wb_chats + ozon_chats)
     removed = int(stats.get("ozon_products_removed") or 0)
+    added = int(stats.get("ozon_products_added") or 0)
+    kept = int(stats.get("ozon_promo_kept") or 0)
+    skipped_data = int(stats.get("ozon_promo_skipped_data") or 0)
     card_errors = int(stats.get("card_errors") or 0)
     cert_products = int(stats.get("ozon_cert_requests_products") or 0)
     hidden_products = int(stats.get("ozon_hidden_products") or 0)
@@ -495,7 +498,12 @@ def format_activity_report(
         lines.append("")
         lines.append("<b>Ozon:</b>")
         lines.extend(ozon_lines)
-    lines.append(f"<b>Автоакции Ozon:</b> удалено товаров {removed}")
+    if added or kept or skipped_data:
+        lines.append(
+            f"<b>Акции Ozon:</b> −{removed} / +{added}, оставлено {kept}, пропусков данных {skipped_data}"
+        )
+    elif removed:
+        lines.append(f"<b>Акции Ozon:</b> снято товаров {removed}")
     if include_card_errors:
         lines.append(f"<b>Ошибки в карточках:</b> {card_errors}")
     return "\n".join(lines)
