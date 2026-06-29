@@ -493,23 +493,6 @@
   wireAppNav();
 
   // ---- Сводка ----
-  function wireSummaryOpsToggle() {
-    const btn = document.getElementById('btn-summary-ops-toggle');
-    const body = document.getElementById('summary-ops-body');
-    const wrap = document.getElementById('summary-ops-collapsible');
-    if (!btn || !body) return;
-    const setOpen = (open) => {
-      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-      body.hidden = !open;
-      if (wrap) wrap.classList.toggle('is-open', open);
-    };
-    setOpen(false);
-    btn.addEventListener('click', () => {
-      setOpen(btn.getAttribute('aria-expanded') !== 'true');
-    });
-  }
-
-  wireSummaryOpsToggle();
 
   async function loadStats() {
     try {

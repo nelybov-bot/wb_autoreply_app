@@ -12,7 +12,7 @@
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
-  <link rel="stylesheet" href="/static/styles.css?v=33">
+  <link rel="stylesheet" href="/static/styles.css?v=34">
   <link rel="stylesheet" href="/static/fx-widgets.css?v=5">
 </head>
 <body>
@@ -120,6 +120,34 @@
           <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-quality" title="Обновить показатели с маркетплейсов">Обновить показатели</button>
         </div>
       </div>
+      <div class="summary-kpi-section">
+        <div class="summary-section-head">
+          <h3 class="summary-section-title">Сегодня</h3>
+          <p class="form-hint summary-section-hint" id="summary-ops-toggle-meta">загрузка…</p>
+        </div>
+        <div class="stats-grid stats-grid--summary" id="stats-cards">
+          <div class="stat-card highlight">
+            <div class="value" id="stat-today">—</div>
+            <div class="label">Отправлено сегодня</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-queue-reviews">—</div>
+            <div class="label">Новых отзывов</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-queue-questions">—</div>
+            <div class="label">Новых вопросов</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-wb-chats-today">—</div>
+            <div class="label">Чаты WB сегодня</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-ozon-chats-today">—</div>
+            <div class="label">Чаты Ozon сегодня</div>
+          </div>
+        </div>
+      </div>
       <section class="quality-section" aria-labelledby="quality-section-title">
         <div class="quality-section-head">
           <h3 id="quality-section-title" class="quality-section-title">Показатели качества</h3>
@@ -134,41 +162,10 @@
           <div class="quality-panel-body" id="quality-ozon-stores"></div>
         </div>
       </section>
-      <section class="summary-ops-collapsible summary-ops-collapsible--footer" id="summary-ops-collapsible" aria-label="Очередь и операционка">
-        <button type="button" class="summary-ops-toggle" id="btn-summary-ops-toggle" aria-expanded="false" aria-controls="summary-ops-body">
-          <span class="summary-ops-toggle-main">
-            <span class="summary-ops-toggle-title">Очередь и операционка</span>
-            <span class="summary-ops-toggle-meta" id="summary-ops-toggle-meta">загрузка…</span>
-          </span>
-          <span class="summary-ops-chevron" aria-hidden="true"></span>
-        </button>
-        <div class="summary-ops-body" id="summary-ops-body" hidden>
-          <div class="stats-grid stats-grid--compact" id="stats-cards">
-            <div class="stat-card highlight">
-              <div class="value" id="stat-today">—</div>
-              <div class="label">Отправлено сегодня</div>
-            </div>
-            <div class="stat-card">
-              <div class="value" id="stat-queue-reviews">—</div>
-              <div class="label">Новых отзывов</div>
-            </div>
-            <div class="stat-card">
-              <div class="value" id="stat-queue-questions">—</div>
-              <div class="label">Новых вопросов</div>
-            </div>
-            <div class="stat-card">
-              <div class="value" id="stat-wb-chats-today">—</div>
-              <div class="label">Чаты WB сегодня</div>
-            </div>
-            <div class="stat-card">
-              <div class="value" id="stat-ozon-chats-today">—</div>
-              <div class="label">Чаты Ozon сегодня</div>
-            </div>
-          </div>
-          <div class="chart-section chart-section--compact">
-            <h3 class="chart-section-title">Операционная сводка</h3>
-            <div class="summary-grid" id="summary-grid"></div>
-          </div>
+      <section class="summary-ops-section" aria-labelledby="summary-ops-title">
+        <h3 id="summary-ops-title" class="summary-section-title">Очередь и автозапуск</h3>
+        <div class="summary-ops-card">
+          <div class="summary-grid" id="summary-grid"></div>
         </div>
       </section>
     </section>
@@ -541,41 +538,106 @@
           </div>
         </div>
         <div class="form-card form-card-wide" id="ozon-actions-settings">
-          <h2>Настройки синхронизации акций</h2>
-          <div class="form-group">
-            <label>Режим</label>
-            <select id="ozon-actions-sync-mode" class="select-md">
-              <option value="discount_threshold">По порогу скидки</option>
+          <h2>Настройки синхронизации</h2>
+          <p class="form-hint ozon-settings-intro">Правила применяются при ручном запуске и автозапуске для выбранного магазина Ozon.</p>
+          <div class="form-group ozon-settings-block">
+            <label for="ozon-actions-sync-mode">Режим работы</label>
+            <select id="ozon-actions-sync-mode" class="select-lg">
+              <option value="discount_threshold">По порогу скидки (рекомендуется)</option>
               <option value="legacy_auto_remove">Старое автоудаление</option>
             </select>
+            <p class="form-hint">«По порогу» — снимает товары со скидкой выше порога и добавляет подходящие. Legacy — только удаление из автоакций.</p>
           </div>
-          <div class="form-group" id="ozon-actions-discount-fields">
-            <label>Порог скидки, %</label>
-            <input type="number" id="ozon-actions-threshold" min="0" max="99" step="0.1" value="3" class="input-sm">
-            <p class="form-hint">≤ порога — оставить или добавить; &gt; порога — снять. SKU с нулевыми/странными ценами пропускаются.</p>
-            <label class="toggle-row"><span>Снимать товары с высокой скидкой</span><input type="checkbox" class="toggle-input" id="ozon-actions-sync-remove" checked><span class="toggle-track" aria-hidden="true"></span></label>
-            <label class="toggle-row"><span>Добавлять подходящие кандидаты</span><input type="checkbox" class="toggle-input" id="ozon-actions-sync-add" checked><span class="toggle-track" aria-hidden="true"></span></label>
-            <label class="toggle-row"><span>Исключить ваучерные акции</span><input type="checkbox" class="toggle-input" id="ozon-actions-exclude-voucher"><span class="toggle-track" aria-hidden="true"></span></label>
+          <div id="ozon-actions-discount-fields" class="ozon-settings-block">
+            <div class="form-group">
+              <label for="ozon-actions-threshold">Порог скидки, %</label>
+              <input type="number" id="ozon-actions-threshold" min="0" max="99" step="0.1" value="3" class="input-md ozon-threshold-input">
+              <p class="form-hint">≤ порога — оставить или добавить в акцию; &gt; порога — снять. SKU с нулевыми или странными ценами пропускаются.</p>
+            </div>
+            <div class="settings-option-list">
+              <div class="settings-option">
+                <div class="settings-option-body">
+                  <div class="settings-option-title">Снимать товары с высокой скидкой</div>
+                  <p class="settings-option-desc">Удалять из акций товары, у которых скидка превышает порог.</p>
+                </div>
+                <label class="toggle-switch toggle-switch--lg" title="Снимать товары с высокой скидкой">
+                  <input type="checkbox" class="toggle-input" id="ozon-actions-sync-remove" checked>
+                  <span class="toggle-track" aria-hidden="true"></span>
+                </label>
+              </div>
+              <div class="settings-option">
+                <div class="settings-option-body">
+                  <div class="settings-option-title">Добавлять подходящие кандидаты</div>
+                  <p class="settings-option-desc">Автоматически включать в акции товары со скидкой не выше порога.</p>
+                </div>
+                <label class="toggle-switch toggle-switch--lg" title="Добавлять подходящие кандидаты">
+                  <input type="checkbox" class="toggle-input" id="ozon-actions-sync-add" checked>
+                  <span class="toggle-track" aria-hidden="true"></span>
+                </label>
+              </div>
+              <div class="settings-option">
+                <div class="settings-option-body">
+                  <div class="settings-option-title">Исключить ваучерные акции</div>
+                  <p class="settings-option-desc">Не трогать промо с ваучерами и подарочными сертификатами.</p>
+                </div>
+                <label class="toggle-switch toggle-switch--lg" title="Исключить ваучерные акции">
+                  <input type="checkbox" class="toggle-input" id="ozon-actions-exclude-voucher">
+                  <span class="toggle-track" aria-hidden="true"></span>
+                </label>
+              </div>
+            </div>
             <div class="form-group ozon-actions-ids-field">
-              <label>ID акций для исключения (через запятую)</label>
+              <label for="ozon-actions-exclude-ids">ID акций для исключения</label>
               <input type="text" id="ozon-actions-exclude-ids" placeholder="12345, 67890">
+              <p class="form-hint">Через запятую. Эти акции синхронизация полностью пропустит.</p>
             </div>
           </div>
-          <div class="form-group" id="ozon-actions-legacy-fields">
-            <label class="toggle-row"><span>Только автоакции <em class="toggle-hint">Ozon сам добавляет товары</em></span><input type="checkbox" class="toggle-input" id="ozon-actions-only-auto" checked><span class="toggle-track" aria-hidden="true"></span></label>
+          <div id="ozon-actions-legacy-fields" class="ozon-settings-block">
+            <div class="settings-option-list">
+              <div class="settings-option">
+                <div class="settings-option-body">
+                  <div class="settings-option-title">Только автоакции</div>
+                  <p class="settings-option-desc">Ozon сам добавляет товары в такие акции — legacy-режим работает только с ними.</p>
+                </div>
+                <label class="toggle-switch toggle-switch--lg" title="Только автоакции">
+                  <input type="checkbox" class="toggle-input" id="ozon-actions-only-auto" checked>
+                  <span class="toggle-track" aria-hidden="true"></span>
+                </label>
+              </div>
+            </div>
           </div>
-          <div class="form-group ozon-actions-ids-field">
-            <label>ID акций для отслеживания (пусто = все акции)</label>
+          <div class="form-group ozon-settings-block ozon-actions-ids-field">
+            <label for="ozon-actions-watched-ids">ID акций для отслеживания</label>
             <input type="text" id="ozon-actions-watched-ids" placeholder="71342, 66011">
+            <p class="form-hint">Пусто — все акции магазина. Иначе только перечисленные ID.</p>
           </div>
-          <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-actions-save-settings">Сохранить</button>
+          <button type="button" class="btn btn-primary" id="btn-ozon-actions-save-settings">Сохранить настройки</button>
         </div>
         <div class="form-card form-card-wide" id="ozon-actions-manual">
           <h2>Запуск вручную</h2>
-          <div class="settings-actions ozon-actions-buttons">
-            <button type="button" class="btn btn-primary" id="btn-ozon-actions-sync-discount">Синхронизировать по порогу</button>
-            <button type="button" class="btn btn-secondary" id="btn-ozon-actions-auto-remove">Автоудаление (legacy)</button>
-            <button type="button" class="btn btn-secondary" id="btn-ozon-actions-remove-selected">Удалить товары из выбранных акций</button>
+          <p class="form-hint ozon-settings-intro">Сначала выберите магазин и при необходимости отметьте акции в таблице выше.</p>
+          <div class="action-card-list ozon-actions-buttons">
+            <div class="action-card">
+              <div class="action-card-body">
+                <div class="action-card-title">Синхронизировать по порогу</div>
+                <p class="action-card-desc">Проверить все акции и применить правила из настроек синхронизации.</p>
+              </div>
+              <button type="button" class="btn btn-primary" id="btn-ozon-actions-sync-discount">Запустить</button>
+            </div>
+            <div class="action-card">
+              <div class="action-card-body">
+                <div class="action-card-title">Автоудаление (legacy)</div>
+                <p class="action-card-desc">Старый режим: только снятие товаров из автоакций без добавления.</p>
+              </div>
+              <button type="button" class="btn btn-secondary" id="btn-ozon-actions-auto-remove">Запустить</button>
+            </div>
+            <div class="action-card">
+              <div class="action-card-body">
+                <div class="action-card-title">Удалить из выбранных акций</div>
+                <p class="action-card-desc">Снять товары только из акций, отмеченных галочками в таблице.</p>
+              </div>
+              <button type="button" class="btn btn-secondary" id="btn-ozon-actions-remove-selected">Удалить</button>
+            </div>
           </div>
         </div>
       </div>
@@ -1510,7 +1572,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=72"></script>
+  <script src="/static/app.js?v=73"></script>
   <script src="/static/card_links_master.js?v=6"></script>
 </body>
 </html>
