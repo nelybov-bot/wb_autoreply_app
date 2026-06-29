@@ -378,6 +378,30 @@
     if (tabId === 'ozon-alerts') loadOzonAlerts();
   }
 
+  function wireSidebarToggle() {
+    const btn = document.getElementById('btn-sidebar-toggle');
+    if (!btn) return;
+
+    function applyExpanded(expanded) {
+      document.body.classList.toggle('sidebar-expanded', expanded);
+      btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      btn.setAttribute('aria-label', expanded ? 'Свернуть меню' : 'Развернуть меню');
+      btn.title = expanded ? 'Свернуть меню' : 'Развернуть меню';
+      const lbl = btn.querySelector('.si-label');
+      if (lbl) lbl.textContent = expanded ? 'Свернуть' : '';
+      try {
+        localStorage.setItem('ui_sidebar_expanded', expanded ? '1' : '0');
+      } catch (_) { /* ignore */ }
+    }
+
+    const initial = document.body.classList.contains('sidebar-expanded');
+    applyExpanded(initial);
+
+    btn.addEventListener('click', () => {
+      applyExpanded(!document.body.classList.contains('sidebar-expanded'));
+    });
+  }
+
   function wireAppNav() {
     document.querySelectorAll('.si[data-tab]').forEach(el => {
       el.addEventListener('click', () => {
@@ -465,6 +489,7 @@
   }
 
   // ---- Navigation ----
+  wireSidebarToggle();
   wireAppNav();
 
   // ---- Сводка ----

@@ -12,10 +12,11 @@
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
-  <link rel="stylesheet" href="/static/styles.css?v=32">
+  <link rel="stylesheet" href="/static/styles.css?v=33">
   <link rel="stylesheet" href="/static/fx-widgets.css?v=5">
 </head>
 <body>
+  <script>try{if(localStorage.getItem('ui_sidebar_expanded')==='1')document.body.classList.add('sidebar-expanded')}catch(e){}</script>
   <div class="bg-noise" aria-hidden="true"></div>
   <div class="brand-watermarks" aria-hidden="true" hidden>
     <span class="wm wm-wb">WB</span>
@@ -43,48 +44,68 @@
   </div>
 
   <nav class="sidebar" id="app-sidebar" aria-label="Разделы приложения">
-    <div class="si-logo">M</div>
+    <div class="si-logo">
+      <span class="si-logo-mark" aria-hidden="true">M</span>
+      <span class="si-label si-logo-text">MarketAI</span>
+    </div>
 
     <div class="si active" data-tab="summary" title="Сводка" role="button" tabindex="0">
-      <i class="ti ti-layout-dashboard"></i>
+      <i class="ti ti-layout-dashboard" aria-hidden="true"></i>
+      <span class="si-label">Сводка</span>
     </div>
     <div class="si" data-tab="reviews" title="Отзывы" role="button" tabindex="0">
-      <i class="ti ti-star"></i>
+      <i class="ti ti-star" aria-hidden="true"></i>
+      <span class="si-label">Отзывы</span>
     </div>
     <div class="si" data-tab="questions" title="Вопросы" role="button" tabindex="0">
-      <i class="ti ti-help-circle"></i>
+      <i class="ti ti-help-circle" aria-hidden="true"></i>
+      <span class="si-label">Вопросы</span>
     </div>
     <div class="si" data-tab="wb-chats" title="Чаты" role="button" tabindex="0">
-      <i class="ti ti-message-2"></i>
+      <i class="ti ti-message-2" aria-hidden="true"></i>
+      <span class="si-label">Чаты</span>
     </div>
     <div class="si" data-tab="ozon-actions" title="Акции Ozon" role="button" tabindex="0">
-      <i class="ti ti-tag"></i>
+      <i class="ti ti-tag" aria-hidden="true"></i>
+      <span class="si-label">Акции Ozon</span>
     </div>
     <div class="si" data-tab="card-links" title="Связки карточек" role="button" tabindex="0">
-      <i class="ti ti-link"></i>
+      <i class="ti ti-link" aria-hidden="true"></i>
+      <span class="si-label">Связки</span>
     </div>
 
     <div class="si" data-tab="auto" title="Автозапуск" role="button" tabindex="0">
-      <i class="ti ti-player-play"></i>
+      <i class="ti ti-player-play" aria-hidden="true"></i>
+      <span class="si-label">Автозапуск</span>
     </div>
     <div class="si" data-tab="agent" title="AI-ассистент" role="button" tabindex="0">
-      <i class="ti ti-sparkles"></i>
+      <i class="ti ti-sparkles" aria-hidden="true"></i>
+      <span class="si-label">AI-ассистент</span>
     </div>
 
     <div class="si-spacer"></div>
 
     <div class="si" data-tab="ozon-alerts" title="Уведомления и ошибки" role="button" tabindex="0">
-      <i class="ti ti-bell"></i>
+      <i class="ti ti-bell" aria-hidden="true"></i>
+      <span class="si-label">Уведомления</span>
     </div>
     <div class="si" data-tab="stores" title="Магазины" role="button" tabindex="0">
-      <i class="ti ti-building-store"></i>
+      <i class="ti ti-building-store" aria-hidden="true"></i>
+      <span class="si-label">Магазины</span>
     </div>
     <div class="si" data-tab="settings" title="Настройки" role="button" tabindex="0">
-      <i class="ti ti-settings"></i>
+      <i class="ti ti-settings" aria-hidden="true"></i>
+      <span class="si-label">Настройки</span>
     </div>
     <div class="si" data-tab="log" title="Журнал" role="button" tabindex="0">
-      <i class="ti ti-clipboard-list"></i>
+      <i class="ti ti-clipboard-list" aria-hidden="true"></i>
+      <span class="si-label">Журнал</span>
     </div>
+
+    <button type="button" class="si si-toggle" id="btn-sidebar-toggle" aria-label="Развернуть меню" aria-expanded="false" title="Развернуть меню">
+      <i class="ti ti-chevrons-right si-toggle-icon" aria-hidden="true"></i>
+      <span class="si-label">Свернуть</span>
+    </button>
   </nav>
 
   <main class="main">
@@ -1489,7 +1510,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=71"></script>
+  <script src="/static/app.js?v=72"></script>
   <script src="/static/card_links_master.js?v=6"></script>
 </body>
 </html>
