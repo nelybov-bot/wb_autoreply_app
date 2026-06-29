@@ -221,10 +221,19 @@
     document.querySelectorAll('.nav-link[data-tab="auto"]').forEach(el => {
       el.style.display = canSettings ? '' : 'none';
     });
+    document.querySelectorAll('.si[data-tab="auto"]').forEach(el => {
+      el.style.display = canSettings ? '' : 'none';
+    });
     document.querySelectorAll('.nav-menu-settings').forEach(el => {
       el.style.display = canSettings ? '' : 'none';
     });
+    document.querySelectorAll('.si[data-tab="settings"]').forEach(el => {
+      el.style.display = canSettings ? '' : 'none';
+    });
     document.querySelectorAll('.nav-link[data-tab="log"]').forEach(el => {
+      el.style.display = (canLog || canOpsLog) ? '' : 'none';
+    });
+    document.querySelectorAll('.si[data-tab="log"]').forEach(el => {
       el.style.display = (canLog || canOpsLog) ? '' : 'none';
     });
     document.querySelectorAll('#nav-settings-users, #settings-seg-users').forEach(el => {
@@ -341,6 +350,9 @@
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     panel.classList.add('active');
     setNavActive(tabId, opts);
+    document.querySelectorAll('.si[data-tab]').forEach(el => {
+      el.classList.toggle('active', el.dataset.tab === tabId);
+    });
     closeNavMenus();
     if (tabId === 'summary') loadStats();
     if (tabId === 'stores') loadStores();
@@ -367,6 +379,17 @@
   }
 
   function wireAppNav() {
+    document.querySelectorAll('.si[data-tab]').forEach(el => {
+      el.addEventListener('click', () => {
+        activatePanel(el.getAttribute('data-tab') || '');
+      });
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          activatePanel(el.getAttribute('data-tab') || '');
+        }
+      });
+    });
     document.querySelectorAll('.nav-link[data-tab], .nav-dd-item[data-tab]').forEach(el => {
       el.addEventListener('click', () => {
         const tab = el.getAttribute('data-tab');

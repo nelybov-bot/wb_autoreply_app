@@ -11,152 +11,94 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
-  <link rel="stylesheet" href="/static/styles.css?v=29">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+  <link rel="stylesheet" href="/static/styles.css?v=32">
   <link rel="stylesheet" href="/static/fx-widgets.css?v=5">
 </head>
 <body>
   <div class="bg-noise" aria-hidden="true"></div>
-  <div class="brand-watermarks" aria-hidden="true">
+  <div class="brand-watermarks" aria-hidden="true" hidden>
     <span class="wm wm-wb">WB</span>
     <span class="wm wm-ozon">OZON</span>
     <span class="wm wm-ym">ЯМ</span>
   </div>
-  <header class="header">
-    <div class="header-left">
-      <div class="header-logo" aria-hidden="true"></div>
-      <div class="header-brand">
-        <h1>Market<span class="title-gradient">AI</span></h1>
-        <div class="header-sub">Marketplace replies assistant</div>
-      </div>
+  <div class="app-header-util" hidden aria-hidden="true">
+    <div class="fx-lamp fx-lamp--header" id="fx-lamp" aria-label="Тема оформления">
+      <div class="fx-lamp__wire" aria-hidden="true"></div>
+      <button type="button" class="fx-lamp__cord-hit" id="fx-lamp-cord" aria-label="Потянуть за шнур — сменить тему" title="Потянуть за шнур — сменить тему"></button>
+      <svg class="fx-lamp__svg" viewBox="0 0 40 52" width="36" height="46" aria-hidden="true">
+        <ellipse class="fx-lamp__glow-el" cx="20" cy="22" rx="18" ry="20" fill="url(#fxLampGlow)"/>
+        <path class="fx-lamp__glass" d="M20 8 C12 8 8 16 8 24 C8 32 12 38 20 40 C28 38 32 32 32 24 C32 16 28 8 20 8 Z" fill="currentColor"/>
+        <path class="fx-lamp__base" d="M14 40 H26 V44 H14 Z" fill="currentColor" opacity="0.85"/>
+        <rect class="fx-lamp__socket" x="16" y="44" width="8" height="4" rx="1" fill="currentColor" opacity="0.7"/>
+        <path class="fx-lamp__filament-el" d="M17 26 Q20 20 23 26 Q20 32 17 26" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <defs>
+          <radialGradient id="fxLampGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#fbbf24" stop-opacity="0.55"/>
+            <stop offset="100%" stop-color="#fbbf24" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+      </svg>
     </div>
-    <div class="header-right">
-      <div class="header-user" title="Текущий пользователь">
-        <div class="header-user-name" id="auth-user-label-header">—</div>
-        <div class="header-user-sub">Session</div>
-      </div>
-      <div class="fx-lamp fx-lamp--header" id="fx-lamp" aria-label="Тема оформления">
-        <div class="fx-lamp__wire" aria-hidden="true"></div>
-        <button type="button" class="fx-lamp__cord-hit" id="fx-lamp-cord" aria-label="Потянуть за шнур — сменить тему" title="Потянуть за шнур — сменить тему"></button>
-        <svg class="fx-lamp__svg" viewBox="0 0 40 52" width="36" height="46" aria-hidden="true">
-          <ellipse class="fx-lamp__glow-el" cx="20" cy="22" rx="18" ry="20" fill="url(#fxLampGlow)"/>
-          <path class="fx-lamp__glass" d="M20 8 C12 8 8 16 8 24 C8 32 12 38 20 40 C28 38 32 32 32 24 C32 16 28 8 20 8 Z" fill="currentColor"/>
-          <path class="fx-lamp__base" d="M14 40 H26 V44 H14 Z" fill="currentColor" opacity="0.85"/>
-          <rect class="fx-lamp__socket" x="16" y="44" width="8" height="4" rx="1" fill="currentColor" opacity="0.7"/>
-          <path class="fx-lamp__filament-el" d="M17 26 Q20 20 23 26 Q20 32 17 26" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          <defs>
-            <radialGradient id="fxLampGlow" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stop-color="#fbbf24" stop-opacity="0.55"/>
-              <stop offset="100%" stop-color="#fbbf24" stop-opacity="0"/>
-            </radialGradient>
-          </defs>
-        </svg>
-      </div>
-      <button type="button" class="btn btn-secondary btn-sm" id="btn-logout-header">Выйти</button>
+  </div>
+
+  <nav class="sidebar" id="app-sidebar" aria-label="Разделы приложения">
+    <div class="si-logo">M</div>
+
+    <div class="si active" data-tab="summary" title="Сводка" role="button" tabindex="0">
+      <i class="ti ti-layout-dashboard"></i>
     </div>
-  </header>
+    <div class="si" data-tab="reviews" title="Отзывы" role="button" tabindex="0">
+      <i class="ti ti-star"></i>
+    </div>
+    <div class="si" data-tab="questions" title="Вопросы" role="button" tabindex="0">
+      <i class="ti ti-help-circle"></i>
+    </div>
+    <div class="si" data-tab="wb-chats" title="Чаты" role="button" tabindex="0">
+      <i class="ti ti-message-2"></i>
+    </div>
+    <div class="si" data-tab="ozon-actions" title="Акции Ozon" role="button" tabindex="0">
+      <i class="ti ti-tag"></i>
+    </div>
+    <div class="si" data-tab="card-links" title="Связки карточек" role="button" tabindex="0">
+      <i class="ti ti-link"></i>
+    </div>
 
-  <nav class="app-nav" aria-label="Разделы приложения">
-    <div class="app-nav-inner">
-      <button type="button" class="nav-link active" data-tab="summary">Сводка</button>
-      <button type="button" class="nav-link" data-tab="stores">Магазины</button>
+    <div class="si" data-tab="auto" title="Автозапуск" role="button" tabindex="0">
+      <i class="ti ti-player-play"></i>
+    </div>
+    <div class="si" data-tab="agent" title="AI-ассистент" role="button" tabindex="0">
+      <i class="ti ti-sparkles"></i>
+    </div>
 
-      <div class="nav-menu" data-nav-group="comms">
-        <button type="button" class="nav-trigger" aria-haspopup="true" aria-expanded="false">
-          Отзывы и вопросы
-          <span class="nav-caret" aria-hidden="true"></span>
-        </button>
-        <div class="nav-dropdown">
-          <div class="nav-mega">
-            <div class="nav-mega-col">
-              <div class="nav-mega-title">Очередь ответов</div>
-              <button type="button" class="nav-dd-item" data-tab="reviews">Отзывы</button>
-              <button type="button" class="nav-dd-item" data-tab="questions">Вопросы</button>
-            </div>
-          </div>
-        </div>
-      </div>
+    <div class="si-spacer"></div>
 
-      <div class="nav-menu nav-menu-chats" data-nav-group="chats">
-        <button type="button" class="nav-trigger" aria-haspopup="true" aria-expanded="false">
-          Чаты
-          <span class="nav-caret" aria-hidden="true"></span>
-        </button>
-        <div class="nav-dropdown nav-dropdown-wide">
-          <div class="nav-mega">
-            <div class="nav-mega-col nav-mega-col-wb">
-              <div class="nav-mega-title">Wildberries</div>
-              <button type="button" class="nav-dd-item" data-tab="wb-chats">Чаты с покупателями</button>
-            </div>
-            <div class="nav-mega-col nav-mega-col-ozon">
-              <div class="nav-mega-title">Ozon</div>
-              <button type="button" class="nav-dd-item" data-tab="ozon-chats" data-chat-filter="buyers">Сообщения от покупателей</button>
-              <button type="button" class="nav-dd-item" data-tab="ozon-chats" data-chat-filter="support">Новости и поддержка</button>
-              <button type="button" class="nav-dd-item" data-tab="ozon-chats" data-chat-filter="all">Все сообщения</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="nav-menu nav-menu-ozon-promo" data-nav-group="ozon-promo">
-        <button type="button" class="nav-trigger" aria-haspopup="true" aria-expanded="false">
-          Ozon
-          <span class="nav-caret" aria-hidden="true"></span>
-        </button>
-        <div class="nav-dropdown nav-dropdown-wide">
-          <div class="nav-mega">
-            <div class="nav-mega-col">
-              <div class="nav-mega-title">Акции</div>
-              <button type="button" class="nav-dd-item" data-tab="ozon-actions" data-actions-section="list">Список акций</button>
-              <button type="button" class="nav-dd-item" data-tab="ozon-actions" data-actions-section="settings">Настройки синхронизации</button>
-              <button type="button" class="nav-dd-item" data-tab="ozon-actions" data-actions-section="manual">Удаление товаров</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <button type="button" class="nav-link" data-tab="card-links">Связки</button>
-
-      <button type="button" class="nav-link" data-tab="auto">Автозапуск</button>
-      <button type="button" class="nav-link" data-tab="agent">AI</button>
-
-      <div class="nav-menu nav-menu-settings" data-nav-group="settings">
-        <button type="button" class="nav-trigger" aria-haspopup="true" aria-expanded="false">
-          Настройки
-          <span class="nav-caret" aria-hidden="true"></span>
-        </button>
-        <div class="nav-dropdown">
-          <div class="nav-mega">
-            <div class="nav-mega-col">
-              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="connection">Подключение</button>
-              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="openai">OpenAI</button>
-              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="chats">Чаты</button>
-              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="telegram">Telegram</button>
-              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="card-check">Проверка карточек</button>
-              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="ozon-alerts">Уведомления Ozon</button>
-              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="ui">Интерфейс</button>
-              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="users" id="nav-settings-users">Пользователи</button>
-              <button type="button" class="nav-dd-item" data-tab="settings" data-settings-section="prompts">Промпты</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <button type="button" class="nav-link" data-tab="card-errors">Ошибки карточек</button>
-      <button type="button" class="nav-link" data-tab="ozon-alerts">Уведомления Ozon</button>
-      <button type="button" class="nav-link" data-tab="log">Журнал</button>
+    <div class="si" data-tab="ozon-alerts" title="Уведомления и ошибки" role="button" tabindex="0">
+      <i class="ti ti-bell"></i>
+    </div>
+    <div class="si" data-tab="stores" title="Магазины" role="button" tabindex="0">
+      <i class="ti ti-building-store"></i>
+    </div>
+    <div class="si" data-tab="settings" title="Настройки" role="button" tabindex="0">
+      <i class="ti ti-settings"></i>
+    </div>
+    <div class="si" data-tab="log" title="Журнал" role="button" tabindex="0">
+      <i class="ti ti-clipboard-list"></i>
     </div>
   </nav>
 
   <main class="main">
     <!-- Сводка -->
     <section id="panel-summary" class="panel active">
-      <header class="panel-head">
+      <div class="panel-toprow">
         <div>
-          <h2 class="panel-title">Сводка</h2>
-          <p class="panel-desc">Показатели качества Ozon по магазинам</p>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Сводка</div>
         </div>
-        <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-quality" title="Обновить показатели с маркетплейсов">Обновить показатели</button>
-      </header>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-quality" title="Обновить показатели с маркетплейсов">Обновить показатели</button>
+        </div>
+      </div>
       <section class="quality-section" aria-labelledby="quality-section-title">
         <div class="quality-section-head">
           <h3 id="quality-section-title" class="quality-section-title">Показатели качества</h3>
@@ -212,12 +154,13 @@
 
     <!-- Магазины -->
     <section id="panel-stores" class="panel">
-      <header class="panel-head">
+      <div class="panel-toprow">
         <div>
-          <h2 class="panel-title">Магазины</h2>
-          <p class="panel-desc">Подключение WB, Яндекс.Маркет и Ozon — ключи API и статус активности</p>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Магазины</div>
         </div>
-      </header>
+        <div class="panel-actions"></div>
+      </div>
       <div class="stores-layout">
         <div class="form-card stores-form">
           <h2>Добавить магазин</h2>
@@ -263,12 +206,13 @@
 
     <!-- Отзывы -->
     <section id="panel-reviews" class="panel">
-      <header class="panel-head">
+      <div class="panel-toprow">
         <div>
-          <h2 class="panel-title">Отзывы</h2>
-          <p class="panel-desc">Загрузка с маркетплейсов, ответы через ИИ или шаблон без ИИ, массовая отправка</p>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Отзывы</div>
         </div>
-      </header>
+        <div class="panel-actions"></div>
+      </div>
       <div class="panel-toolbar">
         <div class="toolbar-group">
           <span class="toolbar-label">Магазин</span>
@@ -347,12 +291,13 @@
 
     <!-- Вопросы -->
     <section id="panel-questions" class="panel">
-      <header class="panel-head">
+      <div class="panel-toprow">
         <div>
-          <h2 class="panel-title">Вопросы</h2>
-          <p class="panel-desc">Очередь вопросов покупателей — загрузка, генерация ответов и отправка на площадки</p>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Вопросы</div>
         </div>
-      </header>
+        <div class="panel-actions"></div>
+      </div>
       <div class="panel-toolbar">
         <div class="toolbar-group">
           <span class="toolbar-label">Магазин</span>
@@ -415,12 +360,13 @@
 
     <!-- Чаты WB -->
     <section id="panel-wb-chats" class="panel">
-      <header class="panel-head">
+      <div class="panel-toprow">
         <div>
-          <h2 class="panel-title">Чаты Wildberries</h2>
-          <p class="panel-desc">Переписка с покупателями — просмотр, генерация ответа ИИ и отправка в WB</p>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Чаты</div>
         </div>
-      </header>
+        <div class="panel-actions"></div>
+      </div>
       <div class="panel-toolbar">
         <div class="toolbar-group">
           <span class="toolbar-label">Магазин</span>
@@ -471,12 +417,13 @@
 
     <!-- Чаты Ozon -->
     <section id="panel-ozon-chats" class="panel">
-      <header class="panel-head">
+      <div class="panel-toprow">
         <div>
-          <h2 class="panel-title">Чаты Ozon</h2>
-          <p class="panel-desc">Покупатели и поддержка — ответы через ИИ или просмотр уведомлений</p>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Чаты Ozon</div>
         </div>
-      </header>
+        <div class="panel-actions"></div>
+      </div>
       <div class="segmented" id="ozon-chats-filter" role="tablist" aria-label="Тип чатов Ozon">
         <button type="button" class="active" data-filter="buyers" role="tab">Покупатели</button>
         <button type="button" data-filter="support" role="tab">Поддержка и новости</button>
@@ -533,12 +480,13 @@
 
     <!-- Акции Ozon -->
     <section id="panel-ozon-actions" class="panel">
-      <header class="panel-head">
+      <div class="panel-toprow">
         <div>
-          <h2 class="panel-title">Акции Ozon</h2>
-          <p class="panel-desc">Список акций, автоудаление товаров и ручное снятие с промо</p>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Акции Ozon</div>
         </div>
-      </header>
+        <div class="panel-actions"></div>
+      </div>
       <div class="ozon-actions-layout">
         <div class="form-card form-card-wide" id="ozon-actions-list">
           <h2>Список акций</h2>
@@ -614,12 +562,13 @@
 
     <!-- Связки карточек WB / Ozon -->
     <section id="panel-card-links" class="panel">
-      <header class="panel-head">
+      <div class="panel-toprow">
         <div>
-          <h2 class="panel-title">Связки карточек</h2>
-          <p class="panel-desc">Загрузите каталог — связывайте по предложениям или вручную из каталога</p>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Связки карточек</div>
         </div>
-      </header>
+        <div class="panel-actions"></div>
+      </div>
       <div class="form-card form-card-wide">
         <div class="panel-toolbar card-links-toolbar">
           <div class="toolbar-group">
@@ -907,13 +856,14 @@
 
     <!-- Автозапуск -->
     <section id="panel-auto" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Автозапуск</div>
+        </div>
+        <div class="panel-actions"></div>
+      </div>
       <div class="auto-layout">
-        <header class="panel-head panel-head--flush">
-          <div>
-            <h2 class="panel-title">Автозапуск</h2>
-            <p class="panel-desc">Расписание и задачи по маркетплейсам — отзывы, вопросы, чаты, Ozon</p>
-          </div>
-        </header>
         <div class="auto-grid">
           <div class="form-card auto-card-section">
             <h3>Включение и расписание</h3>
@@ -1002,13 +952,17 @@
 
     <!-- Настройки -->
     <section id="panel-settings" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Настройки</div>
+        </div>
+        <div class="panel-actions panel-actions--user">
+          <span class="panel-user-label" id="auth-user-label-header">—</span>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-logout-header">Выйти</button>
+        </div>
+      </div>
       <div class="settings-panel">
-        <header class="panel-head panel-head--compact">
-          <div>
-            <h2 class="panel-title">Настройки</h2>
-            <p class="panel-desc">Подключение, Telegram, OpenAI, промпты, пользователи и интерфейс</p>
-          </div>
-        </header>
         <div class="segmented settings-segments" id="settings-filter" role="tablist" aria-label="Разделы настроек">
           <button type="button" class="active" data-settings-section="connection" role="tab">Подключение</button>
           <button type="button" data-settings-section="openai" role="tab">OpenAI</button>
@@ -1233,12 +1187,16 @@
 
     <!-- Уведомления Ozon -->
     <section id="panel-ozon-alerts" class="panel">
-      <header class="panel-head">
+      <div class="panel-toprow">
         <div>
-          <h2 class="panel-title">Уведомления Ozon</h2>
-          <p class="panel-desc">Важные сообщения поддержки — штрафы, документы, снятие с продажи</p>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Уведомления</div>
         </div>
-      </header>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-ozon-alerts">Обновить</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-alerts-rescan-panel" title="Сбросить пометки «не важно»">Пересканировать</button>
+        </div>
+      </div>
       <div class="panel-toolbar">
         <div class="toolbar-group">
           <span class="toolbar-label">Магазин</span>
@@ -1254,22 +1212,21 @@
             <option value="resolved">Обработанные</option>
           </select>
         </div>
-        <div class="toolbar-group toolbar-group--actions">
-          <button type="button" class="btn btn-secondary" id="btn-refresh-ozon-alerts">Обновить</button>
-          <button type="button" class="btn btn-secondary" id="btn-ozon-alerts-rescan-panel" title="Сбросить пометки «не важно»">Пересканировать</button>
-        </div>
       </div>
       <div id="ozon-alerts-wrap" class="ops-log-table-wrap"></div>
     </section>
 
     <!-- Ошибки карточек -->
     <section id="panel-card-errors" class="panel">
-      <header class="panel-head">
+      <div class="panel-toprow">
         <div>
-          <h2 class="panel-title">Ошибки карточек</h2>
-          <p class="panel-desc">Подозрения на несоответствие карточки товара — из отзывов, вопросов и чатов</p>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Ошибки карточек</div>
         </div>
-      </header>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-card-errors">Обновить</button>
+        </div>
+      </div>
       <div class="panel-toolbar">
         <div class="toolbar-group">
           <span class="toolbar-label">Магазин</span>
@@ -1285,20 +1242,21 @@
             <option value="resolved">Обработанные</option>
           </select>
         </div>
-        <button type="button" class="btn btn-secondary" id="btn-refresh-card-errors">Обновить</button>
       </div>
       <div id="card-errors-wrap" class="ops-log-table-wrap"></div>
     </section>
 
     <!-- AI-ассистент -->
     <section id="panel-agent" class="panel">
-      <header class="panel-head">
+      <div class="panel-toprow">
         <div>
-          <h2 class="panel-title">AI-ассистент</h2>
-          <p class="panel-desc">Управление задачами MarketAI — статистика, очередь, загрузка, генерация, отправка, автозапуск</p>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">AI-ассистент</div>
         </div>
-        <button type="button" class="btn btn-secondary btn-sm" id="btn-agent-clear">Новый диалог</button>
-      </header>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-agent-clear">Новый диалог</button>
+        </div>
+      </div>
       <div class="agent-chat">
         <div class="agent-suggestions" id="agent-suggestions">
           <button type="button" class="agent-chip" data-agent-prompt="Покажи список магазинов">Магазины</button>
@@ -1332,12 +1290,15 @@
 
     <!-- Лог -->
     <section id="panel-log" class="panel">
-      <header class="panel-head">
+      <div class="panel-toprow">
         <div>
-          <h2 class="panel-title">Журнал</h2>
-          <p class="panel-desc">История операций, автозапуска, отправок и ошибок API</p>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Журнал</div>
         </div>
-      </header>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-log">Обновить</button>
+        </div>
+      </div>
       <div class="panel-toolbar">
         <div class="toolbar-group">
           <span class="toolbar-label">Режим</span>
@@ -1389,7 +1350,6 @@
           <span class="toolbar-label">Поиск</span>
           <input type="search" id="log-q" class="input-grow" placeholder="Текст в журнале…">
         </div>
-        <button type="button" class="btn btn-secondary" id="btn-refresh-log">Обновить</button>
       </div>
       <div id="ops-log-wrap" class="ops-log-table-wrap"></div>
       <pre class="log-wrap" id="log-content"></pre>

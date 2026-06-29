@@ -5,6 +5,30 @@
 
 ---
 
+## 2026-06-18 — Анимированный экран входа
+
+- `login.html`: particle network canvas, логотип M с кольцами и квадратиками
+- Stagger-анимация полей, кнопка со shine + стрелкой, пульсирующие glow-орбы
+- Цвета согласованы с UI v2 (`#7F77DD`)
+
+## 2026-06-18 — UI v2: stat-cards, таблицы, кнопки, тёмная тема
+
+- Шаги 6–11: KPI-карточки, таблицы, flat-кнопки, focus-ring форм
+- Тёмная тема: `--bg #0d0d0d`, `--surface #141414`, `--border #222`
+- Cleanup: скрыты watermarks/marketplace-bg, `.app-nav`, глобально убраны box-shadow (кроме focus)
+- Webkit scrollbar; класс `.status-dot` (.ok/.warn/.err)
+- `styles.css?v=32`
+
+## 2026-06-18 — UI v2 (в процессе): сайдбар и panel-toprow
+
+- Tabler Icons CDN, новые CSS-токены (#7F77DD)
+- Горизонтальный `.app-nav` заменён на фиксированный `.sidebar` 52px
+- `.main` с `margin-left: 52px`; у панелей `padding: 20px 24px`
+- Общий header убран; на каждой вкладке — `.panel-toprow` (eyebrow + heading + actions)
+- Пользователь и «Выйти» — в шапке раздела «Настройки»
+
+---
+
 ## 2026-06-18 — Ozon акции: синхронизация по порогу скидки
 
 - Новый режим `discount_threshold` (по умолчанию): все акции, порог % (default 3), снять / добавить / оставить
