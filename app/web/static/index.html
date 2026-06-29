@@ -1005,7 +1005,8 @@
                 <label class="toggle-row"><span>Отзывы <em class="toggle-hint">отдельная подписка API</em></span><input type="checkbox" class="toggle-input" id="auto-run-reviews-ozon"><span class="toggle-track" aria-hidden="true"></span></label>
                 <label class="toggle-row"><span>Вопросы</span><input type="checkbox" class="toggle-input" id="auto-run-questions-ozon" checked><span class="toggle-track" aria-hidden="true"></span></label>
                 <label class="toggle-row"><span>Чаты с покупателями</span><input type="checkbox" class="toggle-input" id="auto-run-ozon-chats"><span class="toggle-track" aria-hidden="true"></span></label>
-                <label class="toggle-row"><span>Уведомления поддержки</span><input type="checkbox" class="toggle-input" id="auto-run-ozon-alerts"><span class="toggle-track" aria-hidden="true"></span></label>
+                <label class="toggle-row"><span>Уведомления Ozon</span><input type="checkbox" class="toggle-input" id="auto-run-ozon-alerts"><span class="toggle-track" aria-hidden="true"></span></label>
+                <label class="toggle-row"><span>Уведомления WB</span><input type="checkbox" class="toggle-input" id="auto-run-wb-alerts"><span class="toggle-track" aria-hidden="true"></span></label>
                 <label class="toggle-row"><span>Синхронизация акций Ozon <em class="toggle-hint">по порогу скидки или legacy</em></span><input type="checkbox" class="toggle-input" id="auto-run-ozon-actions-remove"><span class="toggle-track" aria-hidden="true"></span></label>
               </div>
             </div>
@@ -1053,6 +1054,7 @@
           <button type="button" data-settings-section="telegram" role="tab">Telegram</button>
           <button type="button" data-settings-section="card-check" role="tab">Карточки</button>
           <button type="button" data-settings-section="ozon-alerts" role="tab">Ozon</button>
+          <button type="button" data-settings-section="wb-alerts" role="tab">WB</button>
           <button type="button" data-settings-section="ui" role="tab">Интерфейс</button>
           <button type="button" data-settings-section="users" id="settings-seg-users" role="tab">Пользователи</button>
           <button type="button" data-settings-section="prompts" role="tab">Промпты</button>
@@ -1134,6 +1136,10 @@
             <label>Чат для важных уведомлений Ozon</label>
             <input type="text" id="setting-ozon_alerts_telegram_chat_id" placeholder="необязательно">
           </div>
+          <div class="form-group">
+            <label>Чат для важных новостей WB</label>
+            <input type="text" id="setting-wb_alerts_telegram_chat_id" placeholder="необязательно">
+          </div>
 
           <h3 class="settings-subhead">AI-ассистент в Telegram</h3>
             <p class="form-hint">Пишите боту в указанном чате — те же команды, что во вкладке AI. <b>В группе</b> обращайтесь через @бот или ответ на его сообщение.</p>
@@ -1156,6 +1162,7 @@
             <label class="toggle-row"><span>Отзывы 1–3★ и упаковка <em class="toggle-hint">мгновенно</em></span><input type="checkbox" class="toggle-input" id="setting-telegram_enabled"><span class="toggle-track" aria-hidden="true"></span></label>
             <label class="toggle-row"><span>Ошибки в карточках <em class="toggle-hint">мгновенно</em></span><input type="checkbox" class="toggle-input" id="setting-card_check_telegram_enabled" checked><span class="toggle-track" aria-hidden="true"></span></label>
             <label class="toggle-row"><span>Важные уведомления Ozon <em class="toggle-hint">мгновенно</em></span><input type="checkbox" class="toggle-input" id="setting-ozon_alerts_telegram_enabled" checked><span class="toggle-track" aria-hidden="true"></span></label>
+            <label class="toggle-row"><span>Важные новости WB <em class="toggle-hint">мгновенно</em></span><input type="checkbox" class="toggle-input" id="setting-wb_alerts_telegram_enabled" checked><span class="toggle-track" aria-hidden="true"></span></label>
             <label class="toggle-row"><span>Периодический сводный отчёт</span><input type="checkbox" class="toggle-input" id="setting-telegram_report_enabled"><span class="toggle-track" aria-hidden="true"></span></label>
             <label class="toggle-row"><span>Ошибки карточек в отчёте</span><input type="checkbox" class="toggle-input" id="setting-card_check_include_in_periodic_report" checked><span class="toggle-track" aria-hidden="true"></span></label>
           </div>
@@ -1178,6 +1185,11 @@
             <label>Важные уведомления Ozon</label>
             <textarea id="setting-ozon_alerts_telegram_template" class="code-field" rows="10"></textarea>
             <div class="form-hint">{telegram_title}, {store_name}, {deadline}, {consequence}, {summary} в &lt;blockquote&gt;, {action_needed}…</div>
+          </div>
+          <div class="form-group">
+            <label>Важные новости WB</label>
+            <textarea id="setting-wb_alerts_telegram_template" class="code-field" rows="8"></textarea>
+            <div class="form-hint">{telegram_title}, {store_name}, {news_types}, {summary}, {action_needed}, {news_date}, {header}</div>
           </div>
 
           <div class="settings-actions">
@@ -1260,6 +1272,25 @@
           </div>
         </div>
 
+        <div id="settings-section-wb-alerts" class="settings-section form-card" hidden>
+          <h2>Уведомления Wildberries</h2>
+          <p class="form-hint settings-lead">Загружает новости портала продавца WB (common-api). Автоматически скрывает шум: новые заказы и уведомления о скорой отмене. ИИ отбирает важные новости; отправка в Telegram — в разделе <button type="button" class="link-btn" data-settings-section="telegram">Telegram</button>. Промпт — в <button type="button" class="link-btn" data-settings-section="prompts">Промпты</button> (группа «Уведомления WB»).</p>
+          <div class="settings-toggle-list">
+            <label class="toggle-row toggle-row-prominent"><span>Включить загрузку уведомлений WB</span><input type="checkbox" class="toggle-input" id="setting-wb_alerts_enabled"><span class="toggle-track" aria-hidden="true"></span></label>
+          </div>
+          <div class="form-group">
+            <label>Рассматривать новости с даты</label>
+            <input type="date" id="setting-wb_alerts_check_from_date">
+            <div class="form-hint">Пусто — последние 30 дней. Новости старше даты не анализируются. Не более 100 новостей за запрос API.</div>
+          </div>
+          <div class="settings-actions">
+            <select id="wb-alerts-scan-store" class="select-md" title="Магазин WB"></select>
+            <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
+            <button type="button" class="btn btn-secondary" id="btn-wb-alerts-scan-now">Загрузить новости</button>
+            <button type="button" class="btn btn-secondary" id="btn-wb-alerts-rescan-now" title="Сбросить скрытые (заказы/отмены) и загрузить снова">Перезагрузить</button>
+          </div>
+        </div>
+
         <div id="settings-section-prompts" class="settings-section form-card" hidden>
           <h2>Промпты</h2>
           <p class="form-hint settings-lead">Промпт «Проверка карточки» добавляется к каждой генерации. «Чаты» — для WB и Ozon.</p>
@@ -1277,15 +1308,29 @@
         </div>
         <div class="panel-actions">
           <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-ozon-alerts">Обновить</button>
-          <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-alerts-rescan-panel" title="Сбросить пометки «не важно»">Пересканировать</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-alerts-scan-wb" hidden>Загрузить WB</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-alerts-rescan-panel" title="Ozon: сбросить «не важно»">Пересканировать Ozon</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-wb-alerts-rescan-panel" title="WB: перезагрузить с фильтром" hidden>Перезагрузить WB</button>
         </div>
       </div>
       <div class="panel-toolbar">
+        <div class="toolbar-group">
+          <span class="toolbar-label">Площадка</span>
+          <select id="alerts-marketplace" class="select-md">
+            <option value="">Все</option>
+            <option value="ozon">Ozon</option>
+            <option value="wb">Wildberries</option>
+          </select>
+        </div>
         <div class="toolbar-group">
           <span class="toolbar-label">Магазин</span>
           <select id="ozon-alerts-store" class="select-md">
             <option value="">Все магазины</option>
           </select>
+        </div>
+        <div class="toolbar-group" id="alerts-wb-from-wrap" hidden>
+          <span class="toolbar-label">Новости с даты</span>
+          <input type="date" id="alerts-wb-from-date" class="input-date-toolbar" title="С какой даты загружать и анализировать новости WB">
         </div>
         <div class="toolbar-group">
           <span class="toolbar-label">Статус</span>
@@ -1572,7 +1617,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=73"></script>
+  <script src="/static/app.js?v=76"></script>
   <script src="/static/card_links_master.js?v=6"></script>
 </body>
 </html>

@@ -227,6 +227,9 @@ Query-параметры каталога:
 | GET | `/api/ozon/alerts` | Важные сообщения Ozon |
 | PATCH | `/api/ozon/alerts/{alert_id}` | Обновить статус |
 | POST | `/api/ozon/alerts/{store_id}/scan` | Сканирование поддержки Ozon |
+| GET | `/api/wb/alerts` | Новости портала WB (без заказов/отмен) |
+| PATCH | `/api/wb/alerts/{alert_id}` | Обновить статус |
+| POST | `/api/wb/alerts/{store_id}/scan` | Загрузка и ИИ-анализ; body: `{ rescan?, from_date? }` |
 
 ---
 

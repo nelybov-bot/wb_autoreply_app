@@ -41,6 +41,11 @@ SETTING_KEYS = (
     "ozon_alerts_check_from_date",
     "ozon_alerts_telegram_template",
     "ozon_alerts_telegram_chat_id",
+    "wb_alerts_enabled",
+    "wb_alerts_check_from_date",
+    "wb_alerts_telegram_enabled",
+    "wb_alerts_telegram_template",
+    "wb_alerts_telegram_chat_id",
     "theme",
     "buyer_chat_reply_from_date",
     "buyer_chat_auto_max_age_days",
@@ -91,6 +96,7 @@ def _export_auto_schedule(db: Database, id_to_key: dict[int, str]) -> dict:
         "run_wb_chats": False,
         "run_ozon_chats": False,
         "run_ozon_alerts": False,
+        "run_wb_alerts": False,
         "run_ozon_actions_remove": False,
     }
     if not raw:
@@ -140,6 +146,7 @@ def _export_auto_schedule(db: Database, id_to_key: dict[int, str]) -> dict:
     cfg["run_wb_chats"] = bool(obj.get("run_wb_chats", False))
     cfg["run_ozon_chats"] = bool(obj.get("run_ozon_chats", False))
     cfg["run_ozon_alerts"] = bool(obj.get("run_ozon_alerts", False))
+    cfg["run_wb_alerts"] = bool(obj.get("run_wb_alerts", False))
     cfg["run_ozon_actions_remove"] = bool(obj.get("run_ozon_actions_remove", False))
     return cfg
 
@@ -314,6 +321,7 @@ def _import_auto_schedule(db: Database, data: dict, key_to_id: dict[str, int]) -
         "run_wb_chats": bool(data.get("run_wb_chats", False)),
         "run_ozon_chats": bool(data.get("run_ozon_chats", False)),
         "run_ozon_alerts": bool(data.get("run_ozon_alerts", False)),
+        "run_wb_alerts": bool(data.get("run_wb_alerts", False)),
         "run_ozon_actions_remove": bool(data.get("run_ozon_actions_remove", False)),
     }
     db.set_setting("auto_schedule_json", json.dumps(cfg, ensure_ascii=False))

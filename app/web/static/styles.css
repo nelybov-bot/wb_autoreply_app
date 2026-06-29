@@ -2647,6 +2647,7 @@ body.theme-dark .toggle-row:hover {
 .panel-toolbar select,
 .panel-toolbar input[type="text"],
 .panel-toolbar input[type="search"],
+.panel-toolbar input[type="date"],
 .form-card select,
 .form-card input:not([type="checkbox"]):not([type="radio"]),
 .form-card textarea,

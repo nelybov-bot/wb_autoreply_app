@@ -42,6 +42,7 @@ from app.db import (
     AuditEventRow,
     CardErrorAlertRow,
     OzonImportantAlertRow,
+    WbPortalAlertRow,
 )
 from app.web import tasks as web_tasks
 from app.web.store_locks import StoreBusyError, store_locks
@@ -139,6 +140,16 @@ from app.core.ozon_alerts import (
     SETTING_TELEGRAM as OZON_ALERTS_TELEGRAM,
     SETTING_TEMPLATE as OZON_ALERTS_TEMPLATE,
     is_legacy_telegram_template,
+)
+from app.core.wb_alerts import (
+    SETTING_ENABLED as WB_ALERTS_ENABLED,
+    SETTING_FROM_DATE as WB_ALERTS_FROM_DATE,
+    SETTING_TELEGRAM as WB_ALERTS_TELEGRAM,
+    SETTING_TEMPLATE as WB_ALERTS_TEMPLATE,
+    auto_process_wb_portal_news,
+    format_wb_news_types,
+    scan_wb_portal_news_for_store,
+    truncate_text as wb_truncate_text,
 )
 from app.core.config_backup import export_config, import_config
 from app.core.quality_metrics import fetch_all_quality
@@ -481,6 +492,7 @@ class AutoScheduleBody(BaseModel):
     run_wb_chats: bool = False
     run_ozon_chats: bool = False
     run_ozon_alerts: bool = False
+    run_wb_alerts: bool = False
     run_ozon_actions_remove: bool = False
 
 
@@ -498,6 +510,11 @@ class OzonActionsSettingsBody(BaseModel):
 
 class OzonAlertsScanBody(BaseModel):
     rescan: bool = False
+
+
+class WbAlertsScanBody(BaseModel):
+    rescan: bool = False
+    from_date: Optional[str] = None
 
 
 class OzonActionsRemoveBody(BaseModel):
@@ -688,6 +705,7 @@ def _get_auto_schedule(db: Database) -> dict:
         "run_wb_chats": False,
         "run_ozon_chats": False,
         "run_ozon_alerts": False,
+        "run_wb_alerts": False,
         "run_ozon_actions_remove": False,
     }
     if not raw:
@@ -704,6 +722,7 @@ def _get_auto_schedule(db: Database) -> dict:
         cfg["run_wb_chats"] = bool(obj.get("run_wb_chats", False))
         cfg["run_ozon_chats"] = bool(obj.get("run_ozon_chats", False))
         cfg["run_ozon_alerts"] = bool(obj.get("run_ozon_alerts", False))
+        cfg["run_wb_alerts"] = bool(obj.get("run_wb_alerts", False))
         cfg["run_ozon_actions_remove"] = bool(obj.get("run_ozon_actions_remove", False))
     except Exception:
         pass
@@ -729,6 +748,7 @@ def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
         "run_wb_chats": bool(body.run_wb_chats),
         "run_ozon_chats": bool(body.run_ozon_chats),
         "run_ozon_alerts": bool(body.run_ozon_alerts),
+        "run_wb_alerts": bool(body.run_wb_alerts),
         "run_ozon_actions_remove": bool(body.run_ozon_actions_remove),
     }
     if not (
@@ -737,6 +757,7 @@ def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
         or cfg["run_wb_chats"]
         or cfg["run_ozon_chats"]
         or cfg["run_ozon_alerts"]
+        or cfg["run_wb_alerts"]
         or cfg["run_ozon_actions_remove"]
     ):
         raise HTTPException(
@@ -810,6 +831,7 @@ async def _process_auto_store(
     run_wb_chats: bool,
     run_ozon_chats: bool,
     run_ozon_alerts: bool,
+    run_wb_alerts: bool,
     run_ozon_actions_remove: bool,
     openai_key: str,
     ozon_actions_cfg: dict,
@@ -921,6 +943,21 @@ async def _process_auto_store(
                 }
         else:
             result["ozon_alerts"] = {"ozon_alert_skipped": 1, "reason": "no_openai_key"}
+
+    if run_wb_alerts:
+        _auto_state["phase"] = "wb_alerts"
+        if store.marketplace == "wb" and (store.api_key or "").strip():
+            if (db.get_setting(WB_ALERTS_ENABLED) or "0").strip() == "1":
+                if key:
+                    result["wb_alerts"] = await scan_wb_portal_news_for_store(
+                        db, store, openai_key=key,
+                    )
+                else:
+                    result["wb_alerts"] = {"wb_alert_skipped": 1, "reason": "no_openai_key"}
+            else:
+                result["wb_alerts"] = {"wb_alert_skipped": 1, "reason": "disabled"}
+        else:
+            result["wb_alerts"] = {"wb_alert_skipped": 1, "reason": "not_wb_or_no_keys"}
 
     if run_ozon_actions_remove:
         _auto_state["phase"] = "ozon_actions"
@@ -1144,12 +1181,13 @@ async def _run_auto_slot(slot: str, *, force: bool = False) -> None:
         run_wb_chats = bool(cfg.get("run_wb_chats", False))
         run_ozon_chats = bool(cfg.get("run_ozon_chats", False))
         run_ozon_alerts = bool(cfg.get("run_ozon_alerts", False))
+        run_wb_alerts = bool(cfg.get("run_wb_alerts", False))
         run_ozon_actions_remove = bool(cfg.get("run_ozon_actions_remove", False))
         key = (db.get_setting("openai_key") or "").strip()
         ozon_actions_cfg = _get_ozon_actions_settings(db)
         log.info(
             "auto_run start slot=%s stores=%s reviews_wb=%s reviews_yam=%s reviews_ozon=%s "
-            "questions_wb=%s questions_yam=%s questions_ozon=%s wb_chats=%s ozon_chats=%s ozon_alerts=%s ozon_actions=%s",
+            "questions_wb=%s questions_yam=%s questions_ozon=%s wb_chats=%s ozon_chats=%s ozon_alerts=%s wb_alerts=%s ozon_actions=%s",
             slot,
             [s.id for s in sorted_stores],
             cfg.get("run_reviews_wb"),
@@ -1161,6 +1199,7 @@ async def _run_auto_slot(slot: str, *, force: bool = False) -> None:
             run_wb_chats,
             run_ozon_chats,
             run_ozon_alerts,
+            run_wb_alerts,
             run_ozon_actions_remove,
         )
         stores_results: list[dict] = []
@@ -1197,6 +1236,7 @@ async def _run_auto_slot(slot: str, *, force: bool = False) -> None:
                     run_wb_chats=run_wb_chats,
                     run_ozon_chats=run_ozon_chats,
                     run_ozon_alerts=run_ozon_alerts,
+                    run_wb_alerts=run_wb_alerts,
                     run_ozon_actions_remove=run_ozon_actions_remove,
                     openai_key=key,
                     ozon_actions_cfg=ozon_actions_cfg,
@@ -1224,6 +1264,7 @@ async def _run_auto_slot(slot: str, *, force: bool = False) -> None:
             "run_wb_chats": run_wb_chats,
             "run_ozon_chats": run_ozon_chats,
             "run_ozon_alerts": run_ozon_alerts,
+            "run_wb_alerts": run_wb_alerts,
             "run_ozon_actions_remove": run_ozon_actions_remove,
             "wb_chat_sent": sum(
                 int((r.get("wb_chats") or {}).get("wb_chat_sent") or 0) for r in stores_results
@@ -1530,6 +1571,7 @@ def _auto_run_readiness(cfg: dict, db: Database, *, check_schedule: bool = True)
         or cfg.get("run_wb_chats")
         or cfg.get("run_ozon_chats")
         or cfg.get("run_ozon_alerts")
+        or cfg.get("run_wb_alerts")
         or cfg.get("run_ozon_actions_remove")
     ):
         return "Включите хотя бы один тип задач в автозапуске и сохраните."
@@ -1574,6 +1616,14 @@ def _auto_run_readiness(cfg: dict, db: Database, *, check_schedule: bool = True)
             return "Уведомления Ozon: нужен ключ OpenAI в «Настройки»."
         if (db.get_setting(OZON_ALERTS_ENABLED) or "0").strip() != "1":
             return "Включите «Важные уведомления Ozon» в настройках и сохраните."
+    if cfg.get("run_wb_alerts"):
+        wb_stores = [s for s in stores if s.marketplace == "wb" and (s.api_key or "").strip()]
+        if not wb_stores:
+            return "В цикле включены уведомления WB, но среди выбранных магазинов нет WB с API-ключом."
+        if not (db.get_setting("openai_key") or "").strip():
+            return "Уведомления WB: нужен ключ OpenAI в «Настройки»."
+        if (db.get_setting(WB_ALERTS_ENABLED) or "0").strip() != "1":
+            return "Включите «Уведомления WB» в настройках и сохраните."
     if cfg.get("run_ozon_actions_remove"):
         ozon_stores = [
             s for s in stores
@@ -1631,6 +1681,7 @@ def _auto_status(db: Database) -> dict:
         "run_wb_chats": bool(cfg.get("run_wb_chats", False)),
         "run_ozon_chats": bool(cfg.get("run_ozon_chats", False)),
         "run_ozon_alerts": bool(cfg.get("run_ozon_alerts", False)),
+        "run_wb_alerts": bool(cfg.get("run_wb_alerts", False)),
         "run_ozon_actions_remove": bool(cfg.get("run_ozon_actions_remove", False)),
         "next_slot": next_slot,
         "timezone": "Europe/Moscow",
@@ -2016,6 +2067,11 @@ def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(requir
         OZON_ALERTS_FROM_DATE,
         OZON_ALERTS_TEMPLATE,
         "ozon_alerts_telegram_chat_id",
+        WB_ALERTS_ENABLED,
+        WB_ALERTS_FROM_DATE,
+        WB_ALERTS_TELEGRAM,
+        WB_ALERTS_TEMPLATE,
+        "wb_alerts_telegram_chat_id",
         "telegram_agent_enabled",
         "telegram_agent_chat_id",
         "telegram_agent_user_id",
@@ -2301,6 +2357,7 @@ def api_list_card_errors(
 def _ozon_alert_to_out(row: OzonImportantAlertRow, store_name: str = "") -> dict:
     return {
         "id": row.id,
+        "marketplace": "ozon",
         "ts": row.ts,
         "store_id": row.store_id,
         "store_name": store_name,
@@ -2384,6 +2441,108 @@ async def api_scan_ozon_alerts(
         raise HTTPException(504, "Сканирование Ozon превысило 10 минут — попробуйте снова позже") from None
     except HttpStatusError as e:
         raise _ozon_chat_http_error(e) from e
+    return {"ok": True, **stats}
+
+
+def _wb_alert_to_out(row: WbPortalAlertRow, store_name: str = "") -> dict:
+    types_label = ""
+    try:
+        import json as _json
+
+        raw_types = _json.loads(row.types_json or "[]")
+        if isinstance(raw_types, list):
+            types_label = format_wb_news_types({"types": raw_types})
+    except Exception:
+        types_label = ""
+    news_date = row.news_date or row.ts
+    date_label = format_ozon_datetime_msk(news_date) or news_date[:16].replace("T", " ")
+    return {
+        "id": row.id,
+        "marketplace": "wb",
+        "ts": row.ts,
+        "store_id": row.store_id,
+        "store_name": store_name,
+        "news_id": row.news_id,
+        "header": row.header,
+        "content": row.content,
+        "summary": row.summary or wb_truncate_text(row.header or row.content, 200),
+        "action_needed": row.action_needed or "",
+        "telegram_title": row.telegram_title or "",
+        "types_label": types_label,
+        "news_date": row.news_date,
+        "news_date_label": date_label,
+        "status": row.status,
+        "telegram_sent": row.telegram_sent,
+    }
+
+
+@app.get("/api/wb/alerts")
+def api_list_wb_alerts(
+    store_id: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    important_only: bool = Query(True),
+    limit: int = Query(200, ge=1, le=500),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    rows = db.list_wb_portal_alerts(
+        store_id=store_id,
+        status=status,
+        limit=limit,
+    )
+    if important_only:
+        rows = [r for r in rows if r.status != "ignored"]
+    store_names = {s.id: s.name for s in db.list_stores()}
+    return [_wb_alert_to_out(r, store_names.get(r.store_id, "")) for r in rows]
+
+
+@app.patch("/api/wb/alerts/{alert_id}")
+def api_update_wb_alert_status(
+    alert_id: int,
+    body: dict,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    st = str((body or {}).get("status") or "").strip()
+    ok = db.update_wb_portal_alert_status(alert_id, st)
+    if not ok:
+        raise HTTPException(400, "Неверный статус или алерт не найден")
+    return {"ok": True}
+
+
+@app.post("/api/wb/alerts/{store_id}/scan")
+async def api_scan_wb_alerts(
+    store_id: int,
+    body: WbAlertsScanBody = WbAlertsScanBody(),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_permission("view_settings")),
+):
+    stores = [s for s in db.list_stores() if s.id == int(store_id)]
+    if not stores:
+        raise HTTPException(404, "Магазин не найден")
+    store = stores[0]
+    if store.marketplace != "wb":
+        raise HTTPException(400, "Только для магазинов Wildberries")
+    if (db.get_setting(WB_ALERTS_ENABLED) or "0").strip() != "1":
+        raise HTTPException(400, "Включите «Уведомления WB» в настройках")
+    key = (db.get_setting("openai_key") or "").strip()
+    if not key:
+        raise HTTPException(400, "Для анализа новостей WB нужен ключ OpenAI в «Настройки»")
+    try:
+        stats = await asyncio.wait_for(
+            scan_wb_portal_news_for_store(
+                db,
+                store,
+                openai_key=key,
+                rescan=bool(body.rescan),
+                from_date_override=(body.from_date or "").strip() or None,
+            ),
+            timeout=300.0,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "Загрузка новостей WB превысила 5 минут") from None
+    except HttpStatusError as e:
+        raise HTTPException(e.status, (e.body or "")[:500]) from e
     return {"ok": True, **stats}
 
 

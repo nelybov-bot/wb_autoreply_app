@@ -135,6 +135,23 @@ class OzonImportantAlertRow:
 
 
 @dataclass(frozen=True)
+class WbPortalAlertRow:
+    id: int
+    ts: str
+    store_id: int
+    news_id: int
+    header: str
+    content: str
+    news_date: str
+    types_json: str
+    status: str
+    summary: str = ""
+    action_needed: str = ""
+    telegram_title: str = ""
+    telegram_sent: bool = False
+
+
+@dataclass(frozen=True)
 class CardErrorAlertRow:
     id: int
     ts: str
@@ -330,6 +347,26 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_ozon_alerts_status ON ozon_important_alerts(status)"
             )
             c.execute("""
+                CREATE TABLE IF NOT EXISTS wb_portal_alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    store_id INTEGER NOT NULL,
+                    news_id INTEGER NOT NULL,
+                    header TEXT NOT NULL DEFAULT '',
+                    content TEXT NOT NULL DEFAULT '',
+                    news_date TEXT NOT NULL DEFAULT '',
+                    types_json TEXT NOT NULL DEFAULT '[]',
+                    status TEXT NOT NULL DEFAULT 'new',
+                    UNIQUE(store_id, news_id)
+                )
+            """)
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_wb_alerts_ts ON wb_portal_alerts(ts)"
+            )
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_wb_alerts_status ON wb_portal_alerts(status)"
+            )
+            c.execute("""
                 CREATE TABLE IF NOT EXISTS card_links_master_items (
                     store_id INTEGER NOT NULL,
                     nm_id INTEGER NOT NULL,
@@ -392,6 +429,16 @@ class Database:
             ):
                 try:
                     c.execute(f"ALTER TABLE ozon_important_alerts ADD COLUMN {col} {ddl}")
+                except sqlite3.OperationalError:
+                    pass
+            for col, ddl in (
+                ("summary", "TEXT NOT NULL DEFAULT ''"),
+                ("action_needed", "TEXT NOT NULL DEFAULT ''"),
+                ("telegram_title", "TEXT NOT NULL DEFAULT ''"),
+                ("telegram_sent", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                try:
+                    c.execute(f"ALTER TABLE wb_portal_alerts ADD COLUMN {col} {ddl}")
                 except sqlite3.OperationalError:
                     pass
             self._conn.commit()
@@ -592,11 +639,13 @@ class Database:
         from app.core.card_check import DEFAULT_BUYER_CHAT_PROMPT, DEFAULT_CARD_CHECK_PROMPT
 
         from app.core.ozon_alerts import DEFAULT_PROMPT as DEFAULT_OZON_ALERT_PROMPT
+        from app.core.wb_alerts import DEFAULT_PROMPT as DEFAULT_WB_ALERT_PROMPT
 
         extra = [
             ("buyer_chat", "general", DEFAULT_BUYER_CHAT_PROMPT),
             ("card_check", "general", DEFAULT_CARD_CHECK_PROMPT),
             ("ozon_important_alert", "general", DEFAULT_OZON_ALERT_PROMPT),
+            ("wb_important_alert", "general", DEFAULT_WB_ALERT_PROMPT),
         ]
         with _DB_LOCK:
             for item_type, rating_group, text in extra:
@@ -852,6 +901,165 @@ class Database:
                 )
                 for r in rows
             ]
+
+    def has_wb_portal_alert(self, store_id: int, news_id: int) -> bool:
+        with _DB_LOCK:
+            row = self._conn.execute(
+                "SELECT 1 FROM wb_portal_alerts WHERE store_id=? AND news_id=?",
+                (int(store_id), int(news_id)),
+            ).fetchone()
+            return row is not None
+
+    def add_wb_portal_alert(
+        self,
+        *,
+        store_id: int,
+        news_id: int,
+        header: str,
+        content: str,
+        news_date: str,
+        types_json: str,
+        status: str = "new",
+        summary: str = "",
+        action_needed: str = "",
+        telegram_title: str = "",
+    ) -> int:
+        st = (status or "new").strip().lower()
+        if st not in ("new", "resolved", "ignored"):
+            st = "new"
+        ts = utc_now_iso()
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                """INSERT INTO wb_portal_alerts(
+                       ts, store_id, news_id, header, content, news_date, types_json, status,
+                       summary, action_needed, telegram_title, telegram_sent
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,0)""",
+                (
+                    ts,
+                    int(store_id),
+                    int(news_id),
+                    (header or "").strip(),
+                    (content or "").strip(),
+                    (news_date or "").strip(),
+                    (types_json or "[]").strip(),
+                    st,
+                    (summary or "").strip(),
+                    (action_needed or "").strip(),
+                    (telegram_title or "").strip(),
+                ),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def mark_wb_portal_alert_telegram_sent(self, alert_id: int) -> None:
+        with _DB_LOCK:
+            self._conn.execute(
+                "UPDATE wb_portal_alerts SET telegram_sent=1 WHERE id=?",
+                (int(alert_id),),
+            )
+            self._conn.commit()
+
+    def list_wb_portal_alerts_pending_telegram(self, store_id: int) -> list[dict]:
+        with _DB_LOCK:
+            rows = self._conn.execute(
+                """SELECT id, header, news_date, types_json, summary, action_needed, telegram_title
+                   FROM wb_portal_alerts
+                   WHERE store_id=? AND status='new' AND telegram_sent=0
+                   ORDER BY id ASC""",
+                (int(store_id),),
+            ).fetchall()
+            out = []
+            for r in rows:
+                types_label = ""
+                try:
+                    raw = json.loads(r["types_json"] or "[]")
+                    if isinstance(raw, list):
+                        types_label = ", ".join(
+                            str(t.get("name") or "").strip()
+                            for t in raw
+                            if isinstance(t, dict) and str(t.get("name") or "").strip()
+                        )
+                except Exception:
+                    types_label = ""
+                out.append(
+                    {
+                        "id": int(r["id"]),
+                        "header": str(r["header"] or ""),
+                        "news_date": str(r["news_date"] or ""),
+                        "types_label": types_label,
+                        "summary": str(r["summary"] or ""),
+                        "action_needed": str(r["action_needed"] or ""),
+                        "telegram_title": str(r["telegram_title"] or ""),
+                    }
+                )
+            return out
+
+    def clear_wb_ignored_alerts(self, store_id: int) -> int:
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                "DELETE FROM wb_portal_alerts WHERE store_id=? AND status='ignored'",
+                (int(store_id),),
+            )
+            self._conn.commit()
+            return int(cur.rowcount or 0)
+
+    def list_wb_portal_alerts(
+        self,
+        *,
+        store_id: Optional[int] = None,
+        status: Optional[str] = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[WbPortalAlertRow]:
+        where = []
+        params: list = []
+        if store_id is not None:
+            where.append("store_id=?")
+            params.append(int(store_id))
+        if status:
+            where.append("status=?")
+            params.append(status.strip())
+        w = ("WHERE " + " AND ".join(where)) if where else ""
+        safe_limit = max(1, min(int(limit), 500))
+        safe_offset = max(0, int(offset))
+        with _DB_LOCK:
+            rows = self._conn.execute(
+                f"""SELECT id, ts, store_id, news_id, header, content, news_date, types_json, status,
+                           summary, action_needed, telegram_title, telegram_sent
+                    FROM wb_portal_alerts {w}
+                    ORDER BY news_date DESC, id DESC LIMIT ? OFFSET ?""",
+                params + [safe_limit, safe_offset],
+            ).fetchall()
+            return [
+                WbPortalAlertRow(
+                    id=int(r["id"]),
+                    ts=str(r["ts"] or ""),
+                    store_id=int(r["store_id"]),
+                    news_id=int(r["news_id"]),
+                    header=str(r["header"] or ""),
+                    content=str(r["content"] or ""),
+                    news_date=str(r["news_date"] or ""),
+                    types_json=str(r["types_json"] or "[]"),
+                    status=str(r["status"] or "new"),
+                    summary=str(r["summary"] or ""),
+                    action_needed=str(r["action_needed"] or ""),
+                    telegram_title=str(r["telegram_title"] or ""),
+                    telegram_sent=bool(r["telegram_sent"]),
+                )
+                for r in rows
+            ]
+
+    def update_wb_portal_alert_status(self, alert_id: int, status: str) -> bool:
+        st = (status or "").strip().lower()
+        if st not in ("new", "resolved", "ignored"):
+            return False
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                "UPDATE wb_portal_alerts SET status=? WHERE id=?",
+                (st, int(alert_id)),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
 
     # ---------- Card error alerts ----------
     def has_card_error_alert(self, store_id: int, source_type: str, source_ref: str) -> bool:

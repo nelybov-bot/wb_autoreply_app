@@ -6866,13 +6866,23 @@
     + '<i>{explanation}</i>'
   );
 
-  const PROMPT_GROUP_ORDER = ['review', 'question', 'buyer_chat', 'card_check', 'ozon_important_alert'];
+  const DEFAULT_WB_ALERT_TELEGRAM_TEMPLATE = (
+    '📢 <b>{telegram_title}</b>\n\n'
+    + '🏪 <b>Магазин:</b> {store_name}\n'
+    + '🏷 <b>Категория:</b> {news_types}\n\n'
+    + '<blockquote>{summary}</blockquote>\n\n'
+    + '✅ <b>Действия:</b> {action_needed}\n'
+    + '🕐 {news_date}'
+  );
+
+  const PROMPT_GROUP_ORDER = ['review', 'question', 'buyer_chat', 'card_check', 'ozon_important_alert', 'wb_important_alert'];
   const PROMPT_GROUP_TITLES = {
     review: 'Отзывы',
     question: 'Вопросы',
     buyer_chat: 'Чаты с покупателями (WB и Ozon)',
     card_check: 'Проверка карточки товара',
     ozon_important_alert: 'Уведомления Ozon (поддержка)',
+    wb_important_alert: 'Уведомления WB (новости портала)',
   };
 
   function promptRatingLabel(itemType, ratingGroup) {
@@ -6987,7 +6997,19 @@
       }
       const ozAlertTgChat = document.getElementById('setting-ozon_alerts_telegram_chat_id');
       if (ozAlertTgChat) ozAlertTgChat.value = data.ozon_alerts_telegram_chat_id || '';
-      fillOzonAlertsStoreSelects();
+      const wbAlertTg = document.getElementById('setting-wb_alerts_telegram_enabled');
+      if (wbAlertTg) wbAlertTg.checked = String(data.wb_alerts_telegram_enabled || '1') !== '0';
+      const wbAlertTpl = document.getElementById('setting-wb_alerts_telegram_template');
+      if (wbAlertTpl) {
+        wbAlertTpl.value = data.wb_alerts_telegram_template || DEFAULT_WB_ALERT_TELEGRAM_TEMPLATE;
+      }
+      const wbAlertTgChat = document.getElementById('setting-wb_alerts_telegram_chat_id');
+      if (wbAlertTgChat) wbAlertTgChat.value = data.wb_alerts_telegram_chat_id || '';
+      const wbAlertEnabled = document.getElementById('setting-wb_alerts_enabled');
+      if (wbAlertEnabled) wbAlertEnabled.checked = String(data.wb_alerts_enabled || '0') === '1';
+      const wbAlertFrom = document.getElementById('setting-wb_alerts_check_from_date');
+      if (wbAlertFrom) syncWbAlertsFromDateInputs(data.wb_alerts_check_from_date || '');
+      fillAlertsStoreSelects();
       const prompts = await api('/prompts');
       renderPromptsList(prompts);
     } catch (err) {
@@ -7038,6 +7060,8 @@
       });
       const autoRunOzonAlerts = document.getElementById('auto-run-ozon-alerts');
       if (autoRunOzonAlerts) autoRunOzonAlerts.checked = !!autoCfg.run_ozon_alerts;
+      const autoRunWbAlerts = document.getElementById('auto-run-wb-alerts');
+      if (autoRunWbAlerts) autoRunWbAlerts.checked = !!autoCfg.run_wb_alerts;
       const autoRunOzonActions = document.getElementById('auto-run-ozon-actions-remove');
       if (autoRunOzonActions) autoRunOzonActions.checked = !!autoCfg.run_ozon_actions_remove;
       syncAutoScheduleModeUi();
@@ -7105,6 +7129,7 @@
       const run_wb_chats = !!document.getElementById('auto-run-wb-chats')?.checked;
       const run_ozon_chats = !!document.getElementById('auto-run-ozon-chats')?.checked;
       const run_ozon_alerts = !!document.getElementById('auto-run-ozon-alerts')?.checked;
+      const run_wb_alerts = !!document.getElementById('auto-run-wb-alerts')?.checked;
       const run_ozon_actions_remove = !!document.getElementById('auto-run-ozon-actions-remove')?.checked;
       const store_ids = getAutoSelectedStoreIds();
       if (!store_ids.length) {
@@ -7113,7 +7138,7 @@
       }
       const anyTask = run_reviews_wb || run_reviews_yam || run_reviews_ozon
         || run_questions_wb || run_questions_yam || run_questions_ozon
-        || run_wb_chats || run_ozon_chats || run_ozon_alerts || run_ozon_actions_remove;
+        || run_wb_chats || run_ozon_chats || run_ozon_alerts || run_wb_alerts || run_ozon_actions_remove;
       if (!anyTask) {
         toast('Выбери хотя бы одну задачу в блоках WB / ЯМ / Ozon', 'error');
         return;
@@ -7126,7 +7151,7 @@
             enabled, slots, store_ids, schedule_mode, interval_hours,
             run_reviews_wb, run_reviews_yam, run_reviews_ozon,
             run_questions_wb, run_questions_yam, run_questions_ozon,
-            run_wb_chats, run_ozon_chats, run_ozon_alerts, run_ozon_actions_remove,
+            run_wb_chats, run_ozon_chats, run_ozon_alerts, run_wb_alerts, run_ozon_actions_remove,
           }),
         });
         toast('Автозапуск сохранён');
@@ -7319,6 +7344,11 @@
       ozon_alerts_check_from_date: document.getElementById('setting-ozon_alerts_check_from_date')?.value || '',
       ozon_alerts_telegram_template: document.getElementById('setting-ozon_alerts_telegram_template')?.value || '',
       ozon_alerts_telegram_chat_id: document.getElementById('setting-ozon_alerts_telegram_chat_id')?.value || '',
+      wb_alerts_enabled: document.getElementById('setting-wb_alerts_enabled')?.checked ? '1' : '0',
+      wb_alerts_check_from_date: wbAlertsFromDateValue(),
+      wb_alerts_telegram_enabled: document.getElementById('setting-wb_alerts_telegram_enabled')?.checked ? '1' : '0',
+      wb_alerts_telegram_template: document.getElementById('setting-wb_alerts_telegram_template')?.value || '',
+      wb_alerts_telegram_chat_id: document.getElementById('setting-wb_alerts_telegram_chat_id')?.value || '',
       buyer_chat_reply_from_date: document.getElementById('setting-buyer_chat_reply_from_date')?.value || '',
       buyer_chat_auto_max_age_days: String(parseInt(document.getElementById('setting-buyer_chat_auto_max_age_days')?.value || '3', 10) || 3),
     };
@@ -7695,25 +7725,119 @@
     ozon_chat: 'Чат Ozon',
   };
 
-  function fillOzonAlertsStoreSelects() {
+  function wbAlertsFromDateValue() {
+    return (
+      document.getElementById('alerts-wb-from-date')?.value
+      || document.getElementById('setting-wb_alerts_check_from_date')?.value
+      || ''
+    ).trim();
+  }
+
+  function syncWbAlertsFromDateInputs(value) {
+    const v = String(value || '').slice(0, 10);
+    const panel = document.getElementById('alerts-wb-from-date');
+    const settings = document.getElementById('setting-wb_alerts_check_from_date');
+    if (panel) panel.value = v;
+    if (settings) settings.value = v;
+  }
+
+  function syncAlertsToolbar() {
+    const mp = (document.getElementById('alerts-marketplace')?.value || '').trim();
+    const btnWbScan = document.getElementById('btn-alerts-scan-wb');
+    const btnWbRescan = document.getElementById('btn-wb-alerts-rescan-panel');
+    const btnOzonRescan = document.getElementById('btn-ozon-alerts-rescan-panel');
+    const wbFromWrap = document.getElementById('alerts-wb-from-wrap');
+    if (btnWbScan) btnWbScan.hidden = mp === 'ozon';
+    if (btnWbRescan) btnWbRescan.hidden = mp === 'ozon';
+    if (btnOzonRescan) btnOzonRescan.hidden = mp === 'wb';
+    if (wbFromWrap) wbFromWrap.hidden = mp === 'ozon';
+  }
+
+  function fillAlertsStoreSelects() {
+    const mp = (document.getElementById('alerts-marketplace')?.value || '').trim();
     const oz = storesForMarketplace('ozon');
-    const opts = oz.length
-      ? oz.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')
-      : '<option value="">Нет магазинов Ozon</option>';
-    const scanSel = document.getElementById('ozon-alerts-scan-store');
-    if (scanSel) {
-      const prev = String(scanSel.value || '').trim();
-      scanSel.innerHTML = opts;
-      if (prev && oz.some(s => String(s.id) === prev)) scanSel.value = prev;
-      else if (oz.length) selectFirstStoreOption(scanSel);
+    const wb = storesForMarketplace('wb');
+    const scanOz = document.getElementById('ozon-alerts-scan-store');
+    if (scanOz) {
+      const prev = String(scanOz.value || '').trim();
+      const opts = oz.length
+        ? oz.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')
+        : '<option value="">Нет магазинов Ozon</option>';
+      scanOz.innerHTML = opts;
+      if (prev && oz.some(s => String(s.id) === prev)) scanOz.value = prev;
+      else if (oz.length) selectFirstStoreOption(scanOz);
+    }
+    const scanWb = document.getElementById('wb-alerts-scan-store');
+    if (scanWb) {
+      const prevW = String(scanWb.value || '').trim();
+      const optsW = wb.length
+        ? wb.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')
+        : '<option value="">Нет магазинов WB</option>';
+      scanWb.innerHTML = optsW;
+      if (prevW && wb.some(s => String(s.id) === prevW)) scanWb.value = prevW;
+      else if (wb.length) selectFirstStoreOption(scanWb);
     }
     const panelSel = document.getElementById('ozon-alerts-store');
     if (panelSel) {
       const prevP = String(panelSel.value || '').trim();
+      let list = [];
+      if (mp === 'ozon') list = oz;
+      else if (mp === 'wb') list = wb;
+      else list = [...oz, ...wb];
       panelSel.innerHTML = '<option value="">Все магазины</option>'
-        + oz.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
-      if (prevP && (prevP === '' || oz.some(s => String(s.id) === prevP))) panelSel.value = prevP;
+        + list.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+      if (prevP && (prevP === '' || list.some(s => String(s.id) === prevP))) panelSel.value = prevP;
     }
+    syncAlertsToolbar();
+  }
+
+  function fillOzonAlertsStoreSelects() {
+    fillAlertsStoreSelects();
+  }
+
+  function renderOzonAlertRow(r) {
+    const stCls = r.status === 'new' ? 'ops-log-result-other' : r.status === 'resolved' ? 'ops-log-result-ok' : 'ops-log-result-err';
+    const stLabel = r.status === 'new' ? 'новое' : r.status === 'resolved' ? 'обработано' : escapeHtml(r.status);
+    const resolveBtn = r.status === 'new'
+      ? `<button type="button" class="btn btn-secondary btn-sm" data-ozon-alert-resolve="${r.id}">Обработано</button>`
+      : '';
+    const tg = r.telegram_sent ? ' · TG ✓' : '';
+    return `
+      <tr>
+        <td class="ops-log-ts">${escapeHtml(r.message_at_label || r.ts || '—')}</td>
+        <td><span class="mp-pill mp-ozon">OZON</span></td>
+        <td class="ops-log-store">${escapeHtml(r.store_name || r.store_id)}</td>
+        <td>${ozonAlertCategoryBadge(r)}</td>
+        <td>${escapeHtml(r.threat_type || '—')}</td>
+        <td>${escapeHtml(r.amount || '—')}</td>
+        <td>${escapeHtml(r.product_ref || '—')}</td>
+        <td><div class="ops-log-summary">${escapeHtml(r.summary || '—')}</div><div class="form-hint ozon-alert-action">${escapeHtml(r.action_needed || '')}</div></td>
+        <td><span class="ops-log-badge ${stCls}">${stLabel}</span><span class="form-hint">${tg}</span>${resolveBtn}</td>
+      </tr>
+      <tr class="ozon-alert-msg-row"><td colspan="9"><div class="ozon-alert-msg">${escapeHtml((r.message_text || '').slice(0, 600))}${(r.message_text || '').length > 600 ? '…' : ''}</div></td></tr>`;
+  }
+
+  function renderWbAlertRow(r) {
+    const stCls = r.status === 'new' ? 'ops-log-result-other' : r.status === 'resolved' ? 'ops-log-result-ok' : 'ops-log-result-err';
+    const stLabel = r.status === 'new' ? 'новое' : r.status === 'resolved' ? 'обработано' : escapeHtml(r.status);
+    const tg = r.telegram_sent ? ' · TG ✓' : '';
+    const resolveBtn = r.status === 'new'
+      ? `<button type="button" class="btn btn-secondary btn-sm" data-wb-alert-resolve="${r.id}">Обработано</button>`
+      : '';
+    const summary = r.summary || r.header || '—';
+    return `
+      <tr>
+        <td class="ops-log-ts">${escapeHtml(r.news_date_label || r.ts || '—')}</td>
+        <td><span class="mp-pill mp-wb">WB</span></td>
+        <td class="ops-log-store">${escapeHtml(r.store_name || r.store_id)}</td>
+        <td>${escapeHtml(r.types_label || '—')}</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td><div class="ops-log-summary"><strong>${escapeHtml(r.telegram_title || r.header || '—')}</strong></div><div class="form-hint ozon-alert-action">${escapeHtml(summary)}</div>${r.action_needed ? `<div class="form-hint ozon-alert-action">${escapeHtml(r.action_needed)}</div>` : ''}</td>
+        <td><span class="ops-log-badge ${stCls}">${stLabel}</span><span class="form-hint">${tg}</span>${resolveBtn}</td>
+      </tr>
+      <tr class="ozon-alert-msg-row"><td colspan="9"><div class="ozon-alert-msg">${escapeHtml((r.content || '').slice(0, 800))}${(r.content || '').length > 800 ? '…' : ''}</div></td></tr>`;
   }
 
   async function loadOzonAlerts() {
@@ -7722,47 +7846,44 @@
     wrap.innerHTML = '<div class="form-hint">Загрузка…</div>';
     try {
       await ensureStoresLoaded();
-      fillOzonAlertsStoreSelects();
+      fillAlertsStoreSelects();
     } catch (_) {}
+    const mp = (document.getElementById('alerts-marketplace')?.value || '').trim();
     const storeId = (document.getElementById('ozon-alerts-store')?.value || '').trim();
     const status = (document.getElementById('ozon-alerts-status')?.value || '').trim();
-    let url = '/ozon/alerts?limit=300';
-    if (storeId) url += `&store_id=${encodeURIComponent(storeId)}`;
-    if (status) {
-      url += `&status=${encodeURIComponent(status)}&important_only=0`;
-    }
+    const rows = [];
     try {
-      const rows = await api(url);
+      if (!mp || mp === 'ozon') {
+        let url = '/ozon/alerts?limit=300';
+        if (storeId) url += `&store_id=${encodeURIComponent(storeId)}`;
+        if (status) url += `&status=${encodeURIComponent(status)}&important_only=0`;
+        const ozRows = await api(url);
+        rows.push(...ozRows.map(r => ({ ...r, marketplace: 'ozon', _sort: r.message_at || r.ts || '' })));
+      }
+      if (!mp || mp === 'wb') {
+        let urlWb = '/wb/alerts?limit=300';
+        if (storeId) urlWb += `&store_id=${encodeURIComponent(storeId)}`;
+        if (status) urlWb += `&status=${encodeURIComponent(status)}&important_only=0`;
+        const wbRows = await api(urlWb);
+        rows.push(...wbRows.map(r => ({ ...r, marketplace: 'wb', _sort: r.news_date || r.ts || '' })));
+      }
+      rows.sort((a, b) => String(b._sort).localeCompare(String(a._sort)));
       if (!rows.length) {
-        wrap.innerHTML = '<div class="empty-state empty-state--compact">Важных уведомлений пока нет. Включите проверку в «Настройки → Ozon» и нажмите «Проверить чаты».</div>';
+        const hint = mp === 'wb'
+          ? 'Новостей WB пока нет. Включите загрузку в «Настройки → WB» и нажмите «Загрузить новости».'
+          : mp === 'ozon'
+            ? 'Важных уведомлений Ozon пока нет. Включите проверку в «Настройки → Ozon» и нажмите «Проверить чаты».'
+            : 'Уведомлений пока нет. Настройте Ozon и/или WB в разделе «Настройки».';
+        wrap.innerHTML = `<div class="empty-state empty-state--compact">${escapeHtml(hint)}</div>`;
         return;
       }
       wrap.innerHTML = `
         <table class="ops-log-table ozon-alerts-table">
           <thead><tr>
-            <th>Время</th><th>Магазин</th><th>Категория</th><th>Тип</th><th>Сумма</th><th>Товар</th><th>Сводка</th><th>Статус</th>
+            <th>Время</th><th>MP</th><th>Магазин</th><th>Категория</th><th>Тип</th><th>Сумма</th><th>Товар</th><th>Сводка</th><th>Статус</th>
           </tr></thead>
           <tbody>
-            ${rows.map(r => {
-              const stCls = r.status === 'new' ? 'ops-log-result-other' : r.status === 'resolved' ? 'ops-log-result-ok' : 'ops-log-result-err';
-              const stLabel = r.status === 'new' ? 'новое' : r.status === 'resolved' ? 'обработано' : escapeHtml(r.status);
-              const resolveBtn = r.status === 'new'
-                ? `<button type="button" class="btn btn-secondary btn-sm" data-ozon-alert-resolve="${r.id}">Обработано</button>`
-                : '';
-              const tg = r.telegram_sent ? ' · TG ✓' : '';
-              return `
-              <tr>
-                <td class="ops-log-ts">${escapeHtml(r.message_at_label || r.ts || '—')}</td>
-                <td class="ops-log-store">${escapeHtml(r.store_name || r.store_id)}</td>
-                <td>${ozonAlertCategoryBadge(r)}</td>
-                <td>${escapeHtml(r.threat_type || '—')}</td>
-                <td>${escapeHtml(r.amount || '—')}</td>
-                <td>${escapeHtml(r.product_ref || '—')}</td>
-                <td><div class="ops-log-summary">${escapeHtml(r.summary || '—')}</div><div class="form-hint ozon-alert-action">${escapeHtml(r.action_needed || '')}</div></td>
-                <td><span class="ops-log-badge ${stCls}">${stLabel}</span><span class="form-hint">${tg}</span>${resolveBtn}</td>
-              </tr>
-              <tr class="ozon-alert-msg-row"><td colspan="8"><div class="ozon-alert-msg">${escapeHtml((r.message_text || '').slice(0, 600))}${(r.message_text || '').length > 600 ? '…' : ''}</div></td></tr>`;
-            }).join('')}
+            ${rows.map(r => (r.marketplace === 'wb' ? renderWbAlertRow(r) : renderOzonAlertRow(r))).join('')}
           </tbody>
         </table>`;
       wrap.querySelectorAll('[data-ozon-alert-resolve]').forEach(btn => {
@@ -7770,6 +7891,18 @@
           const id = Number(btn.getAttribute('data-ozon-alert-resolve'));
           try {
             await api('/ozon/alerts/' + id, { method: 'PATCH', body: JSON.stringify({ status: 'resolved' }) });
+            toast('Отмечено как обработано');
+            await loadOzonAlerts();
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        });
+      });
+      wrap.querySelectorAll('[data-wb-alert-resolve]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = Number(btn.getAttribute('data-wb-alert-resolve'));
+          try {
+            await api('/wb/alerts/' + id, { method: 'PATCH', body: JSON.stringify({ status: 'resolved' }) });
             toast('Отмечено как обработано');
             await loadOzonAlerts();
           } catch (err) {
@@ -7846,6 +7979,17 @@
   document.getElementById('btn-refresh-ozon-alerts')?.addEventListener('click', () => { void loadOzonAlerts(); });
   document.getElementById('ozon-alerts-store')?.addEventListener('change', () => { void loadOzonAlerts(); });
   document.getElementById('ozon-alerts-status')?.addEventListener('change', () => { void loadOzonAlerts(); });
+  document.getElementById('alerts-marketplace')?.addEventListener('change', () => {
+    syncAlertsToolbar();
+    fillAlertsStoreSelects();
+    void loadOzonAlerts();
+  });
+  document.getElementById('alerts-wb-from-date')?.addEventListener('change', () => {
+    syncWbAlertsFromDateInputs(wbAlertsFromDateValue());
+  });
+  document.getElementById('setting-wb_alerts_check_from_date')?.addEventListener('change', () => {
+    syncWbAlertsFromDateInputs(wbAlertsFromDateValue());
+  });
   async function runOzonAlertsScan(storeId, { rescan = false } = {}) {
     const sid = String(storeId || '').trim();
     if (!sid) {
@@ -7889,6 +8033,60 @@
   });
   document.getElementById('btn-ozon-alerts-rescan-panel')?.addEventListener('click', () => {
     void runOzonAlertsScan(document.getElementById('ozon-alerts-store')?.value, { rescan: true });
+  });
+
+  async function runWbAlertsScan(storeId, { rescan = false } = {}) {
+    const sid = String(storeId || '').trim();
+    if (!sid) {
+      toast('Выберите магазин WB', 'error');
+      return;
+    }
+    if (rescan && !window.confirm('Сбросить скрытые уведомления (заказы/отмены) и загрузить новости заново?')) {
+      return;
+    }
+    try {
+      await saveServerSettings();
+      toast(rescan ? 'Перезагружаю новости WB…' : 'Загружаю новости WB…', 'info');
+      const fromDate = wbAlertsFromDateValue();
+      const r = await api(`/wb/alerts/${sid}/scan`, {
+        method: 'POST',
+        body: JSON.stringify({ rescan, from_date: fromDate || undefined }),
+        timeoutMs: 300000,
+      });
+      const cleared = Number(r.wb_alert_ignored_cleared || 0);
+      const clearedPart = rescan && cleared ? `, сброшено скрытых: ${cleared}` : '';
+      const aiPart = Number(r.wb_alert_ai_ignored || 0) ? `, не важно (ИИ): ${r.wb_alert_ai_ignored}` : '';
+      const failPart = Number(r.wb_alert_ai_failed || 0) ? `, ошибки ИИ: ${r.wb_alert_ai_failed}` : '';
+      const fromPart = r.wb_alert_from_date ? ` · с ${String(r.wb_alert_from_date).slice(0, 10)}` : '';
+      toast(
+        `Готово: важных ${r.wb_alert_new ?? 0}, получено ${r.wb_alert_fetched ?? 0}, скрыто (заказы/отмены) ${r.wb_alert_excluded ?? 0}${aiPart}${failPart}${clearedPart}${fromPart}`,
+      );
+      await loadOzonAlerts();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  document.getElementById('btn-wb-alerts-scan-now')?.addEventListener('click', () => {
+    void runWbAlertsScan(document.getElementById('wb-alerts-scan-store')?.value, { rescan: false });
+  });
+  document.getElementById('btn-wb-alerts-rescan-now')?.addEventListener('click', () => {
+    void runWbAlertsScan(document.getElementById('wb-alerts-scan-store')?.value, { rescan: true });
+  });
+  document.getElementById('btn-alerts-scan-wb')?.addEventListener('click', () => {
+    const mp = (document.getElementById('alerts-marketplace')?.value || '').trim();
+    const sid = (document.getElementById('ozon-alerts-store')?.value || '').trim()
+      || document.getElementById('wb-alerts-scan-store')?.value;
+    if (mp === 'wb' && !sid) {
+      toast('Выберите магазин WB', 'error');
+      return;
+    }
+    void runWbAlertsScan(sid, { rescan: false });
+  });
+  document.getElementById('btn-wb-alerts-rescan-panel')?.addEventListener('click', () => {
+    const sid = (document.getElementById('ozon-alerts-store')?.value || '').trim()
+      || document.getElementById('wb-alerts-scan-store')?.value;
+    void runWbAlertsScan(sid, { rescan: true });
   });
   document.getElementById('card-errors-store')?.addEventListener('change', () => { void loadCardErrors(); });
   document.getElementById('card-errors-status')?.addEventListener('change', () => { void loadCardErrors(); });

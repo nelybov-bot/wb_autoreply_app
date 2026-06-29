@@ -77,6 +77,20 @@ API `GET /api/settings` возвращает секреты **замаскиро
 | `ozon_alerts_telegram_template` | Шаблон сообщения |
 | `ozon_alerts_telegram_chat_id` | Отдельный чат (опционально) |
 
+### Уведомления WB (`wb_alerts.py`)
+
+| Ключ | Описание |
+|------|----------|
+| `wb_alerts_enabled` | `1` — загрузка и анализ новостей портала |
+| `wb_alerts_check_from_date` | Дата начала (ISO); пусто — 30 дней |
+| `wb_alerts_telegram_enabled` | Уведомления в Telegram |
+| `wb_alerts_telegram_template` | Шаблон сообщения (HTML) |
+| `wb_alerts_telegram_chat_id` | Отдельный чат (опционально) |
+
+Промпт ИИ: `wb_important_alert` / `general` в таблице `prompts`.
+
+Автоматически скрываются: новые заказы, уведомления о скорой отмене. Остальное — классификация ИИ.
+
 ### Чаты покупателей (`chat_common.py`)
 
 | Ключ | Описание |

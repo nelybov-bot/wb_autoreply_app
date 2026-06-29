@@ -24,6 +24,7 @@ _TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]{20,}$")
 SETTING_REPORT_CHAT_ID = "telegram_report_chat_id"
 SETTING_CARD_ERROR_CHAT_ID = "telegram_card_error_chat_id"
 SETTING_OZON_ALERTS_CHAT_ID = "ozon_alerts_telegram_chat_id"
+SETTING_WB_ALERTS_CHAT_ID = "wb_alerts_telegram_chat_id"
 SETTING_AGENT_CHAT_ID = "telegram_agent_chat_id"
 
 _CHAT_ID_SETTING_KEYS = (
@@ -240,7 +241,8 @@ def normalize_telegram_chat_id(chat_id: Union[str, int]) -> Union[str, int]:
 
 def resolve_telegram_chat_id(db, purpose: str) -> str:
     """
-    purpose: default — отзывы; report — отчёт; card_error — карточки; ozon_alerts — важные уведомления Ozon.
+    purpose: default — отзывы; report — отчёт; card_error — карточки;
+    ozon_alerts — важные уведомления Ozon; wb_alerts — важные новости WB.
     Для остальных пустое значение = чат по умолчанию (telegram_chat_id).
     """
     default = (db.get_setting("telegram_chat_id") or "").strip()
@@ -250,6 +252,7 @@ def resolve_telegram_chat_id(db, purpose: str) -> str:
         "report": SETTING_REPORT_CHAT_ID,
         "card_error": SETTING_CARD_ERROR_CHAT_ID,
         "ozon_alerts": SETTING_OZON_ALERTS_CHAT_ID,
+        "wb_alerts": SETTING_WB_ALERTS_CHAT_ID,
     }
     key = keys.get(purpose, SETTING_CARD_ERROR_CHAT_ID)
     specific = (db.get_setting(key) or "").strip()
