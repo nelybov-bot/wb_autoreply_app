@@ -9,3 +9,6 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.15
+      # HTTP-прокси в РФ для pub.fsa.gov.ru (см. deploy/fsa-proxy/README.md)
+      - key: FSA_PROXY_URL
+        sync: false

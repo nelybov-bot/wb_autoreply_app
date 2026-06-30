@@ -8,7 +8,17 @@
 
 ---
 
-## Последнее (2026-06-30) — ФСА: таймаут с Render
+## Последнее (2026-06-30) — Render + VPS-прокси для ФСА
+
+**Задача:** всё на Render (OpenAI), ФСА — через RU-прокси.
+
+**Добавлено:** `deploy/fsa-proxy/setup_ru_proxy.sh`, README, `FSA_PROXY_URL` в render.yaml.
+
+**Шаги:** VPS РФ → скрипт → `FSA_PROXY_URL` в Render Environment.
+
+---
+
+## (2026-06-30) — ФСА: таймаут с Render
 
 **Проблема:** «fsa_not_found» + Connection timeout к pub.fsa.gov.ru.
 

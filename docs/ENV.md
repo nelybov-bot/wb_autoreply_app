@@ -13,7 +13,7 @@
 | `COOKIE_SECURE` | Опционально | Если задано непустое значение — cookie с флагом `Secure` (HTTPS) |
 | `PYTHON_VERSION` | Render | `3.10.15` (см. `render.yaml`) |
 | `PORT` | Production | Порт uvicorn (задаёт Render автоматически) |
-| `FSA_PROXY_URL` | Опционально | HTTP-прокси для доступа к pub.fsa.gov.ru (если сервер вне РФ) |
+| `FSA_PROXY_URL` | **Render + Ozon документы** | HTTP-прокси в РФ для pub.fsa.gov.ru. Настройка: `deploy/fsa-proxy/README.md` |
 | `HTTP_PROXY` / `HTTPS_PROXY` | Опционально | Запасной вариант для ФСА, если `FSA_PROXY_URL` не задан |
 
 ### Пример `.env` (локально, не коммитить)

@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-06-30 — Render + прокси ФСА (инструкция)
+
+- `deploy/fsa-proxy/setup_ru_proxy.sh` — squid на VPS в РФ
+- `deploy/fsa-proxy/README.md` — Render + `FSA_PROXY_URL`
+- `render.yaml`: placeholder `FSA_PROXY_URL`
+
 ## 2026-06-30 — Fix: ФСА timeout vs «не найден»
 
 - Статус `fsa_error` при сетевых ошибках (не `fsa_not_found`)
