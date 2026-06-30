@@ -102,25 +102,51 @@ _RENDER_FSA_MSG = (
 )
 
 
-def _proxy_host_label(proxy_url: Optional[str]) -> str:
-    if not proxy_url:
-        return ""
-    try:
-        from urllib.parse import urlparse
+@dataclass
+class _ParsedProxy:
+    url: str
+    auth: Optional[aiohttp.BasicAuth]
+    label: str
 
-        host = urlparse(proxy_url).hostname or ""
-        return host[:80]
+
+def _parse_proxy_url(raw: Optional[str]) -> Optional[_ParsedProxy]:
+    if not raw:
+        return None
+    try:
+        from urllib.parse import urlparse, unquote
+
+        p = urlparse(str(raw).strip())
+        if not p.hostname:
+            return None
+        scheme = p.scheme or "http"
+        port = p.port or (8080 if scheme == "http" else 443)
+        host = p.hostname
+        user = unquote(p.username) if p.username else None
+        password = unquote(p.password) if p.password else None
+        auth = aiohttp.BasicAuth(user, password) if user and password else None
+        return _ParsedProxy(
+            url=f"{scheme}://{host}:{port}",
+            auth=auth,
+            label=f"{host}:{port}",
+        )
     except Exception:
-        return ""
+        return None
+
+
+def _proxy_host_label(proxy_url: Optional[str]) -> str:
+    parsed = _parse_proxy_url(proxy_url)
+    return parsed.label if parsed else ""
 
 
 async def check_fsa_access() -> Dict[str, Any]:
     """Проверка конфигурации и доступности pub.fsa.gov.ru (для UI/диагностики)."""
     proxy = _fsa_proxy_url()
+    parsed = _parse_proxy_url(proxy)
     out: Dict[str, Any] = {
         "render": fsa_hosted_on_render(),
         "proxy_configured": bool(proxy),
-        "proxy_host": _proxy_host_label(proxy),
+        "proxy_host": parsed.label if parsed else _proxy_host_label(proxy),
+        "proxy_reachable": None,
         "reachable": False,
         "message": "",
         "error_kind": "",
@@ -129,17 +155,44 @@ async def check_fsa_access() -> Dict[str, Any]:
         out["message"] = _RENDER_FSA_MSG
         out["error_kind"] = "config"
         return out
+    if parsed:
+        try:
+            await _ping_proxy(parsed)
+            out["proxy_reachable"] = True
+        except Exception as e:
+            out["proxy_reachable"] = False
+            out["message"] = (
+                f"Прокси {parsed.label} недоступен с сервера: {str(e)[:160]}. "
+                "Проверьте FSA_PROXY_URL в Render и в Proxy.Market отключите привязку только к вашему IP."
+            )
+            out["error_kind"] = "proxy"
+            return out
     try:
-        client = FsaRegistryClient(timeout_s=25.0)
+        client = FsaRegistryClient(timeout_s=25.0, retries=1)
         await client._ensure_token()
         out["reachable"] = True
-        out["message"] = "Связь с pub.fsa.gov.ru установлена"
+        out["message"] = (
+            f"Связь с pub.fsa.gov.ru установлена"
+            + (f" через прокси {parsed.label}" if parsed else "")
+        )
         return out
     except Exception as e:
-        kind, msg = _fsa_user_error(e)
+        kind, msg = _fsa_user_error(e, proxy_label=parsed.label if parsed else "")
         out["message"] = msg
         out["error_kind"] = kind
         return out
+
+
+async def _ping_proxy(parsed: _ParsedProxy) -> None:
+    timeout = aiohttp.ClientTimeout(connect=12, total=20)
+    kw: Dict[str, Any] = {"proxy": parsed.url}
+    if parsed.auth:
+        kw["proxy_auth"] = parsed.auth
+    async with aiohttp.ClientSession(timeout=timeout) as s:
+        async with s.get(f"{FSA_BASE}/login", **kw) as resp:
+            await resp.read()
+            if resp.status >= 500:
+                raise ConnectionError(f"HTTP {resp.status}")
 
 
 def _is_network_error(exc: BaseException) -> bool:
@@ -149,21 +202,40 @@ def _is_network_error(exc: BaseException) -> bool:
     return any(x in msg for x in ("timeout", "connection", "cannot connect", "network is unreachable"))
 
 
-def _fsa_user_error(exc: BaseException) -> Tuple[str, str]:
+def _fsa_user_error(exc: BaseException, *, proxy_label: str = "") -> Tuple[str, str]:
     """(error_kind, user_message)."""
-    if isinstance(exc, asyncio.TimeoutError) or "timeout" in str(exc).casefold():
+    err = str(exc)
+    low = err.casefold()
+    host = (proxy_label or "").split(":")[0]
+
+    if host and (host in err or "proxy" in low and "timeout" in low):
+        return (
+            "proxy",
+            f"Прокси {proxy_label} не отвечает с сервера Render. "
+            "В Proxy.Market разрешите доступ с любого IP (не только ваш). "
+            "Проверьте логин, пароль и порт в FSA_PROXY_URL.",
+        )
+    if isinstance(exc, asyncio.TimeoutError) or "timeout" in low:
+        if proxy_label:
+            return (
+                "network",
+                f"Таймаут ФСА через прокси {proxy_label}. Прокси доступен, но pub.fsa.gov.ru не ответил — попробуйте позже.",
+            )
         return (
             "network",
-            "Нет доступа к pub.fsa.gov.ru (таймаут). Реестр ФСА доступен из сети РФ. "
-            "Запустите приложение локально или задайте FSA_PROXY_URL (HTTP-прокси в России) на сервере.",
+            "Нет доступа к pub.fsa.gov.ru (таймаут). На Render задайте FSA_PROXY_URL (HTTP-прокси в РФ).",
         )
     if _is_network_error(exc):
+        if proxy_label:
+            return (
+                "proxy",
+                f"Ошибка прокси {proxy_label}: {err[:140]}. Проверьте FSA_PROXY_URL и whitelist в Proxy.Market.",
+            )
         return (
             "network",
-            f"Нет связи с реестром ФСА: {str(exc)[:120]}. "
-            "Проверьте сеть или задайте FSA_PROXY_URL на сервере.",
+            f"Нет связи с реестром ФСА: {err[:120]}. Задайте FSA_PROXY_URL на сервере.",
         )
-    return "api", f"Ошибка ФСА: {str(exc)[:200]}"
+    return "api", f"Ошибка ФСА: {err[:200]}"
 
 
 def _norm_number(num: str) -> str:
@@ -268,12 +340,31 @@ def _filter_payload(number: str, *, sort_column: str) -> dict:
 
 
 class FsaRegistryClient:
-    def __init__(self, *, timeout_s: float = 45.0, proxy_url: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_s: float = 45.0,
+        proxy_url: Optional[str] = None,
+        retries: int = 3,
+    ) -> None:
         self.timeout = aiohttp.ClientTimeout(connect=20, total=timeout_s)
         self._limiter = RateLimiter(0.7)
         self._token: str = ""
         self._token_ts: float = 0.0
-        self._proxy = proxy_url if proxy_url is not None else _fsa_proxy_url()
+        raw_proxy = proxy_url if proxy_url is not None else _fsa_proxy_url()
+        self._parsed_proxy = _parse_proxy_url(raw_proxy)
+        self._retries = max(1, int(retries))
+
+    def _proxy_kwargs(self) -> Dict[str, Any]:
+        if not self._parsed_proxy:
+            return {}
+        kw: Dict[str, Any] = {"proxy": self._parsed_proxy.url}
+        if self._parsed_proxy.auth:
+            kw["proxy_auth"] = self._parsed_proxy.auth
+        return kw
+
+    def _proxy_label(self) -> str:
+        return self._parsed_proxy.label if self._parsed_proxy else ""
 
     def _headers(self, *, referer: str) -> Dict[str, str]:
         h = {
@@ -302,7 +393,7 @@ class FsaRegistryClient:
                         "Origin": FSA_BASE,
                         "User-Agent": USER_AGENT,
                     },
-                    proxy=self._proxy,
+                    **self._proxy_kwargs(),
                 ) as resp:
                     txt = await resp.text()
                     if resp.status >= 400:
@@ -316,7 +407,7 @@ class FsaRegistryClient:
                     self._token = auth if auth.lower().startswith("bearer") else f"Bearer {auth}"
                     self._token_ts = time.time()
 
-        await retry(_do, retries=3)
+        await retry(_do, retries=self._retries)
 
     async def _post_json(self, path: str, body: dict, *, referer: str) -> Any:
         await self._ensure_token()
@@ -329,7 +420,7 @@ class FsaRegistryClient:
                     f"{FSA_BASE}{path}",
                     json=body,
                     headers=self._headers(referer=referer),
-                    proxy=self._proxy,
+                    **self._proxy_kwargs(),
                 ) as resp:
                     txt = await resp.text()
                     if resp.status == 401:
@@ -342,7 +433,7 @@ class FsaRegistryClient:
                     return await resp.json()
 
         try:
-            return await retry(_do, retries=3)
+            return await retry(_do, retries=self._retries)
         except HttpStatusError as e:
             if e.status == 401:
                 self._token = ""
@@ -360,7 +451,7 @@ class FsaRegistryClient:
                 async with s.get(
                     f"{FSA_BASE}{path}",
                     headers=self._headers(referer=referer),
-                    proxy=self._proxy,
+                    **self._proxy_kwargs(),
                 ) as resp:
                     if resp.status >= 400:
                         txt = await resp.text()
@@ -607,7 +698,7 @@ async def lookup_fsa_batch(
     try:
         await client._ensure_token()
     except Exception as e:
-        kind, msg = _fsa_user_error(e)
+        kind, msg = _fsa_user_error(e, proxy_label=client._proxy_label())
         log.warning("FSA probe failed (%s): %s", kind, e)
         for i, number in enumerate(keys):
             out[number] = _error_result(number, _type_for(number), kind, msg)
@@ -620,7 +711,7 @@ async def lookup_fsa_batch(
         try:
             out[number] = await client.lookup(number, doc_type=doc_type, fetch_pdf=fetch_pdf)
         except Exception as e:
-            kind, msg = _fsa_user_error(e)
+            kind, msg = _fsa_user_error(e, proxy_label=client._proxy_label())
             log.warning("FSA lookup %s (%s): %s", number, kind, e)
             out[number] = _error_result(number, doc_type, kind, msg)
         if progress_cb:

@@ -6780,7 +6780,7 @@
       parts.push(`<p class="form-hint">Проверено в ФСА уникальных номеров: <strong>${result.fsa_checked}</strong></p>`);
     }
     const allRows = (result.stores || []).flatMap((st) => st.rows || []);
-    const networkErrors = allRows.filter((r) => r.status === 'fsa_error' && (r.error_kind === 'network' || r.error_kind === 'config'));
+    const networkErrors = allRows.filter((r) => r.status === 'fsa_error' && ['network', 'config', 'proxy'].includes(r.error_kind));
     if (networkErrors.length) {
       const hint = networkErrors[0].message || 'Нет доступа к реестру ФСА с этого сервера.';
       parts.push(`<p class="text-error"><strong>Реестр ФСА недоступен с сервера.</strong> ${escapeHtml(hint)}</p>`);
@@ -6891,7 +6891,13 @@
       }
       el.hidden = false;
       el.className = 'form-hint compliance-fsa-status text-error';
-      el.innerHTML = escapeHtml(st.message || 'Реестр ФСА недоступен с этого сервера.');
+      let msg = st.message || 'Реестр ФСА недоступен с этого сервера.';
+      if (st.proxy_configured && st.proxy_reachable === false) {
+        msg += ' В Proxy.Market отключите привязку только к вашему IP.';
+      } else if (!st.proxy_configured && st.render) {
+        msg += ' Добавьте FSA_PROXY_URL в Render → Environment.';
+      }
+      el.innerHTML = escapeHtml(msg);
     } catch (_) {
       el.hidden = true;
     }
