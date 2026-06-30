@@ -116,7 +116,7 @@
 | POST | `/api/auto-schedule/run-now` | Запустить цикл вручную |
 | POST | `/api/auto-schedule/stop` | Остановить текущий цикл |
 
-Поля расписания: `enabled`, `schedule_mode` (`slots` \| `interval`), `slots` (MSK `HH:MM`), `interval_hours`, `store_ids`, флаги `run_reviews_wb/yam/ozon`, `run_questions_*`, `run_wb_chats`, `run_ozon_chats`, `run_ozon_alerts`, `run_ozon_actions_remove`.
+Поля расписания: `enabled`, `schedule_mode` (`slots` \| `interval`), `slots` (MSK `HH:MM`), `interval_hours`, `store_ids` (общий), `wb_store_ids`, `yam_store_ids`, `ozon_store_ids`, `ozon_actions_store_ids`, флаги `run_reviews_wb/yam/ozon`, `run_questions_*`, `run_wb_chats`, `run_ozon_chats`, `run_ozon_alerts`, `run_wb_alerts`, `run_ozon_actions_remove`.
 
 ---
 

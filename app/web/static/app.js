@@ -194,6 +194,274 @@
     }
   }
 
+  const RING_PROGRESS_CIRCUMFERENCE = 150.8;
+
+  function showProgress(containerEl, { label = 'Выполняется...' } = {}) {
+    if (!containerEl) return null;
+    containerEl.innerHTML = `
+    <div class="progress-wrap progress-wrap--v2">
+      <div class="progress-head">
+        <span class="progress-label">${escapeHtml(label)}</span>
+        <span class="progress-percent">0%</span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill"><div class="progress-shine"></div></div>
+      </div>
+    </div>`;
+    return {
+      update(percent, nextLabel) {
+        const pct = Math.max(0, Math.min(100, Math.round(percent)));
+        const fill = containerEl.querySelector('.progress-fill');
+        const pctEl = containerEl.querySelector('.progress-percent');
+        const labelEl = containerEl.querySelector('.progress-label');
+        if (fill) fill.style.width = pct + '%';
+        if (pctEl) pctEl.textContent = pct + '%';
+        if (nextLabel && labelEl) labelEl.textContent = nextLabel;
+      },
+      done() {
+        this.update(100);
+        setTimeout(() => { containerEl.innerHTML = ''; }, 400);
+      },
+      error(msg) {
+        containerEl.querySelector('.progress-fill')?.classList.add('progress-fill--error');
+        const labelEl = containerEl.querySelector('.progress-label');
+        if (msg && labelEl) labelEl.textContent = msg;
+      },
+    };
+  }
+
+  function showStepProgress(containerEl, totalSteps, currentStep, label) {
+    if (!containerEl) return;
+    const total = Math.max(1, Number(totalSteps) || 1);
+    const step = Math.max(0, Math.min(total, Number(currentStep) || 0));
+    const pct = Math.round((step / total) * 100);
+    containerEl.innerHTML = `
+    <div class="progress-wrap progress-wrap--v2">
+      <div class="progress-head">
+        <span class="progress-label">Шаг ${step} из ${total} — ${escapeHtml(label || '')}</span>
+        <span class="progress-percent">${pct}%</span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" style="width:${pct}%"><div class="progress-shine"></div></div>
+      </div>
+      <div class="progress-steps"></div>
+    </div>`;
+    const stepsWrap = containerEl.querySelector('.progress-steps');
+    if (!stepsWrap) return;
+    for (let i = 0; i < total; i++) {
+      const dot = document.createElement('div');
+      dot.className = 'progress-step-dot' + (i < step ? ' on' : '');
+      stepsWrap.appendChild(dot);
+    }
+  }
+
+  function showRingProgress(containerEl, { label = '', subLabel = '' } = {}) {
+    if (!containerEl) return null;
+    const circumference = RING_PROGRESS_CIRCUMFERENCE;
+    containerEl.innerHTML = `
+    <div class="ring-progress-wrap">
+      <svg width="44" height="44" viewBox="0 0 56 56" aria-hidden="true">
+        <circle cx="28" cy="28" r="24" fill="none" stroke="var(--surface-2)" stroke-width="5"/>
+        <circle class="ring-fill" cx="28" cy="28" r="24" fill="none" stroke="var(--accent)"
+          stroke-width="5" stroke-linecap="round" stroke-dasharray="${circumference}"
+          stroke-dashoffset="${circumference}" transform="rotate(-90 28 28)"/>
+        <text class="ring-text" x="28" y="32" text-anchor="middle" font-size="11" font-weight="500">0%</text>
+      </svg>
+      <div>
+        <div class="ring-label">${escapeHtml(label)}</div>
+        <div class="ring-sublabel">${escapeHtml(subLabel)}</div>
+      </div>
+    </div>`;
+    return {
+      update(percent, sub) {
+        const pct = Math.max(0, Math.min(100, Math.round(percent)));
+        const circ = containerEl.querySelector('.ring-fill');
+        const txt = containerEl.querySelector('.ring-text');
+        const subEl = containerEl.querySelector('.ring-sublabel');
+        if (circ) {
+          circ.style.strokeDashoffset = String(circumference * (1 - pct / 100));
+          circ.style.transition = 'stroke-dashoffset .4s ease';
+        }
+        if (txt) txt.textContent = pct + '%';
+        if (sub && subEl) subEl.textContent = sub;
+      },
+      done() {
+        this.update(100, 'Завершено');
+        setTimeout(() => { containerEl.innerHTML = ''; }, 600);
+      },
+    };
+  }
+
+  function fakeProgress(tracker, estimatedMs = 4000) {
+    if (!tracker || typeof tracker.update !== 'function') {
+      return () => {};
+    }
+    const start = Date.now();
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - start;
+      const pct = Math.min(90, (elapsed / estimatedMs) * 90);
+      tracker.update(pct);
+    }, 150);
+    return () => clearInterval(interval);
+  }
+
+  window.MarketAIProgress = {
+    showProgress,
+    showStepProgress,
+    showRingProgress,
+    fakeProgress,
+  };
+
+  function clearItemsProgressPoll(container) {
+    if (!container) return;
+    if (container._pollInterval) {
+      clearInterval(container._pollInterval);
+      container._pollInterval = null;
+    }
+    if (container._stopFake) {
+      container._stopFake();
+      container._stopFake = null;
+    }
+  }
+
+  function hideItemsProgressContainer(container) {
+    if (!container) return;
+    container.innerHTML = '';
+    container.hidden = true;
+    container.classList.remove('is-active');
+  }
+
+  function startLinearProgress(containerEl, label, estimatedMs = 60000) {
+    if (!containerEl) return { tracker: null };
+    clearItemsProgressPoll(containerEl);
+    containerEl.hidden = false;
+    containerEl.classList.add('is-active');
+    const tracker = showProgress(containerEl, { label });
+    if (!tracker) return { tracker: null };
+    containerEl._stopFake = fakeProgress(tracker, estimatedMs);
+    return { tracker };
+  }
+
+  function endLinearProgress(containerEl, tracker, { error } = {}) {
+    clearItemsProgressPoll(containerEl);
+    if (error && tracker) {
+      tracker.error(String(error));
+      setTimeout(() => hideItemsProgressContainer(containerEl), 2000);
+      return;
+    }
+    if (tracker) {
+      tracker.done();
+      return;
+    }
+    hideItemsProgressContainer(containerEl);
+  }
+
+  function startRingProgressUI(containerEl, label, subLabel, estimatedMs = 120000) {
+    if (!containerEl) return { tracker: null };
+    clearItemsProgressPoll(containerEl);
+    containerEl.hidden = false;
+    containerEl.classList.add('is-active');
+    const tracker = showRingProgress(containerEl, { label, subLabel });
+    if (!tracker) return { tracker: null };
+    containerEl._stopFake = fakeProgress(tracker, estimatedMs);
+    return { tracker };
+  }
+
+  function endRingProgressUI(containerEl, tracker, { error } = {}) {
+    clearItemsProgressPoll(containerEl);
+    if (error && tracker) {
+      tracker.update(0, String(error));
+      setTimeout(() => hideItemsProgressContainer(containerEl), 2500);
+      return;
+    }
+    if (tracker) {
+      tracker.done();
+      return;
+    }
+    hideItemsProgressContainer(containerEl);
+  }
+
+  function pollItemsTask(taskId, panelPrefix, { label = 'Выполняется…', onDone } = {}) {
+    const container = document.getElementById('progress-' + panelPrefix);
+    if (!container) return;
+
+    clearItemsProgressPoll(container);
+    container.hidden = false;
+    container.classList.add('is-active');
+
+    const tracker = showProgress(container, { label });
+    if (!tracker) return;
+
+    const wrap = container.querySelector('.progress-wrap--v2');
+    if (wrap) {
+      const stopRow = document.createElement('div');
+      stopRow.className = 'progress-stop-row';
+      const stopBtn = document.createElement('button');
+      stopBtn.type = 'button';
+      stopBtn.className = 'btn btn-secondary btn-sm btn-stop';
+      stopBtn.textContent = 'Стоп';
+      stopBtn.addEventListener('click', async () => {
+        try {
+          await api('/tasks/' + taskId + '/cancel', { method: 'POST', body: JSON.stringify({}) });
+          toast('Остановлено');
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      });
+      stopRow.appendChild(stopBtn);
+      wrap.appendChild(stopRow);
+    }
+
+    container._stopFake = fakeProgress(tracker, 8000);
+    if (panelPrefix) setActiveTask(panelPrefix, taskId);
+
+    const finish = () => {
+      clearItemsProgressPoll(container);
+    };
+
+    container._pollInterval = setInterval(async () => {
+      try {
+        const state = await api('/tasks/' + taskId);
+        const [cur, total] = state.progress || [0, 1];
+        const safeTotal = Math.max(Number(total) || 0, 1);
+        const safeCur = Math.max(0, Math.min(Number(cur) || 0, safeTotal));
+        const pct = Math.round((safeCur / safeTotal) * 100);
+        const detail = (state.detail || '').trim();
+        const hasRealProgress = safeTotal > 1 || safeCur > 0 || state.status === 'done';
+
+        if (hasRealProgress && container._stopFake) {
+          container._stopFake();
+          container._stopFake = null;
+        }
+
+        const statusLabel = state.status === 'running'
+          ? (detail || `${label} (${safeCur}/${safeTotal})`)
+          : (detail || label);
+
+        if (hasRealProgress || state.status === 'done') {
+          tracker.update(pct, statusLabel);
+        }
+
+        if (state.status === 'done') {
+          finish();
+          tracker.done();
+          hideItemsProgressContainer(container);
+          if (onDone) onDone(state.result);
+        } else if (state.status === 'error' || state.status === 'cancelled') {
+          finish();
+          const errMsg = state.error || (state.status === 'cancelled' ? 'Остановлено' : 'Ошибка');
+          tracker.error(errMsg);
+          setTimeout(() => hideItemsProgressContainer(container), 2000);
+          if (panelPrefix) {
+            setActiveTask(panelPrefix, '');
+            setPanelOpsBusy(panelPrefix, false);
+          }
+          toast(errMsg, state.status === 'cancelled' ? 'success' : 'error');
+        }
+      } catch (_) { /* keep polling */ }
+    }, 500);
+  }
+
   function setPanelOpsBusy(panelPrefix, busy) {
     const suffix = panelPrefix === 'reviews' ? 'reviews' : 'questions';
     ['load', 'generate', 'send'].forEach((action) => {
@@ -201,6 +469,9 @@
         setButtonBusy(btn, busy, busy ? 'Выполняется…' : '');
       });
     });
+    if (panelPrefix === 'reviews') {
+      setButtonBusy(document.getElementById('btn-apply-template'), busy, busy ? 'Выполняется…' : '');
+    }
   }
 
   function closeAllModals() {
@@ -472,12 +743,14 @@
       }
       if (state.status === 'running') {
         setPanelOpsBusy(panelPrefix, true);
-        pollTask(taskId, 'progress-' + panelPrefix, 'progress-' + panelPrefix + '-fill', 'progress-' + panelPrefix + '-text', () => {
-          setActiveTask(panelPrefix, '');
-          setPanelOpsBusy(panelPrefix, false);
-          if (panelPrefix === 'reviews') loadReviews();
-          else if (panelPrefix === 'questions') loadQuestions();
-        }, panelPrefix);
+        pollItemsTask(taskId, panelPrefix, {
+          label: panelPrefix === 'reviews' ? 'Отзывы…' : 'Вопросы…',
+          onDone: () => {
+            setPanelOpsBusy(panelPrefix, false);
+            if (panelPrefix === 'reviews') loadReviews();
+            else if (panelPrefix === 'questions') loadQuestions();
+          },
+        });
       } else {
         setActiveTask(panelPrefix, '');
       }
@@ -931,8 +1204,8 @@
           <div class="store-card-head">
             <h3>${escapeHtml(s.name)} ${mpPillHtml(s.marketplace)}</h3>
           </div>
-          <div class="meta">ID ${s.id}${s.api_key_set ? ' · ключ задан' : ''}${s.active ? '' : ' · неактивен'}</div>
-          <div class="actions">
+          <div class="store-card-meta">ID ${s.id}${s.api_key_set ? ' · ключ задан' : ''}${s.active ? '' : ' · неактивен'}</div>
+          <div class="store-card-actions">
             <button type="button" class="btn btn-secondary btn-sm btn-edit-store" data-id="${s.id}">Изменить</button>
             <button type="button" class="btn btn-danger btn-sm btn-delete-store" data-id="${s.id}">Удалить</button>
           </div>
@@ -1153,19 +1426,67 @@
   }
 
   function renderAutoStoreList(selectedIds) {
-    const wrap = document.getElementById('auto-store-list');
+    renderAutoMpStoreList('auto-store-list', null, selectedIds);
+  }
+
+  function renderAutoMpStoreList(containerId, marketplace, selectedIds) {
+    const wrap = document.getElementById(containerId);
     if (!wrap) return;
     const sel = new Set((selectedIds || []).map(x => Number(x)));
-    if (!stores.length) {
+    const list = marketplace
+      ? stores.filter(s => String(s.marketplace || '').toLowerCase() === marketplace)
+      : stores;
+    if (!list.length) {
       wrap.innerHTML = '<div class="form-hint">Нет магазинов</div>';
       return;
     }
-    wrap.innerHTML = stores.map(s => `
+    wrap.innerHTML = list.map(s => `
       <label class="auto-store-item">
         <input type="checkbox" value="${s.id}" ${sel.has(Number(s.id)) ? 'checked' : ''}>
         <span class="auto-store-label">${escapeHtml(s.name)} ${mpPillHtml(s.marketplace)}</span>
       </label>
     `).join('');
+  }
+
+  function getAutoMpStoreIds(containerId) {
+    const wrap = document.getElementById(containerId);
+    if (!wrap) return [];
+    return Array.from(wrap.querySelectorAll('input[type="checkbox"]:checked')).map(x => Number(x.value));
+  }
+
+  function renderAutoTaskStoreLists(autoCfg) {
+    renderAutoMpStoreList('auto-wb-store-list', 'wb', autoCfg?.wb_store_ids || []);
+    renderAutoMpStoreList('auto-yam-store-list', 'yam', autoCfg?.yam_store_ids || []);
+    renderAutoMpStoreList('auto-ozon-store-list', 'ozon', autoCfg?.ozon_store_ids || []);
+    renderAutoMpStoreList('auto-ozon-actions-store-list', 'ozon', autoCfg?.ozon_actions_store_ids || []);
+    renderOzonActionsAutoStoreList(autoCfg?.ozon_actions_store_ids || []);
+  }
+
+  function renderOzonActionsAutoStoreList(selectedIds) {
+    renderAutoMpStoreList('ozon-actions-auto-store-list', 'ozon', selectedIds);
+  }
+
+  function getOzonActionsAutoStoreIds() {
+    return getAutoMpStoreIds('ozon-actions-auto-store-list');
+  }
+
+  async function saveOzonActionsAutoStores({ silent = false } = {}) {
+    const autoCfg = await api('/auto-schedule');
+    const ozon_actions_store_ids = getOzonActionsAutoStoreIds();
+    const store_ids = [...new Set([
+      ...(autoCfg.store_ids || []),
+      ...ozon_actions_store_ids,
+    ])];
+    await api('/auto-schedule', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...autoCfg,
+        store_ids,
+        ozon_actions_store_ids,
+      }),
+    });
+    renderAutoMpStoreList('auto-ozon-actions-store-list', 'ozon', ozon_actions_store_ids);
+    if (!silent) toast('Магазины для автозапуска акций сохранены');
   }
 
   function getAutoSelectedStoreIds() {
@@ -1175,26 +1496,75 @@
   }
 
   let _autoStatusTimer = null;
+
+  const AUTO_PHASE_LABELS = {
+    idle: 'ожидание',
+    load_new: 'загрузка новых',
+    generate: 'генерация',
+    send: 'отправка',
+    wb_chats: 'чаты WB',
+    ozon_chats: 'чаты Ozon',
+    ozon_alerts: 'уведомления Ozon',
+    wb_alerts: 'уведомления WB',
+    ozon_actions: 'акции Ozon',
+    idle_items: 'без отзывов/вопросов',
+    done: 'завершено',
+    cancelled: 'остановлено',
+    error: 'ошибка',
+  };
+
+  function autoRunProgressPercent(s) {
+    if (!s || !s.running) return 100;
+    let pct = 8;
+    const total = Number(s.store_count) || 0;
+    const idx = Number(s.store_index) || 0;
+    if (total > 0 && idx > 0) {
+      pct = Math.min(92, Math.round((idx / total) * 85) + 8);
+    }
+    return pct;
+  }
+
+  function autoRunProgressSubLabel(s) {
+    if (!s) return '';
+    const phase = AUTO_PHASE_LABELS[s.phase] || s.phase || '—';
+    const storeProg = (s.running && s.store_count)
+      ? ` · магазин ${s.store_index || '?'}/${s.store_count}`
+      : '';
+    return `${phase}${storeProg}`;
+  }
+
+  async function watchAutoRunProgress(containerEl, tracker) {
+    const deadline = Date.now() + 600000;
+    let sawRunning = false;
+    let lastStatus = null;
+    while (Date.now() < deadline) {
+      const s = await api('/auto-schedule/status');
+      lastStatus = s;
+      if (s.running) {
+        sawRunning = true;
+        if (containerEl && containerEl._stopFake) {
+          containerEl._stopFake();
+          containerEl._stopFake = null;
+        }
+        if (tracker) tracker.update(autoRunProgressPercent(s), autoRunProgressSubLabel(s));
+      } else if (sawRunning) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    const err = lastStatus && lastStatus.phase === 'error' && lastStatus.last_error
+      ? lastStatus.last_error
+      : null;
+    endRingProgressUI(containerEl, tracker, err ? { error: err } : {});
+    await refreshAutoStatus();
+  }
+
   async function refreshAutoStatus() {
     const el = document.getElementById('auto-status-text');
     if (!el) return;
     try {
       const s = await api('/auto-schedule/status');
-      const phaseMap = {
-        idle: 'ожидание',
-        load_new: 'загрузка новых',
-        generate: 'генерация',
-        send: 'отправка',
-        wb_chats: 'чаты WB',
-        ozon_chats: 'чаты Ozon',
-        ozon_alerts: 'уведомления Ozon',
-        ozon_actions: 'акции Ozon',
-        idle_items: 'без отзывов/вопросов',
-        done: 'завершено',
-        cancelled: 'остановлено',
-        error: 'ошибка',
-      };
-      const phase = phaseMap[s.phase] || (s.phase || '—');
+      const phase = AUTO_PHASE_LABELS[s.phase] || (s.phase || '—');
       const run = s.running ? 'Выполняется' : 'Не выполняется';
       const slot = s.slot ? `слот ${s.slot}` : '—';
       const storeProg = (s.running && s.store_count)
@@ -1410,7 +1780,7 @@
     } catch (err) {
       if (!requestSid && !getWbChatsStoreId()) {
         setChatStatusBar('wb-chats-status-bar', 'error', err.message || 'Не удалось загрузить магазины');
-        setPanelLoading('wb-chats-loading', false);
+        hideItemsProgressContainer(document.getElementById('wb-chats-loading'));
         return;
       }
     }
@@ -1421,7 +1791,7 @@
         wrap.innerHTML = '<div class="form-hint">Нет магазина WB. Добавьте магазин Wildberries во вкладке «Магазины» и укажите ключ с правом «Чат с покупателями».</div>';
       }
       setChatStatusBar('wb-chats-status-bar', 'error', 'Выберите или добавьте магазин WB в «Магазины».');
-      setPanelLoading('wb-chats-loading', false);
+      hideItemsProgressContainer(document.getElementById('wb-chats-loading'));
       return;
     }
     const gen = ++wbChatsListFetchGen;
@@ -1433,11 +1803,13 @@
     if (wrap) wrap.innerHTML = '<div class="form-hint">Загрузка списка…</div>';
     const loadMsg = `Загружаю чаты WB «${storeLabel}»… Первый запрос может занять 30–90 секунд (лимиты WB).`;
     setChatStatusBar('wb-chats-status-bar', 'loading', loadMsg);
-    setPanelLoading('wb-chats-loading', true, loadMsg);
+    const progressEl = document.getElementById('wb-chats-loading');
+    const { tracker: progressTracker } = startLinearProgress(progressEl, loadMsg, 90000);
     setChatToolbarBusy('wb-chats', true);
+    let progressError = null;
     const safetyClear = setTimeout(() => {
       if (gen !== wbChatsListFetchGen) return;
-      setPanelLoading('wb-chats-loading', false);
+      endLinearProgress(progressEl, progressTracker);
       setChatToolbarBusy('wb-chats', false);
     }, 95000);
     try {
@@ -1490,20 +1862,21 @@
       }
     } catch (err) {
       if (gen !== wbChatsListFetchGen) return;
+      progressError = err.message || 'Ошибка загрузки чатов WB';
       wbChatsRaw = [];
       wbChatsListStoreId = null;
       wbChatSelectedId = null;
       wbChatReplySign = '';
       const wrapErr = document.getElementById('wb-chats-list');
       if (wrapErr) {
-        wrapErr.innerHTML = `<div class="form-hint" style="color:#b91c1c;">${escapeHtml(err.message || 'Ошибка загрузки')}</div>`;
+        wrapErr.innerHTML = `<div class="form-hint" style="color:#b91c1c;">${escapeHtml(progressError)}</div>`;
       }
-      setChatStatusBar('wb-chats-status-bar', 'error', err.message || 'Ошибка загрузки чатов WB');
-      toast(err.message, 'error');
+      setChatStatusBar('wb-chats-status-bar', 'error', progressError);
+      toast(progressError, 'error');
     } finally {
       clearTimeout(safetyClear);
       if (gen === wbChatsListFetchGen) {
-        setPanelLoading('wb-chats-loading', false);
+        endLinearProgress(progressEl, progressTracker, progressError ? { error: progressError } : {});
         setChatToolbarBusy('wb-chats', false);
       }
     }
@@ -1518,8 +1891,14 @@
       ? `Загружаю глубокую историю (${pages} стр. ленты WB)… до 5 минут`
       : 'Загружаю переписку… до 2 минут при холодном сервере';
     setChatStatusBar('wb-chats-status-bar', 'loading', loadHint);
-    setPanelLoading('wb-chats-loading', true, loadHint);
+    const progressEl = document.getElementById('wb-chats-loading');
+    const { tracker: progressTracker } = startLinearProgress(
+      progressEl,
+      loadHint,
+      pages > 15 ? 300000 : 120000,
+    );
     setChatToolbarBusy('wb-chats', true);
+    let progressError = null;
     try {
       const path = `/wb/buyer-chats/${sid}/${encodeURIComponent(chatId)}/thread?pages=${pages}`;
       const t = await api(path, { timeoutMs: 300000 });
@@ -1535,12 +1914,13 @@
     } catch (err) {
       if (gen !== wbChatThreadFetchGen) return;
       if (String(wbChatSelectedId || '') !== String(chatId)) return;
-      toast(err.message, 'error');
-      setChatStatusBar('wb-chats-status-bar', 'error', err.message || 'Ошибка загрузки переписки');
+      progressError = err.message || 'Ошибка загрузки переписки';
+      toast(progressError, 'error');
+      setChatStatusBar('wb-chats-status-bar', 'error', progressError);
       const threadEl = document.getElementById('wb-chats-thread');
       if (threadEl) {
         const extra = 'Можно нажать «Сгенерировать» — контекст подтянется из списка чатов. Reply-sign уже из списка WB.';
-        threadEl.innerHTML = `<div class="form-hint" style="color:#b91c1c;">${escapeHtml(err.message)}</div><div class="form-hint" style="margin-top:8px;">${escapeHtml(extra)}</div>`;
+        threadEl.innerHTML = `<div class="form-hint" style="color:#b91c1c;">${escapeHtml(progressError)}</div><div class="form-hint" style="margin-top:8px;">${escapeHtml(extra)}</div>`;
       }
       const body = document.getElementById('wb-chats-detail-body');
       if (body) body.style.display = '';
@@ -1548,7 +1928,7 @@
       if (hint) hint.style.display = 'none';
     } finally {
       if (gen === wbChatThreadFetchGen) {
-        setPanelLoading('wb-chats-loading', false);
+        endLinearProgress(progressEl, progressTracker, progressError ? { error: progressError } : {});
         setChatToolbarBusy('wb-chats', false);
       }
     }
@@ -1631,11 +2011,19 @@
     if (!confirm(msg)) return;
     const btn = document.getElementById('btn-wb-chats-mass');
     if (btn) btn.disabled = true;
+    const progressEl = document.getElementById('wb-chats-loading');
+    let progressTracker = null;
+    let progressError = null;
+    setChatStatusBar('wb-chats-status-bar', 'loading', 'Массовый автоответ…');
+    setChatToolbarBusy('wb-chats', true);
+    ({ tracker: progressTracker } = startLinearProgress(progressEl, 'Массовый автоответ: ИИ и отправка…', 120000));
+    let massResult = null;
     try {
-      const r = await api(`/wb/buyer-chats/${sid}/mass-generate-send`, {
+      massResult = await api(`/wb/buyer-chats/${sid}/mass-generate-send`, {
         method: 'POST',
         body: JSON.stringify({ max_chats: 50, event_pages: 6 }),
       });
+      const r = massResult;
       const sent = r.wb_chat_sent ?? 0;
       const genF = r.wb_chat_gen_failed ?? 0;
       const sendF = r.wb_chat_send_failed ?? 0;
@@ -1650,11 +2038,16 @@
         `Отправлено: ${sent}. В партии: ${cand} из ${elig}. Уже отвечено: ${dup}, раньше даты: ${cutoff}, `
         + `старше лимита: ${tooOld}, не от покупателя: ${ncl}. Ошибки ИИ: ${genF}, отправки: ${sendF}, без reply_sign: ${skip}.`,
       );
-      await refreshWbChatsList(true);
     } catch (err) {
-      toast(err.message, 'error');
+      progressError = err.message || 'Ошибка массового автоответа';
+      toast(progressError, 'error');
     } finally {
+      endLinearProgress(progressEl, progressTracker, progressError ? { error: progressError } : {});
+      setChatToolbarBusy('wb-chats', false);
       if (btn) btn.disabled = false;
+    }
+    if (!progressError && massResult) {
+      void refreshWbChatsList(true);
     }
   }
 
@@ -1723,7 +2116,6 @@
       b1.addEventListener('click', () => {
         retryStoresLoad();
         setChatStatusBar('wb-chats-status-bar', 'loading', 'Запрос к WB… подождите, первый ответ может занять до 1–2 минут.');
-        setPanelLoading('wb-chats-loading', true, 'Запрос к WB…');
         void refreshWbChatsList(true);
       });
     }
@@ -1849,7 +2241,7 @@
     } catch (err) {
       if (!getOzonChatsStoreId()) {
         setChatStatusBar('ozon-chats-status-bar', 'error', err.message || 'Не удалось загрузить магазины');
-        setPanelLoading('ozon-chats-loading', false);
+        hideItemsProgressContainer(document.getElementById('ozon-chats-loading'));
         return;
       }
     }
@@ -1860,7 +2252,7 @@
         ? 'Выберите магазин Ozon в списке выше.'
         : 'Нет магазинов Ozon. Добавьте во вкладке «Магазины»: тип Ozon, Client-Id и Api-Key.';
       setChatStatusBar('ozon-chats-status-bar', 'error', msg);
-      setPanelLoading('ozon-chats-loading', false);
+      hideItemsProgressContainer(document.getElementById('ozon-chats-loading'));
       const wrap = document.getElementById('ozon-chats-list');
       if (wrap) wrap.innerHTML = `<div class="form-hint">${escapeHtml(msg)}</div>`;
       return;
@@ -1875,8 +2267,10 @@
     if (wrap) wrap.innerHTML = '<div class="form-hint">Загрузка списка…</div>';
     const loadMsg = `Загружаю чаты Ozon «${storeLabel}»… (1 запрос/с, может занять до минуты)`;
     setChatStatusBar('ozon-chats-status-bar', 'loading', loadMsg);
-    setPanelLoading('ozon-chats-loading', true, loadMsg);
+    const progressEl = document.getElementById('ozon-chats-loading');
+    const { tracker: progressTracker } = startLinearProgress(progressEl, loadMsg, 120000);
     setChatToolbarBusy('ozon-chats', true);
+    let progressError = null;
     try {
       const data = await api(`/ozon/buyer-chats/${sid}${q}`, { timeoutMs: 120000 });
       if (gen !== ozonChatsListFetchGen) return;
@@ -1905,14 +2299,15 @@
       if (body) body.style.display = 'none';
     } catch (err) {
       if (gen !== ozonChatsListFetchGen) return;
+      progressError = err.message || 'Ошибка загрузки чатов Ozon';
       ozonChatsRaw = [];
       ozonChatsListStoreId = null;
       renderOzonChatsList();
-      setChatStatusBar('ozon-chats-status-bar', 'error', err.message || 'Ошибка загрузки чатов Ozon');
-      toast(err.message, 'error');
+      setChatStatusBar('ozon-chats-status-bar', 'error', progressError);
+      toast(progressError, 'error');
     } finally {
       if (gen === ozonChatsListFetchGen) {
-        setPanelLoading('ozon-chats-loading', false);
+        endLinearProgress(progressEl, progressTracker, progressError ? { error: progressError } : {});
         setChatToolbarBusy('ozon-chats', false);
       }
     }
@@ -1922,8 +2317,11 @@
     const sid = getOzonChatsStoreId();
     if (!sid || !chatId) return;
     const gen = ++ozonChatThreadFetchGen;
-    setPanelLoading('ozon-chats-loading', true, 'Загружаю переписку…');
+    const loadHint = 'Загружаю переписку…';
+    const progressEl = document.getElementById('ozon-chats-loading');
+    const { tracker: progressTracker } = startLinearProgress(progressEl, loadHint, 60000);
     setChatToolbarBusy('ozon-chats', true);
+    let progressError = null;
     try {
       const t = await api(`/ozon/buyer-chats/${sid}/${encodeURIComponent(chatId)}/thread`);
       if (gen !== ozonChatThreadFetchGen) return;
@@ -1978,10 +2376,11 @@
       }
     } catch (err) {
       if (gen !== ozonChatThreadFetchGen) return;
-      toast(err.message, 'error');
+      progressError = err.message || 'Ошибка загрузки переписки';
+      toast(progressError, 'error');
     } finally {
       if (gen === ozonChatThreadFetchGen) {
-        setPanelLoading('ozon-chats-loading', false);
+        endLinearProgress(progressEl, progressTracker, progressError ? { error: progressError } : {});
         setChatToolbarBusy('ozon-chats', false);
       }
     }
@@ -2055,11 +2454,19 @@
     if (!confirm('Обработаются чаты, где последнее сообщение от покупателя (с учётом даты и без повторов). Продолжить?')) return;
     const btn = document.getElementById('btn-ozon-chats-mass');
     if (btn) btn.disabled = true;
+    const progressEl = document.getElementById('ozon-chats-loading');
+    let progressTracker = null;
+    let progressError = null;
+    setChatStatusBar('ozon-chats-status-bar', 'loading', 'Массовый автоответ…');
+    setChatToolbarBusy('ozon-chats', true);
+    ({ tracker: progressTracker } = startLinearProgress(progressEl, 'Массовый автоответ: ИИ и отправка…', 120000));
+    let massResult = null;
     try {
-      const r = await api(`/ozon/buyer-chats/${sid}/mass-generate-send`, {
+      massResult = await api(`/ozon/buyer-chats/${sid}/mass-generate-send`, {
         method: 'POST',
         body: JSON.stringify({ max_chats: 50 }),
       });
+      const r = massResult;
       if (r.ozon_chat_skipped_no_access) {
         toast(r.ozon_chat_skip_reason === 'no_premium'
           ? 'У этого магазина нет Premium — чаты пропущены.'
@@ -2069,11 +2476,16 @@
       toast(
         `Ozon: отправлено ${r.ozon_chat_sent ?? 0}, уже отвечено ${r.ozon_chat_skipped_already_replied ?? 0}, раньше даты ${r.ozon_chat_skipped_before_cutoff ?? 0}, окно закрыто ${r.ozon_chat_skipped_reply_window ?? 0}, поддержка ${r.ozon_chat_skipped_support ?? 0}.`,
       );
-      await refreshOzonChatsList(true);
     } catch (err) {
-      toast(err.message, 'error');
+      progressError = err.message || 'Ошибка массового автоответа';
+      toast(progressError, 'error');
     } finally {
+      endLinearProgress(progressEl, progressTracker, progressError ? { error: progressError } : {});
+      setChatToolbarBusy('ozon-chats', false);
       if (btn) btn.disabled = false;
+    }
+    if (!progressError && massResult && !massResult.ozon_chat_skipped_no_access) {
+      void refreshOzonChatsList(true);
     }
   }
 
@@ -2134,7 +2546,6 @@
     document.getElementById('btn-ozon-chats-refresh')?.addEventListener('click', () => {
       retryStoresLoad();
       setChatStatusBar('ozon-chats-status-bar', 'loading', 'Запрос к Ozon…');
-      setPanelLoading('ozon-chats-loading', true, 'Запрос к Ozon…');
       void refreshOzonChatsList(true);
     });
     document.getElementById('btn-ozon-chats-mass')?.addEventListener('click', () => { void ozonChatsMassGenerateSend(); });
@@ -2309,23 +2720,30 @@
     if (!confirm(`Синхронизировать акции по порогу ${threshold}%?`)) return;
     await saveOzonActionsSettings();
     const btn = document.getElementById('btn-ozon-actions-sync-discount');
+    const progressEl = document.getElementById('ozon-actions-loading');
     if (btn) btn.disabled = true;
-    setPanelLoading('ozon-actions-loading', true, 'Синхронизация акций…');
+    let progressTracker = null;
+    let progressError = null;
+    let syncResult = null;
+    ({ tracker: progressTracker } = startLinearProgress(progressEl, 'Синхронизация акций…', 180000));
     try {
-      const r = await api(`/ozon/actions/${sid}/sync-discount`, {
+      syncResult = await api(`/ozon/actions/${sid}/sync-discount`, {
         method: 'POST',
         body: JSON.stringify({}),
         timeoutMs: 600000,
       });
-      const fmt = formatOzonActionsResult(r);
+      const fmt = formatOzonActionsResult(syncResult);
       toast(fmt.toast);
       setOzonActionsStatus(fmt.status);
-      await loadOzonActionsList(true);
     } catch (err) {
-      toast(err.message, 'error');
+      progressError = err.message || 'Ошибка синхронизации';
+      toast(progressError, 'error');
     } finally {
+      endLinearProgress(progressEl, progressTracker, progressError ? { error: progressError } : {});
       if (btn) btn.disabled = false;
-      setPanelLoading('ozon-actions-loading', false);
+    }
+    if (!progressError && syncResult) {
+      void loadOzonActionsList(true);
     }
   }
 
@@ -2337,8 +2755,14 @@
       renderOzonActionsTable();
       return;
     }
-    setPanelLoading('ozon-actions-loading', true, 'Запрос к Ozon…');
+    const progressEl = document.getElementById('ozon-actions-loading');
+    const loadBtn = document.getElementById('btn-ozon-actions-load');
+    let progressTracker = null;
+    let progressError = null;
+    const loadLabel = refresh ? 'Обновление списка акций…' : 'Запрос к Ozon…';
     setOzonActionsStatus('Загрузка списка акций…');
+    if (loadBtn) loadBtn.disabled = true;
+    ({ tracker: progressTracker } = startLinearProgress(progressEl, loadLabel, refresh ? 120000 : 60000));
     try {
       const r = await api(`/ozon/actions/${sid}`, refresh ? { timeoutMs: 120000 } : {});
       if (r.unavailable) {
@@ -2353,12 +2777,14 @@
       const partCnt = ozonActionsRaw.filter(a => (a.participating_products_count || 0) > 0).length;
       setOzonActionsStatus(`Загружено акций: ${ozonActionsRaw.length}. Автоакций: ${autoCnt}. С вашими товарами: ${partCnt}.`);
     } catch (err) {
+      progressError = err.message || 'Ошибка загрузки акций';
       ozonActionsRaw = [];
       renderOzonActionsTable();
-      setOzonActionsStatus(err.message || 'Ошибка загрузки акций');
-      toast(err.message, 'error');
+      setOzonActionsStatus(progressError);
+      toast(progressError, 'error');
     } finally {
-      setPanelLoading('ozon-actions-loading', false);
+      endLinearProgress(progressEl, progressTracker, progressError ? { error: progressError } : {});
+      if (loadBtn) loadBtn.disabled = false;
     }
   }
 
@@ -2375,22 +2801,29 @@
     }
     if (!confirm(`Удалить ваши товары из ${action_ids.length} акций? Это необратимо до повторного добавления вручную.`)) return;
     const btn = document.getElementById('btn-ozon-actions-remove-selected');
+    const progressEl = document.getElementById('ozon-actions-loading');
     if (btn) btn.disabled = true;
-    setPanelLoading('ozon-actions-loading', true, 'Удаление из акций…');
+    let progressTracker = null;
+    let progressError = null;
+    let removeResult = null;
+    ({ tracker: progressTracker } = startLinearProgress(progressEl, 'Удаление из акций…', 120000));
     try {
-      const r = await api(`/ozon/actions/${sid}/remove`, {
+      removeResult = await api(`/ozon/actions/${sid}/remove`, {
         method: 'POST',
         body: JSON.stringify({ action_ids, only_auto_add: false }),
         timeoutMs: 300000,
       });
-      toast(`Удалено товаров: ${r.products_removed ?? 0}, акций: ${r.actions_processed ?? 0}, отклонено: ${r.products_rejected ?? 0}`);
-      setOzonActionsStatus(`Готово: удалено ${r.products_removed ?? 0} позиций из ${r.actions_processed ?? 0} акций.`);
-      await loadOzonActionsList(true);
+      toast(`Удалено товаров: ${removeResult.products_removed ?? 0}, акций: ${removeResult.actions_processed ?? 0}, отклонено: ${removeResult.products_rejected ?? 0}`);
+      setOzonActionsStatus(`Готово: удалено ${removeResult.products_removed ?? 0} позиций из ${removeResult.actions_processed ?? 0} акций.`);
     } catch (err) {
-      toast(err.message, 'error');
+      progressError = err.message || 'Ошибка удаления';
+      toast(progressError, 'error');
     } finally {
+      endLinearProgress(progressEl, progressTracker, progressError ? { error: progressError } : {});
       if (btn) btn.disabled = false;
-      setPanelLoading('ozon-actions-loading', false);
+    }
+    if (!progressError && removeResult) {
+      void loadOzonActionsList(true);
     }
   }
 
@@ -2405,23 +2838,30 @@
     if (!confirm(`Запустить legacy-автоудаление (${hint})?`)) return;
     await saveOzonActionsSettings();
     const btn = document.getElementById('btn-ozon-actions-auto-remove');
+    const progressEl = document.getElementById('ozon-actions-loading');
     if (btn) btn.disabled = true;
-    setPanelLoading('ozon-actions-loading', true, 'Автоудаление…');
+    let progressTracker = null;
+    let progressError = null;
+    let removeResult = null;
+    ({ tracker: progressTracker } = startLinearProgress(progressEl, 'Автоудаление…', 180000));
     try {
-      const r = await api(`/ozon/actions/${sid}/auto-remove`, {
+      removeResult = await api(`/ozon/actions/${sid}/auto-remove`, {
         method: 'POST',
         body: JSON.stringify({}),
         timeoutMs: 600000,
       });
-      const fmt = formatOzonActionsResult(r);
+      const fmt = formatOzonActionsResult(removeResult);
       toast(fmt.toast);
       setOzonActionsStatus(fmt.status);
-      await loadOzonActionsList(true);
     } catch (err) {
-      toast(err.message, 'error');
+      progressError = err.message || 'Ошибка автоудаления';
+      toast(progressError, 'error');
     } finally {
+      endLinearProgress(progressEl, progressTracker, progressError ? { error: progressError } : {});
       if (btn) btn.disabled = false;
-      setPanelLoading('ozon-actions-loading', false);
+    }
+    if (!progressError && removeResult) {
+      void loadOzonActionsList(true);
     }
   }
 
@@ -2434,6 +2874,10 @@
     }
     fillStoreSelects();
     await loadOzonActionsSettings();
+    try {
+      const autoCfg = await api('/auto-schedule');
+      renderOzonActionsAutoStoreList(autoCfg.ozon_actions_store_ids || []);
+    } catch (_) {}
     if (ozonActionsRaw.length) {
       renderOzonActionsTable();
       return;
@@ -2456,6 +2900,7 @@
     document.getElementById('btn-ozon-actions-sync-discount')?.addEventListener('click', () => { void ozonActionsSyncDiscountNow(); });
     document.getElementById('btn-ozon-actions-auto-remove')?.addEventListener('click', () => { void ozonActionsAutoRemoveNow(); });
     document.getElementById('btn-ozon-actions-save-settings')?.addEventListener('click', () => { void saveOzonActionsSettings(); });
+    document.getElementById('btn-ozon-actions-save-auto-stores')?.addEventListener('click', () => { void saveOzonActionsAutoStores(); });
     document.getElementById('ozon-actions-sync-mode')?.addEventListener('change', updateOzonActionsModeUi);
     document.getElementById('ozon-actions-check-all')?.addEventListener('change', (e) => {
       const checked = !!e.target.checked;
@@ -6465,11 +6910,15 @@
   }
 
   function pollTask(taskId, progressWrapId, fillId, textId, onDone, panelPrefix = '') {
+    if (panelPrefix === 'reviews' || panelPrefix === 'questions') {
+      pollItemsTask(taskId, panelPrefix, { label: 'Выполняется…', onDone });
+      return;
+    }
     const wrap = document.getElementById(progressWrapId);
     const fill = document.getElementById(fillId);
     const textEl = document.getElementById(textId);
+    if (!wrap || !fill || !textEl) return;
     const stopBtn = wrap.querySelector('.btn-stop');
-    // Не даём нескольким таймерам "драться" за один прогресс-бар
     if (wrap._interval) {
       clearInterval(wrap._interval);
       wrap._interval = null;
@@ -6676,27 +7125,43 @@
       return;
     }
     setPanelOpsBusy(panelPrefix, true);
+    const progressEl = document.getElementById('progress-' + panelPrefix);
+    let preTracker = null;
+    let preFake = null;
     try {
+      if (progressEl) {
+        progressEl.hidden = false;
+        progressEl.classList.add('is-active');
+        preTracker = showProgress(progressEl, { label: 'Запуск загрузки…' });
+        preFake = fakeProgress(preTracker, 5000);
+      }
       const res = await api('/load-new', { method: 'POST', body: JSON.stringify({ store_ids: [sid] }) });
+      if (preFake) preFake();
       const storeMeta = stores.find(s => Number(s.id) === sid);
-      pollTask(res.task_id, 'progress-' + panelPrefix, 'progress-' + panelPrefix + '-fill', 'progress-' + panelPrefix + '-text', (result) => {
-        setPanelOpsBusy(panelPrefix, false);
-        const n = Number(result ?? 0);
-        if (n > 0) {
-          toast(`Загружено записей: ${n}`);
-        } else if (String(storeMeta?.marketplace || '').toLowerCase() === 'ozon') {
-          toast(
-            'Загружено 0. Отзывы: подписка «Управление отзывами» или Premium Pro + Review read only. '
-            + 'Вопросы: Premium Plus + question/list. API-ключ должен быть от выбранного магазина.',
-            'info',
-          );
-        } else {
-          toast('Загружено записей: 0');
-        }
-        loadReviews();
-        loadQuestions();
-      }, panelPrefix);
+      pollItemsTask(res.task_id, panelPrefix, {
+        label: 'Загрузка новых…',
+        onDone: (result) => {
+          setPanelOpsBusy(panelPrefix, false);
+          const n = Number(result ?? 0);
+          if (n > 0) {
+            toast(`Загружено записей: ${n}`);
+          } else if (String(storeMeta?.marketplace || '').toLowerCase() === 'ozon') {
+            toast(
+              'Загружено 0. Отзывы: подписка «Управление отзывами» или Premium Pro + Review read only. '
+              + 'Вопросы: Premium Plus + question/list. API-ключ должен быть от выбранного магазина.',
+              'info',
+            );
+          } else {
+            toast('Загружено записей: 0');
+          }
+          loadReviews();
+          loadQuestions();
+        },
+      });
     } catch (err) {
+      if (preFake) preFake();
+      if (preTracker) preTracker.error(err.message);
+      setTimeout(() => hideItemsProgressContainer(progressEl), 2000);
       setPanelOpsBusy(panelPrefix, false);
       toast(err.message, 'error');
     }
@@ -6724,16 +7189,32 @@
       if (!confirm(`Перегенерировать и перезаписать ответы для ${filtered.willOverwrite} шт.?`)) return;
     }
     setPanelOpsBusy(panelPrefix, true);
+    const progressEl = document.getElementById('progress-' + panelPrefix);
+    let preTracker = null;
+    let preFake = null;
     try {
+      if (progressEl) {
+        progressEl.hidden = false;
+        progressEl.classList.add('is-active');
+        preTracker = showProgress(progressEl, { label: 'Запуск генерации…' });
+        preFake = fakeProgress(preTracker, 4000);
+      }
       const res = await api('/generate', { method: 'POST', body: JSON.stringify({ item_ids: filtered.ids }) });
-      pollTask(res.task_id, 'progress-' + panelPrefix, 'progress-' + panelPrefix + '-fill', 'progress-' + panelPrefix + '-text', (result) => {
-        setPanelOpsBusy(panelPrefix, false);
-        const r = result || {};
-        toast('Сгенерировано: ' + (r.ok ?? 0) + ', ошибок: ' + (r.failed ?? 0));
-        if (panelPrefix === 'reviews') loadReviews();
-        else loadQuestions();
-      }, panelPrefix);
+      if (preFake) preFake();
+      pollItemsTask(res.task_id, panelPrefix, {
+        label: 'Генерация ответов…',
+        onDone: (result) => {
+          setPanelOpsBusy(panelPrefix, false);
+          const r = result || {};
+          toast('Сгенерировано: ' + (r.ok ?? 0) + ', ошибок: ' + (r.failed ?? 0));
+          if (panelPrefix === 'reviews') loadReviews();
+          else loadQuestions();
+        },
+      });
     } catch (err) {
+      if (preFake) preFake();
+      if (preTracker) preTracker.error(err.message);
+      setTimeout(() => hideItemsProgressContainer(progressEl), 2000);
       setPanelOpsBusy(panelPrefix, false);
       toast(err.message, 'error');
     }
@@ -6775,12 +7256,30 @@
       toast('Нет подходящих отзывов (статус Новый и без ответа)', 'error');
       return;
     }
+    const progressEl = document.getElementById('progress-reviews');
+    let tracker = null;
+    let stopFake = null;
+    setPanelOpsBusy('reviews', true);
     try {
+      if (progressEl) {
+        progressEl.hidden = false;
+        progressEl.classList.add('is-active');
+        tracker = showProgress(progressEl, { label: 'Применение шаблона…' });
+        stopFake = fakeProgress(tracker, 3000);
+      }
       const res = await api('/apply-template', { method: 'POST', body: JSON.stringify({ item_ids: filtered, template_text: template }) });
+      if (stopFake) stopFake();
+      if (tracker) tracker.done();
+      hideItemsProgressContainer(progressEl);
       toast('Шаблон применён: ' + (res.applied ?? 0) + ', пропущено: ' + (res.skipped ?? 0));
       loadReviews();
     } catch (err) {
+      if (stopFake) stopFake();
+      if (tracker) tracker.error(err.message);
+      setTimeout(() => hideItemsProgressContainer(progressEl), 2000);
       toast(err.message, 'error');
+    } finally {
+      setPanelOpsBusy('reviews', false);
     }
   }
 
@@ -6815,17 +7314,33 @@
       `<p>Всего к отправке: <strong>${sendIds.length}</strong></p>${summary}`,
       async () => {
         setPanelOpsBusy(panelPrefix, true);
+        const progressEl = document.getElementById('progress-' + panelPrefix);
+        let preTracker = null;
+        let preFake = null;
         try {
+          if (progressEl) {
+            progressEl.hidden = false;
+            progressEl.classList.add('is-active');
+            preTracker = showProgress(progressEl, { label: 'Запуск отправки…' });
+            preFake = fakeProgress(preTracker, 4000);
+          }
           const res = await api('/send', { method: 'POST', body: JSON.stringify({ item_ids: sendIds }) });
-          pollTask(res.task_id, 'progress-' + panelPrefix, 'progress-' + panelPrefix + '-fill', 'progress-' + panelPrefix + '-text', (result) => {
-            setPanelOpsBusy(panelPrefix, false);
-            const r = result || {};
-            toast('Отправлено: ' + (r.sent_ok ?? 0) + ', пропущено: ' + (r.skipped ?? 0) + ', ошибок: ' + (r.failed ?? 0));
-            if (panelPrefix === 'reviews') loadReviews();
-            else loadQuestions();
-            loadStats();
-          }, panelPrefix);
+          if (preFake) preFake();
+          pollItemsTask(res.task_id, panelPrefix, {
+            label: 'Отправка…',
+            onDone: (result) => {
+              setPanelOpsBusy(panelPrefix, false);
+              const r = result || {};
+              toast('Отправлено: ' + (r.sent_ok ?? 0) + ', пропущено: ' + (r.skipped ?? 0) + ', ошибок: ' + (r.failed ?? 0));
+              if (panelPrefix === 'reviews') loadReviews();
+              else loadQuestions();
+              loadStats();
+            },
+          });
         } catch (err) {
+          if (preFake) preFake();
+          if (preTracker) preTracker.error(err.message);
+          setTimeout(() => hideItemsProgressContainer(progressEl), 2000);
           setPanelOpsBusy(panelPrefix, false);
           toast(err.message, 'error');
         }
@@ -7066,6 +7581,7 @@
       if (autoRunOzonActions) autoRunOzonActions.checked = !!autoCfg.run_ozon_actions_remove;
       syncAutoScheduleModeUi();
       renderAutoStoreList(autoCfg.store_ids || []);
+      renderAutoTaskStoreLists(autoCfg);
       await refreshAutoStatus();
     } catch (err) {
       toast(err.message, 'error');
@@ -7131,7 +7647,18 @@
       const run_ozon_alerts = !!document.getElementById('auto-run-ozon-alerts')?.checked;
       const run_wb_alerts = !!document.getElementById('auto-run-wb-alerts')?.checked;
       const run_ozon_actions_remove = !!document.getElementById('auto-run-ozon-actions-remove')?.checked;
-      const store_ids = getAutoSelectedStoreIds();
+      const wb_store_ids = getAutoMpStoreIds('auto-wb-store-list');
+      const yam_store_ids = getAutoMpStoreIds('auto-yam-store-list');
+      const ozon_store_ids = getAutoMpStoreIds('auto-ozon-store-list');
+      const ozon_actions_store_ids = getAutoMpStoreIds('auto-ozon-actions-store-list');
+      let store_ids = getAutoSelectedStoreIds();
+      store_ids = [...new Set([
+        ...store_ids,
+        ...wb_store_ids,
+        ...yam_store_ids,
+        ...ozon_store_ids,
+        ...ozon_actions_store_ids,
+      ])];
       if (!store_ids.length) {
         toast('Выбери хотя бы один магазин для автозапуска', 'error');
         return;
@@ -7148,12 +7675,14 @@
         await api('/auto-schedule', {
           method: 'POST',
           body: JSON.stringify({
-            enabled, slots, store_ids, schedule_mode, interval_hours,
+            enabled, slots, store_ids, wb_store_ids, yam_store_ids, ozon_store_ids,
+            ozon_actions_store_ids, schedule_mode, interval_hours,
             run_reviews_wb, run_reviews_yam, run_reviews_ozon,
             run_questions_wb, run_questions_yam, run_questions_ozon,
             run_wb_chats, run_ozon_chats, run_ozon_alerts, run_wb_alerts, run_ozon_actions_remove,
           }),
         });
+        renderOzonActionsAutoStoreList(ozon_actions_store_ids);
         toast('Автозапуск сохранён');
         await loadAutoSchedulePanel();
       } catch (err) {
@@ -7171,15 +7700,26 @@
   if (btnRunAutoNow) {
     btnRunAutoNow.addEventListener('click', async () => {
       if (!confirmDanger('Запустить цикл автозапуска сейчас (без ожидания расписания)?')) return;
+      const progressEl = document.getElementById('auto-run-progress');
+      let tracker = null;
+      let progressError = null;
       btnRunAutoNow.disabled = true;
       try {
         const r = await api('/auto-schedule/run-now', { method: 'POST', body: JSON.stringify({}) });
-        toast(r && r.started ? 'Автозапуск запущен' : 'Запуск не начался');
-        refreshAutoStatus();
+        if (!r || !r.started) {
+          toast((r && r.message) ? r.message : 'Запуск не начался', 'error');
+          return;
+        }
+        toast('Автозапуск запущен');
+        ({ tracker } = startRingProgressUI(progressEl, 'Автозапуск', 'Ожидание старта…', 600000));
+        await watchAutoRunProgress(progressEl, tracker);
+        tracker = null;
       } catch (err) {
-        toast(err.message, 'error');
+        progressError = err.message || 'Ошибка запуска';
+        toast(progressError, 'error');
       } finally {
-        btnRunAutoNow.disabled = false;
+        if (progressError) endRingProgressUI(progressEl, tracker, { error: progressError });
+        await refreshAutoStatus();
       }
     });
   }
@@ -7990,7 +8530,14 @@
   document.getElementById('setting-wb_alerts_check_from_date')?.addEventListener('change', () => {
     syncWbAlertsFromDateInputs(wbAlertsFromDateValue());
   });
-  async function runOzonAlertsScan(storeId, { rescan = false } = {}) {
+  function setOzonAlertsScanBusy(busy) {
+    ['btn-ozon-alerts-scan-now', 'btn-ozon-alerts-rescan-now', 'btn-ozon-alerts-rescan-panel'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = !!busy;
+    });
+  }
+
+  async function runOzonAlertsScan(storeId, { rescan = false, progressElId = 'ozon-alerts-scan-progress' } = {}) {
     const sid = String(storeId || '').trim();
     if (!sid) {
       toast('Выберите магазин Ozon', 'error');
@@ -7999,14 +8546,15 @@
     if (rescan && !window.confirm('Сбросить пометки «не важно» для этого магазина и проверить сообщения заново?')) {
       return;
     }
+    const progressEl = document.getElementById(progressElId);
+    const ringLabel = rescan ? 'Пересканирование Ozon' : 'Проверка чатов Ozon';
+    const ringSub = rescan ? 'Сброс пометок и анализ…' : 'Сканирование поддержки…';
+    let tracker = null;
+    let progressError = null;
+    setOzonAlertsScanBusy(true);
+    ({ tracker } = startRingProgressUI(progressEl, ringLabel, ringSub, 600000));
     try {
       await saveServerSettings();
-      toast(
-        rescan
-          ? 'Пересканирую чаты Ozon… это может занять несколько минут'
-          : 'Сканирую чаты поддержки Ozon… это может занять несколько минут',
-        'info',
-      );
       const r = await api(`/ozon/alerts/${sid}/scan`, {
         method: 'POST',
         body: JSON.stringify({ rescan }),
@@ -8021,7 +8569,11 @@
       );
       await loadOzonAlerts();
     } catch (err) {
-      toast(err.message, 'error');
+      progressError = err.message || 'Ошибка сканирования';
+      toast(progressError, 'error');
+    } finally {
+      endRingProgressUI(progressEl, tracker, progressError ? { error: progressError } : {});
+      setOzonAlertsScanBusy(false);
     }
   }
 
@@ -8032,7 +8584,10 @@
     void runOzonAlertsScan(document.getElementById('ozon-alerts-scan-store')?.value, { rescan: true });
   });
   document.getElementById('btn-ozon-alerts-rescan-panel')?.addEventListener('click', () => {
-    void runOzonAlertsScan(document.getElementById('ozon-alerts-store')?.value, { rescan: true });
+    void runOzonAlertsScan(document.getElementById('ozon-alerts-store')?.value, {
+      rescan: true,
+      progressElId: 'ozon-alerts-panel-scan-progress',
+    });
   });
 
   async function runWbAlertsScan(storeId, { rescan = false } = {}) {
@@ -8057,9 +8612,10 @@
       const clearedPart = rescan && cleared ? `, сброшено скрытых: ${cleared}` : '';
       const aiPart = Number(r.wb_alert_ai_ignored || 0) ? `, не важно (ИИ): ${r.wb_alert_ai_ignored}` : '';
       const failPart = Number(r.wb_alert_ai_failed || 0) ? `, ошибки ИИ: ${r.wb_alert_ai_failed}` : '';
+      const dupPart = Number(r.wb_alert_duplicate || 0) ? `, дублей (другие ЛК): ${r.wb_alert_duplicate}` : '';
       const fromPart = r.wb_alert_from_date ? ` · с ${String(r.wb_alert_from_date).slice(0, 10)}` : '';
       toast(
-        `Готово: важных ${r.wb_alert_new ?? 0}, получено ${r.wb_alert_fetched ?? 0}, скрыто (заказы/отмены) ${r.wb_alert_excluded ?? 0}${aiPart}${failPart}${clearedPart}${fromPart}`,
+        `Готово: важных ${r.wb_alert_new ?? 0}, получено ${r.wb_alert_fetched ?? 0}, скрыто (заказы/отмены) ${r.wb_alert_excluded ?? 0}${aiPart}${failPart}${dupPart}${clearedPart}${fromPart}`,
       );
       await loadOzonAlerts();
     } catch (err) {

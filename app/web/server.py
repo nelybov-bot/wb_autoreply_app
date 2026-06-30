@@ -480,7 +480,11 @@ class WbBuyerChatMassBody(BaseModel):
 class AutoScheduleBody(BaseModel):
     enabled: bool = False
     slots: list[str] = []   # ["09:00","13:30"]
-    store_ids: list[int] = []  # обязательный выбор магазинов
+    store_ids: list[int] = []  # общий список (объединение); для совместимости
+    wb_store_ids: list[int] = []
+    yam_store_ids: list[int] = []
+    ozon_store_ids: list[int] = []
+    ozon_actions_store_ids: list[int] = []
     schedule_mode: str = "slots"  # slots | interval
     interval_hours: int = 1
     run_reviews_wb: bool = True
@@ -672,6 +676,97 @@ def _item_types_for_store(store: Store, cfg: dict) -> list[str]:
     return types
 
 
+_MP_AUTO_STORE_KEYS = {
+    "wb": "wb_store_ids",
+    "yam": "yam_store_ids",
+    "ozon": "ozon_store_ids",
+}
+
+
+def _int_id_set(values) -> set[int]:
+    out: set[int] = set()
+    for x in values or []:
+        try:
+            out.add(int(x))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _global_auto_store_ids(cfg: dict) -> set[int]:
+    return _int_id_set(cfg.get("store_ids"))
+
+
+def _resolve_mp_store_ids(cfg: dict, db: Database, marketplace: str) -> set[int]:
+    """Магазины площадки для задач; пустой список в cfg — из общего store_ids."""
+    mp = (marketplace or "").strip().lower()
+    key = _MP_AUTO_STORE_KEYS.get(mp, f"{mp}_store_ids")
+    specific = _int_id_set(cfg.get(key))
+    if specific:
+        return specific
+    global_ids = _global_auto_store_ids(cfg)
+    if not global_ids:
+        return set()
+    return {
+        s.id
+        for s in db.list_stores()
+        if s.active and s.id in global_ids and (s.marketplace or "").strip().lower() == mp
+    }
+
+
+def _resolve_ozon_actions_store_ids(cfg: dict, db: Database) -> set[int]:
+    specific = _int_id_set(cfg.get("ozon_actions_store_ids"))
+    if specific:
+        return specific
+    return _resolve_mp_store_ids(cfg, db, "ozon")
+
+
+def _any_wb_auto_task(cfg: dict) -> bool:
+    return bool(
+        cfg.get("run_reviews_wb")
+        or cfg.get("run_questions_wb")
+        or cfg.get("run_wb_chats")
+        or cfg.get("run_wb_alerts")
+    )
+
+
+def _any_yam_auto_task(cfg: dict) -> bool:
+    return bool(cfg.get("run_reviews_yam") or cfg.get("run_questions_yam"))
+
+
+def _any_ozon_auto_task(cfg: dict) -> bool:
+    return bool(
+        cfg.get("run_reviews_ozon")
+        or cfg.get("run_questions_ozon")
+        or cfg.get("run_ozon_chats")
+        or cfg.get("run_ozon_alerts")
+    )
+
+
+def _collect_auto_run_store_ids(cfg: dict, db: Database) -> set[int]:
+    ids: set[int] = set()
+    if _any_wb_auto_task(cfg):
+        ids |= _resolve_mp_store_ids(cfg, db, "wb")
+    if _any_yam_auto_task(cfg):
+        ids |= _resolve_mp_store_ids(cfg, db, "yam")
+    if _any_ozon_auto_task(cfg):
+        ids |= _resolve_mp_store_ids(cfg, db, "ozon")
+    if cfg.get("run_ozon_actions_remove"):
+        ids |= _resolve_ozon_actions_store_ids(cfg, db)
+    if ids:
+        return ids
+    return _global_auto_store_ids(cfg)
+
+
+def _auto_task_store_sets(cfg: dict, db: Database) -> dict[str, set[int]]:
+    return {
+        "wb": _resolve_mp_store_ids(cfg, db, "wb"),
+        "yam": _resolve_mp_store_ids(cfg, db, "yam"),
+        "ozon": _resolve_mp_store_ids(cfg, db, "ozon"),
+        "ozon_actions": _resolve_ozon_actions_store_ids(cfg, db),
+    }
+
+
 def _normalize_slots(slots: list[str]) -> list[str]:
     out: list[str] = []
     for s in slots or []:
@@ -694,6 +789,10 @@ def _get_auto_schedule(db: Database) -> dict:
         "enabled": False,
         "slots": [],
         "store_ids": [],
+        "wb_store_ids": [],
+        "yam_store_ids": [],
+        "ozon_store_ids": [],
+        "ozon_actions_store_ids": [],
         "schedule_mode": "slots",
         "interval_hours": 1,
         "run_reviews_wb": True,
@@ -715,6 +814,10 @@ def _get_auto_schedule(db: Database) -> dict:
         cfg["enabled"] = bool(obj.get("enabled"))
         cfg["slots"] = _normalize_slots(obj.get("slots") or [])
         cfg["store_ids"] = [int(x) for x in (obj.get("store_ids") or [])]
+        cfg["wb_store_ids"] = [int(x) for x in (obj.get("wb_store_ids") or [])]
+        cfg["yam_store_ids"] = [int(x) for x in (obj.get("yam_store_ids") or [])]
+        cfg["ozon_store_ids"] = [int(x) for x in (obj.get("ozon_store_ids") or [])]
+        cfg["ozon_actions_store_ids"] = [int(x) for x in (obj.get("ozon_actions_store_ids") or [])]
         mode = str(obj.get("schedule_mode") or "slots").strip().lower()
         cfg["schedule_mode"] = mode if mode in ("slots", "interval") else "slots"
         cfg["interval_hours"] = max(1, min(int(obj.get("interval_hours") or 1), 24))
@@ -737,6 +840,10 @@ def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
         "enabled": bool(body.enabled),
         "slots": _normalize_slots(body.slots or []),
         "store_ids": [int(x) for x in (body.store_ids or [])],
+        "wb_store_ids": [int(x) for x in (body.wb_store_ids or [])],
+        "yam_store_ids": [int(x) for x in (body.yam_store_ids or [])],
+        "ozon_store_ids": [int(x) for x in (body.ozon_store_ids or [])],
+        "ozon_actions_store_ids": [int(x) for x in (body.ozon_actions_store_ids or [])],
         "schedule_mode": mode,
         "interval_hours": interval_hours,
         "run_reviews_wb": bool(body.run_reviews_wb),
@@ -763,6 +870,11 @@ def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
         raise HTTPException(
             400,
             "Нужно включить хотя бы одну задачу: отзывы/вопросы по WB, ЯМ или Ozon, чаты, уведомления или автоудаление из акций",
+        )
+    if not _collect_auto_run_store_ids(cfg, db):
+        raise HTTPException(
+            400,
+            "Выберите магазины для автозапуска (общий список или по площадкам).",
         )
     db.set_setting(AUTO_SCHEDULE_KEY, json.dumps(cfg, ensure_ascii=False))
     return cfg
@@ -827,6 +939,8 @@ async def _process_auto_store(
     db: Database,
     store: Store,
     *,
+    cfg: dict,
+    task_stores: dict[str, set[int]],
     item_types: list[str],
     run_wb_chats: bool,
     run_ozon_chats: bool,
@@ -897,7 +1011,9 @@ async def _process_auto_store(
 
     if run_wb_chats:
         _auto_state["phase"] = "wb_chats"
-        if key:
+        if store.id not in task_stores.get("wb", set()):
+            result["wb_chats"] = {"wb_chat_skipped": 1, "reason": "store_not_selected"}
+        elif key:
             if store.marketplace == "wb" and (store.api_key or "").strip():
                 result["wb_chats"] = await auto_process_wb_buyer_chats(db, [store], openai_key=key)
             else:
@@ -910,7 +1026,9 @@ async def _process_auto_store(
 
     if run_ozon_chats:
         _auto_state["phase"] = "ozon_chats"
-        if key:
+        if store.id not in task_stores.get("ozon", set()):
+            result["ozon_chats"] = {"ozon_chat_skipped": 1, "reason": "store_not_selected"}
+        elif key:
             if (
                 store.marketplace == "ozon"
                 and (store.client_id or "").strip()
@@ -927,7 +1045,9 @@ async def _process_auto_store(
 
     if run_ozon_alerts:
         _auto_state["phase"] = "ozon_alerts"
-        if key:
+        if store.id not in task_stores.get("ozon", set()):
+            result["ozon_alerts"] = {"ozon_alert_skipped": 1, "reason": "store_not_selected"}
+        elif key:
             if (
                 store.marketplace == "ozon"
                 and (store.client_id or "").strip()
@@ -946,7 +1066,9 @@ async def _process_auto_store(
 
     if run_wb_alerts:
         _auto_state["phase"] = "wb_alerts"
-        if store.marketplace == "wb" and (store.api_key or "").strip():
+        if store.id not in task_stores.get("wb", set()):
+            result["wb_alerts"] = {"wb_alert_skipped": 1, "reason": "store_not_selected"}
+        elif store.marketplace == "wb" and (store.api_key or "").strip():
             if (db.get_setting(WB_ALERTS_ENABLED) or "0").strip() == "1":
                 if key:
                     result["wb_alerts"] = await scan_wb_portal_news_for_store(
@@ -961,7 +1083,9 @@ async def _process_auto_store(
 
     if run_ozon_actions_remove:
         _auto_state["phase"] = "ozon_actions"
-        if (
+        if store.id not in task_stores.get("ozon_actions", set()):
+            result["ozon_actions"] = {"skipped": True, "reason": "store_not_selected"}
+        elif (
             store.marketplace == "ozon"
             and (store.client_id or "").strip()
             and (store.api_key or "").strip()
@@ -1154,15 +1278,16 @@ async def _run_auto_slot(slot: str, *, force: bool = False) -> None:
     cfg = _get_auto_schedule(db)
     if not force and not cfg.get("enabled"):
         return
-    store_ids = [int(x) for x in (cfg.get("store_ids") or [])]
+    store_ids = _collect_auto_run_store_ids(cfg, db)
     stores = [s for s in db.list_stores() if s.active and s.id in store_ids]
     if not stores:
         log.warning(
             "auto_run slot=%s: пропуск — нет активных магазинов для store_ids=%s",
             slot,
-            store_ids,
+            sorted(store_ids),
         )
         return
+    task_stores = _auto_task_store_sets(cfg, db)
     sorted_stores = sorted(stores, key=lambda s: s.id)
     n_stores = len(sorted_stores)
     started_dt = dt.datetime.now(MSK_TZ)
@@ -1228,11 +1353,20 @@ async def _run_auto_slot(slot: str, *, force: bool = False) -> None:
                 })
                 continue
             try:
-                store_item_types = _item_types_for_store(slot_store, cfg)
+                mp = (slot_store.marketplace or "").strip().lower()
+                item_types: list[str] = []
+                if mp == "wb" and slot_store.id in task_stores.get("wb", set()):
+                    item_types = _item_types_for_store(slot_store, cfg)
+                elif mp == "yam" and slot_store.id in task_stores.get("yam", set()):
+                    item_types = _item_types_for_store(slot_store, cfg)
+                elif mp == "ozon" and slot_store.id in task_stores.get("ozon", set()):
+                    item_types = _item_types_for_store(slot_store, cfg)
                 store_meta = await _process_auto_store(
                     db,
                     slot_store,
-                    item_types=store_item_types,
+                    cfg=cfg,
+                    task_stores=task_stores,
+                    item_types=item_types,
                     run_wb_chats=run_wb_chats,
                     run_ozon_chats=run_ozon_chats,
                     run_ozon_alerts=run_ozon_alerts,
@@ -1553,10 +1687,10 @@ async def _auto_scheduler_loop() -> None:
 
 def _auto_run_readiness(cfg: dict, db: Database, *, check_schedule: bool = True) -> str:
     """Проверка готовности цикла (магазины, задачи, ключи)."""
-    sids = [int(x) for x in (cfg.get("store_ids") or [])]
-    if not sids:
-        return "Не выбраны магазины — отметьте их и нажмите «Сохранить автозапуск»."
-    stores = [s for s in db.list_stores() if s.active and s.id in sids]
+    run_ids = _collect_auto_run_store_ids(cfg, db)
+    if not run_ids:
+        return "Не выбраны магазины — отметьте общий список или магазины по площадкам и сохраните."
+    stores = [s for s in db.list_stores() if s.active and s.id in run_ids]
     if not stores:
         return "Выбранные магазины не найдены или снята галочка «активен» — проверьте вкладку «Магазины»."
     if check_schedule:
@@ -1591,24 +1725,36 @@ def _auto_run_readiness(cfg: dict, db: Database, *, check_schedule: bool = True)
         if not tg_chat:
             return "Включён периодический отчёт — укажите ID чата для отчётов или основной чат Telegram."
     if cfg.get("run_wb_chats"):
-        wb_stores = [s for s in stores if s.marketplace == "wb" and (s.api_key or "").strip()]
+        wb_ids = _resolve_mp_store_ids(cfg, db, "wb")
+        wb_stores = [
+            s for s in stores
+            if s.id in wb_ids and s.marketplace == "wb" and (s.api_key or "").strip()
+        ]
         if not wb_stores:
             return "В цикле включены чаты WB, но среди выбранных магазинов нет WB с API-ключом."
         if not (db.get_setting("openai_key") or "").strip():
             return "Автоответы в чатах WB: нужен ключ OpenAI в «Настройки» (генерация текста)."
     if cfg.get("run_ozon_chats"):
+        ozon_ids = _resolve_mp_store_ids(cfg, db, "ozon")
         ozon_stores = [
             s for s in stores
-            if s.marketplace == "ozon" and (s.client_id or "").strip() and (s.api_key or "").strip()
+            if s.id in ozon_ids
+            and s.marketplace == "ozon"
+            and (s.client_id or "").strip()
+            and (s.api_key or "").strip()
         ]
         if not ozon_stores:
             return "В цикле включены чаты Ozon, но среди выбранных магазинов нет Ozon с Client-Id и Api-Key."
         if not (db.get_setting("openai_key") or "").strip():
             return "Автоответы в чатах Ozon: нужен ключ OpenAI в «Настройки»."
     if cfg.get("run_ozon_alerts"):
+        ozon_ids = _resolve_mp_store_ids(cfg, db, "ozon")
         ozon_stores = [
             s for s in stores
-            if s.marketplace == "ozon" and (s.client_id or "").strip() and (s.api_key or "").strip()
+            if s.id in ozon_ids
+            and s.marketplace == "ozon"
+            and (s.client_id or "").strip()
+            and (s.api_key or "").strip()
         ]
         if not ozon_stores:
             return "В цикле включены уведомления Ozon, но нет Ozon-магазина с Client-Id и Api-Key."
@@ -1617,7 +1763,11 @@ def _auto_run_readiness(cfg: dict, db: Database, *, check_schedule: bool = True)
         if (db.get_setting(OZON_ALERTS_ENABLED) or "0").strip() != "1":
             return "Включите «Важные уведомления Ozon» в настройках и сохраните."
     if cfg.get("run_wb_alerts"):
-        wb_stores = [s for s in stores if s.marketplace == "wb" and (s.api_key or "").strip()]
+        wb_ids = _resolve_mp_store_ids(cfg, db, "wb")
+        wb_stores = [
+            s for s in stores
+            if s.id in wb_ids and s.marketplace == "wb" and (s.api_key or "").strip()
+        ]
         if not wb_stores:
             return "В цикле включены уведомления WB, но среди выбранных магазинов нет WB с API-ключом."
         if not (db.get_setting("openai_key") or "").strip():
@@ -1625,12 +1775,16 @@ def _auto_run_readiness(cfg: dict, db: Database, *, check_schedule: bool = True)
         if (db.get_setting(WB_ALERTS_ENABLED) or "0").strip() != "1":
             return "Включите «Уведомления WB» в настройках и сохраните."
     if cfg.get("run_ozon_actions_remove"):
+        ozon_action_ids = _resolve_ozon_actions_store_ids(cfg, db)
         ozon_stores = [
             s for s in stores
-            if s.marketplace == "ozon" and (s.client_id or "").strip() and (s.api_key or "").strip()
+            if s.id in ozon_action_ids
+            and s.marketplace == "ozon"
+            and (s.client_id or "").strip()
+            and (s.api_key or "").strip()
         ]
         if not ozon_stores:
-            return "В цикле включено автоудаление из акций Ozon, но нет Ozon-магазина с Client-Id и Api-Key."
+            return "В цикле включена синхронизация акций Ozon — выберите Ozon-магазины с Client-Id и Api-Key."
     return ""
 
 
@@ -1675,6 +1829,10 @@ def _auto_status(db: Database) -> dict:
         "enabled": bool(cfg.get("enabled")),
         "slots": slots,
         "store_ids": cfg.get("store_ids") or [],
+        "wb_store_ids": cfg.get("wb_store_ids") or [],
+        "yam_store_ids": cfg.get("yam_store_ids") or [],
+        "ozon_store_ids": cfg.get("ozon_store_ids") or [],
+        "ozon_actions_store_ids": cfg.get("ozon_actions_store_ids") or [],
         "schedule_mode": cfg.get("schedule_mode") or "slots",
         "interval_hours": int(cfg.get("interval_hours") or 1),
         **{k: bool(cfg.get(k, False)) for k in _AUTO_MP_REVIEW_KEYS + _AUTO_MP_QUESTION_KEYS},
@@ -2492,6 +2650,15 @@ def api_list_wb_alerts(
     )
     if important_only:
         rows = [r for r in rows if r.status != "ignored"]
+    if store_id is None:
+        seen_news: set[int] = set()
+        uniq: list[WbPortalAlertRow] = []
+        for r in rows:
+            if r.news_id in seen_news:
+                continue
+            seen_news.add(r.news_id)
+            uniq.append(r)
+        rows = uniq
     store_names = {s.id: s.name for s in db.list_stores()}
     return [_wb_alert_to_out(r, store_names.get(r.store_id, "")) for r in rows]
 

@@ -366,6 +366,9 @@ class Database:
             c.execute(
                 "CREATE INDEX IF NOT EXISTS idx_wb_alerts_status ON wb_portal_alerts(status)"
             )
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_wb_alerts_news_id ON wb_portal_alerts(news_id)"
+            )
             c.execute("""
                 CREATE TABLE IF NOT EXISTS card_links_master_items (
                     store_id INTEGER NOT NULL,
@@ -910,6 +913,35 @@ class Database:
             ).fetchone()
             return row is not None
 
+    def has_wb_portal_news_id(self, news_id: int) -> bool:
+        """Новость портала WB уже есть у любого магазина (news_id общий для всех ЛК)."""
+        with _DB_LOCK:
+            row = self._conn.execute(
+                "SELECT 1 FROM wb_portal_alerts WHERE news_id=? LIMIT 1",
+                (int(news_id),),
+            ).fetchone()
+            return row is not None
+
+    def wb_portal_news_telegram_already_sent(
+        self,
+        news_id: int,
+        *,
+        exclude_alert_id: Optional[int] = None,
+    ) -> bool:
+        with _DB_LOCK:
+            if exclude_alert_id is not None:
+                row = self._conn.execute(
+                    """SELECT 1 FROM wb_portal_alerts
+                       WHERE news_id=? AND telegram_sent=1 AND id<>? LIMIT 1""",
+                    (int(news_id), int(exclude_alert_id)),
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT 1 FROM wb_portal_alerts WHERE news_id=? AND telegram_sent=1 LIMIT 1",
+                    (int(news_id),),
+                ).fetchone()
+            return row is not None
+
     def add_wb_portal_alert(
         self,
         *,
@@ -962,7 +994,7 @@ class Database:
     def list_wb_portal_alerts_pending_telegram(self, store_id: int) -> list[dict]:
         with _DB_LOCK:
             rows = self._conn.execute(
-                """SELECT id, header, news_date, types_json, summary, action_needed, telegram_title
+                """SELECT id, news_id, header, news_date, types_json, summary, action_needed, telegram_title
                    FROM wb_portal_alerts
                    WHERE store_id=? AND status='new' AND telegram_sent=0
                    ORDER BY id ASC""",
@@ -970,6 +1002,10 @@ class Database:
             ).fetchall()
             out = []
             for r in rows:
+                nid = int(r["news_id"])
+                if self.wb_portal_news_telegram_already_sent(nid, exclude_alert_id=int(r["id"])):
+                    self.mark_wb_portal_alert_telegram_sent(int(r["id"]))
+                    continue
                 types_label = ""
                 try:
                     raw = json.loads(r["types_json"] or "[]")
@@ -984,6 +1020,7 @@ class Database:
                 out.append(
                     {
                         "id": int(r["id"]),
+                        "news_id": nid,
                         "header": str(r["header"] or ""),
                         "news_date": str(r["news_date"] or ""),
                         "types_label": types_label,

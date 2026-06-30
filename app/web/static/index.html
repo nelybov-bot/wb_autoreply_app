@@ -208,7 +208,7 @@
               <input type="text" name="client_id" placeholder="client-id">
             </div>
             <div class="form-group">
-              <label class="toggle-row"><span>Активен</span><input type="checkbox" class="toggle-input" name="active" checked><span class="toggle-track" aria-hidden="true"></span></label>
+              <div class="toggle-row"><span class="toggle-label">Активен</span><label class="switch"><input type="checkbox" class="toggle-input" name="active" checked><span class="switch-track"></span></label></div>
             </div>
             <button type="submit" class="btn btn-primary">Добавить</button>
           </form>
@@ -232,14 +232,14 @@
         <div class="panel-actions"></div>
       </div>
       <div class="panel-toolbar">
-        <div class="toolbar-group">
-          <span class="toolbar-label">Магазин</span>
+        <div class="toolbar-field">
+          <label for="reviews-store">Магазин</label>
           <select id="reviews-store" class="select-md">
             <option value="">Все магазины</option>
           </select>
         </div>
-        <div class="toolbar-group">
-          <span class="toolbar-label">Статус</span>
+        <div class="toolbar-field">
+          <label for="reviews-status">Статус</label>
           <select id="reviews-status" class="select-lg">
             <option value="new,generated">Новые + Сгенерированные</option>
             <option value="new">Новые</option>
@@ -248,42 +248,35 @@
             <option value="all">Все статусы</option>
           </select>
         </div>
-        <div class="toolbar-divider" aria-hidden="true"></div>
-        <div class="toolbar-group toolbar-group--actions">
-          <button type="button" class="btn btn-primary" id="btn-load-reviews">Загрузить новые</button>
-          <button type="button" class="btn btn-secondary" id="btn-generate-reviews">Сгенерировать</button>
-          <button type="button" class="btn btn-secondary" id="btn-send-reviews">Отправить</button>
-        </div>
-      </div>
-      <div class="panel-toolbar panel-toolbar--muted">
-        <div class="toolbar-group">
-          <span class="toolbar-label">ИИ</span>
+        <div class="toolbar-field">
+          <label for="reviews-generate-mode">ИИ</label>
           <select id="reviews-generate-mode" class="select-lg" title="Режим генерации">
             <option value="new_only">Только новые</option>
             <option value="all">С перезаписью</option>
           </select>
         </div>
-        <div class="toolbar-group toolbar-group--grow">
-          <span class="toolbar-label">Шаблон без ИИ</span>
-          <select id="reviews-template-rating" class="select-md" title="Фильтр по оценке">
-            <option value="all">Все оценки</option>
-            <option value="1">1★</option>
-            <option value="2">2★</option>
-            <option value="3">3★</option>
-            <option value="4-5">4–5★</option>
-            <option value="none">Без оценки</option>
-          </select>
-          <input type="text" id="reviews-template-text" class="input-grow" placeholder="Текст шаблонного ответа">
+        <div class="toolbar-field toolbar-field--grow">
+          <label for="reviews-template-rating">Шаблон без ИИ</label>
+          <div class="toolbar-inline">
+            <select id="reviews-template-rating" class="select-md" title="Фильтр по оценке">
+              <option value="all">Все оценки</option>
+              <option value="1">1★</option>
+              <option value="2">2★</option>
+              <option value="3">3★</option>
+              <option value="4-5">4–5★</option>
+              <option value="none">Без оценки</option>
+            </select>
+            <input type="text" id="reviews-template-text" class="input-grow" placeholder="Текст шаблонного ответа">
+          </div>
+        </div>
+        <div class="toolbar-actions">
+          <button type="button" class="btn btn-primary" id="btn-load-reviews">Загрузить новые</button>
+          <button type="button" class="btn btn-secondary" id="btn-generate-reviews">Сгенерировать</button>
+          <button type="button" class="btn btn-secondary" id="btn-send-reviews">Отправить</button>
           <button type="button" class="btn btn-secondary" id="btn-apply-template">Применить шаблон</button>
         </div>
       </div>
-      <div class="progress-wrap" id="progress-reviews">
-        <div class="progress-bar"><div class="fill" id="progress-reviews-fill" style="width: 0%"></div></div>
-        <div class="progress-foot">
-          <div class="progress-text" id="progress-reviews-text">Выполняется…</div>
-          <button type="button" class="btn btn-secondary btn-sm btn-stop">Стоп</button>
-        </div>
-      </div>
+      <div class="progress-container" id="progress-reviews" hidden></div>
       <div class="items-table-wrap">
         <table class="items-table">
           <thead>
@@ -299,6 +292,7 @@
         </table>
       </div>
       <div id="reviews-empty" class="empty-state" style="display: none;">
+        <i class="ti ti-inbox" aria-hidden="true"></i>
         <p>Нет отзывов со статусом «Новый» или «Сгенерирован».</p>
         <button type="button" class="btn btn-primary" id="btn-load-reviews-2">Загрузить новые</button>
       </div>
@@ -317,14 +311,14 @@
         <div class="panel-actions"></div>
       </div>
       <div class="panel-toolbar">
-        <div class="toolbar-group">
-          <span class="toolbar-label">Магазин</span>
+        <div class="toolbar-field">
+          <label for="questions-store">Магазин</label>
           <select id="questions-store" class="select-md">
             <option value="">Все магазины</option>
           </select>
         </div>
-        <div class="toolbar-group">
-          <span class="toolbar-label">Статус</span>
+        <div class="toolbar-field">
+          <label for="questions-status">Статус</label>
           <select id="questions-status" class="select-lg">
             <option value="new,generated">Новые + Сгенерированные</option>
             <option value="new">Новые</option>
@@ -333,27 +327,20 @@
             <option value="all">Все статусы</option>
           </select>
         </div>
-        <div class="toolbar-group">
-          <span class="toolbar-label">ИИ</span>
+        <div class="toolbar-field">
+          <label for="questions-generate-mode">ИИ</label>
           <select id="questions-generate-mode" class="select-lg" title="Режим генерации">
             <option value="new_only">Только новые</option>
             <option value="all">С перезаписью</option>
           </select>
         </div>
-        <div class="toolbar-divider" aria-hidden="true"></div>
-        <div class="toolbar-group toolbar-group--actions">
+        <div class="toolbar-actions">
           <button type="button" class="btn btn-primary" id="btn-load-questions">Загрузить новые</button>
           <button type="button" class="btn btn-secondary" id="btn-generate-questions">Сгенерировать</button>
           <button type="button" class="btn btn-secondary" id="btn-send-questions">Отправить</button>
         </div>
       </div>
-      <div class="progress-wrap" id="progress-questions">
-        <div class="progress-bar"><div class="fill" id="progress-questions-fill" style="width: 0%"></div></div>
-        <div class="progress-foot">
-          <div class="progress-text" id="progress-questions-text">Выполняется…</div>
-          <button type="button" class="btn btn-secondary btn-sm btn-stop">Стоп</button>
-        </div>
-      </div>
+      <div class="progress-container" id="progress-questions" hidden></div>
       <div class="items-table-wrap">
         <table class="items-table">
           <thead>
@@ -368,6 +355,7 @@
         </table>
       </div>
       <div id="questions-empty" class="empty-state" style="display: none;">
+        <i class="ti ti-inbox" aria-hidden="true"></i>
         <p>Нет вопросов со статусом «Новый» или «Сгенерирован».</p>
         <button type="button" class="btn btn-primary" id="btn-load-questions-2">Загрузить новые</button>
       </div>
@@ -396,10 +384,7 @@
         </div>
       </div>
       <div id="wb-chats-status-bar" class="chat-status-bar" role="status" aria-live="polite" hidden></div>
-      <div class="progress-wrap" id="wb-chats-loading" aria-live="polite">
-        <div class="progress-bar indeterminate"><div class="fill"></div></div>
-        <div class="progress-text">Загрузка…</div>
-      </div>
+      <div class="progress-container" id="wb-chats-loading" aria-live="polite" hidden></div>
       <div class="wb-chats-layout">
         <div class="wb-chats-list-wrap">
           <h3 class="wb-chats-subtitle">Чаты</h3>
@@ -458,10 +443,7 @@
         </div>
       </div>
       <div id="ozon-chats-status-bar" class="chat-status-bar" role="status" aria-live="polite" hidden></div>
-      <div class="progress-wrap" id="ozon-chats-loading" aria-live="polite">
-        <div class="progress-bar indeterminate"><div class="fill"></div></div>
-        <div class="progress-text">Загрузка…</div>
-      </div>
+      <div class="progress-container" id="ozon-chats-loading" aria-live="polite" hidden></div>
       <div class="wb-chats-layout">
         <div class="wb-chats-list-wrap">
           <h3 class="wb-chats-subtitle">Чаты</h3>
@@ -516,10 +498,7 @@
             <button type="button" class="btn btn-primary" id="btn-ozon-actions-load">Загрузить акции</button>
           </div>
           <div id="ozon-actions-status" class="form-hint" role="status">Выберите магазин Ozon и нажмите «Загрузить акции».</div>
-          <div class="progress-wrap" id="ozon-actions-loading" aria-live="polite" hidden>
-            <div class="progress-bar" role="progressbar"></div>
-            <span class="progress-label">Загрузка…</span>
-          </div>
+          <div class="progress-container" id="ozon-actions-loading" aria-live="polite" hidden></div>
           <div class="items-table-wrap ozon-actions-table-wrap ozon-actions-table-block">
             <table class="items-table ozon-actions-table" id="ozon-actions-table">
               <thead>
@@ -560,30 +539,21 @@
                   <div class="settings-option-title">Снимать товары с высокой скидкой</div>
                   <p class="settings-option-desc">Удалять из акций товары, у которых скидка превышает порог.</p>
                 </div>
-                <label class="toggle-switch toggle-switch--lg" title="Снимать товары с высокой скидкой">
-                  <input type="checkbox" class="toggle-input" id="ozon-actions-sync-remove" checked>
-                  <span class="toggle-track" aria-hidden="true"></span>
-                </label>
+                <label class="switch switch--lg" title="Снимать товары с высокой скидкой"><input type="checkbox" class="toggle-input" id="ozon-actions-sync-remove" checked><span class="switch-track"></span></label>
               </div>
               <div class="settings-option">
                 <div class="settings-option-body">
                   <div class="settings-option-title">Добавлять подходящие кандидаты</div>
                   <p class="settings-option-desc">Автоматически включать в акции товары со скидкой не выше порога.</p>
                 </div>
-                <label class="toggle-switch toggle-switch--lg" title="Добавлять подходящие кандидаты">
-                  <input type="checkbox" class="toggle-input" id="ozon-actions-sync-add" checked>
-                  <span class="toggle-track" aria-hidden="true"></span>
-                </label>
+                <label class="switch switch--lg" title="Добавлять подходящие кандидаты"><input type="checkbox" class="toggle-input" id="ozon-actions-sync-add" checked><span class="switch-track"></span></label>
               </div>
               <div class="settings-option">
                 <div class="settings-option-body">
                   <div class="settings-option-title">Исключить ваучерные акции</div>
                   <p class="settings-option-desc">Не трогать промо с ваучерами и подарочными сертификатами.</p>
                 </div>
-                <label class="toggle-switch toggle-switch--lg" title="Исключить ваучерные акции">
-                  <input type="checkbox" class="toggle-input" id="ozon-actions-exclude-voucher">
-                  <span class="toggle-track" aria-hidden="true"></span>
-                </label>
+                <label class="switch switch--lg" title="Исключить ваучерные акции"><input type="checkbox" class="toggle-input" id="ozon-actions-exclude-voucher"><span class="switch-track"></span></label>
               </div>
             </div>
             <div class="form-group ozon-actions-ids-field">
@@ -599,10 +569,7 @@
                   <div class="settings-option-title">Только автоакции</div>
                   <p class="settings-option-desc">Ozon сам добавляет товары в такие акции — legacy-режим работает только с ними.</p>
                 </div>
-                <label class="toggle-switch toggle-switch--lg" title="Только автоакции">
-                  <input type="checkbox" class="toggle-input" id="ozon-actions-only-auto" checked>
-                  <span class="toggle-track" aria-hidden="true"></span>
-                </label>
+                <label class="switch switch--lg" title="Только автоакции"><input type="checkbox" class="toggle-input" id="ozon-actions-only-auto" checked><span class="switch-track"></span></label>
               </div>
             </div>
           </div>
@@ -610,6 +577,12 @@
             <label for="ozon-actions-watched-ids">ID акций для отслеживания</label>
             <input type="text" id="ozon-actions-watched-ids" placeholder="71342, 66011">
             <p class="form-hint">Пусто — все акции магазина. Иначе только перечисленные ID.</p>
+          </div>
+          <div class="ozon-settings-block ozon-actions-auto-stores-block">
+            <h3 class="settings-subhead">Автозапуск: магазины для синхронизации акций</h3>
+            <p class="form-hint">Какие магазины Ozon обрабатывать при автозапуске (галочка «Синхронизация акций»). Пусто — все Ozon из раздела «Автозапуск».</p>
+            <div id="ozon-actions-auto-store-list" class="auto-store-list auto-store-list--compact"></div>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-actions-save-auto-stores">Сохранить список для автозапуска</button>
           </div>
           <button type="button" class="btn btn-primary" id="btn-ozon-actions-save-settings">Сохранить настройки</button>
         </div>
@@ -775,24 +748,25 @@
           </div>
         </div>
         <div class="card-links-nav">
-          <div class="segmented card-links-view-tabs" role="tablist" aria-label="Режим">
-            <button type="button" class="card-links-tab" data-cl-view="master" role="tab">Мастер связок</button>
-            <button type="button" class="card-links-tab" data-cl-view="guide" role="tab">Справка</button>
-            <button type="button" class="card-links-tab" data-cl-view="ai" role="tab">ИИ <span id="card-links-ai-badge" class="card-links-tab-badge" hidden></span></button>
-            <button type="button" class="card-links-tab" data-cl-view="review" role="tab">Перепроверка <span id="card-links-review-badge" class="card-links-tab-badge" hidden></span></button>
-            <button type="button" class="card-links-tab active" data-cl-view="catalog" role="tab">Каталог</button>
+          <div class="view-tabs card-links-view-tabs" role="tablist" aria-label="Режим">
+            <button type="button" class="view-tab card-links-tab" data-cl-view="master" role="tab">Мастер связок</button>
+            <button type="button" class="view-tab card-links-tab" data-cl-view="guide" role="tab">Справка</button>
+            <button type="button" class="view-tab card-links-tab" data-cl-view="ai" role="tab">ИИ<span id="card-links-ai-badge" class="card-links-tab-badge" hidden></span></button>
+            <button type="button" class="view-tab card-links-tab" data-cl-view="review" role="tab">Перепроверка<span id="card-links-review-badge" class="card-links-tab-badge" hidden></span></button>
+            <button type="button" class="view-tab card-links-tab active" data-cl-view="catalog" role="tab">Каталог</button>
           </div>
         </div>
         <div id="card-links-master-panel" class="card-links-master-panel" hidden>
-          <div class="card-links-master-steps">
-            <button type="button" class="btn btn-secondary btn-sm clm-step" data-clm-step="load">1. Загрузить WB</button>
-            <button type="button" class="btn btn-secondary btn-sm clm-step" data-clm-step="brands">2. Бренды</button>
-            <button type="button" class="btn btn-secondary btn-sm clm-step" data-clm-step="segment">3. Сегмент</button>
-            <button type="button" class="btn btn-secondary btn-sm clm-step" data-clm-step="classify">4. Тип / модель</button>
-            <button type="button" class="btn btn-secondary btn-sm clm-step" data-clm-step="plan">5. План</button>
-            <button type="button" class="btn btn-secondary btn-sm btn-primary clm-step" data-clm-step="apply">6. Применить</button>
+          <div class="steps-row card-links-master-steps" role="tablist" aria-label="Шаги мастера">
+            <button type="button" class="step-item clm-step" data-clm-step="load"><span class="step-num">1</span><span class="step-label">Загрузить WB</span></button>
+            <button type="button" class="step-item clm-step" data-clm-step="brands"><span class="step-num">2</span><span class="step-label">Бренды</span></button>
+            <button type="button" class="step-item clm-step" data-clm-step="segment"><span class="step-num">3</span><span class="step-label">Сегмент</span></button>
+            <button type="button" class="step-item clm-step" data-clm-step="classify"><span class="step-num">4</span><span class="step-label">Тип / модель</span></button>
+            <button type="button" class="step-item clm-step" data-clm-step="plan"><span class="step-num">5</span><span class="step-label">План</span></button>
+            <button type="button" class="step-item clm-step" data-clm-step="apply"><span class="step-num">6</span><span class="step-label">Применить</span></button>
           </div>
           <p id="card-links-master-stats" class="form-hint card-links-master-stats">Выберите магазин WB и начните с шага 1.</p>
+          <div class="progress-container" id="card-links-master-progress" aria-live="polite" hidden></div>
           <p class="form-hint clm-load-hint">Шаг 1 берёт глубину из «Страниц каталога WB» сверху (до 15&nbsp;000 карточек). Фильтры ниже — только для просмотра плана, не для загрузки.</p>
           <div id="card-links-master-log" class="card-links-master-log" hidden></div>
           <div class="card-links-master-filters">
@@ -951,7 +925,13 @@
           <div class="form-card auto-card-section">
             <h3>Включение и расписание</h3>
             <div class="form-group">
-              <label class="toggle-row toggle-row-prominent"><span>Включить автозапуск</span><input type="checkbox" class="toggle-input" id="auto-enabled"><span class="toggle-track" aria-hidden="true"></span></label>
+              <div class="toggle-row toggle-row-prominent">
+                <span class="toggle-label">Включить автозапуск</span>
+                <label class="switch">
+                  <input type="checkbox" class="toggle-input" id="auto-enabled">
+                  <span class="switch-track"></span>
+                </label>
+              </div>
             </div>
             <div class="form-group">
               <label>Режим расписания</label>
@@ -985,29 +965,49 @@
                   <span class="mp-pill mp-wb">WB</span>
                   <span class="auto-task-group-title">Wildberries</span>
                 </div>
-                <label class="toggle-row"><span>Отзывы</span><input type="checkbox" class="toggle-input" id="auto-run-reviews-wb" checked><span class="toggle-track" aria-hidden="true"></span></label>
-                <label class="toggle-row"><span>Вопросы</span><input type="checkbox" class="toggle-input" id="auto-run-questions-wb" checked><span class="toggle-track" aria-hidden="true"></span></label>
-                <label class="toggle-row"><span>Чаты с покупателями</span><input type="checkbox" class="toggle-input" id="auto-run-wb-chats"><span class="toggle-track" aria-hidden="true"></span></label>
+                <div class="toggle-row"><span class="toggle-label">Отзывы</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-reviews-wb" checked><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Вопросы</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-questions-wb" checked><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Чаты с покупателями</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-wb-chats"><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Уведомления WB</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-wb-alerts"><span class="switch-track"></span></label></div>
+                <div class="auto-task-stores">
+                  <div class="auto-task-stores-label">Магазины WB</div>
+                  <div class="form-hint">Пусто — из общего списка ниже</div>
+                  <div id="auto-wb-store-list" class="auto-store-list auto-store-list--compact"></div>
+                </div>
               </div>
               <div class="auto-task-group">
                 <div class="auto-task-group-head">
                   <span class="mp-pill mp-yam">ЯМ</span>
                   <span class="auto-task-group-title">Яндекс.Маркет</span>
                 </div>
-                <label class="toggle-row"><span>Отзывы</span><input type="checkbox" class="toggle-input" id="auto-run-reviews-yam" checked><span class="toggle-track" aria-hidden="true"></span></label>
-                <label class="toggle-row"><span>Вопросы</span><input type="checkbox" class="toggle-input" id="auto-run-questions-yam" checked><span class="toggle-track" aria-hidden="true"></span></label>
+                <div class="toggle-row"><span class="toggle-label">Отзывы</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-reviews-yam" checked><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Вопросы</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-questions-yam" checked><span class="switch-track"></span></label></div>
+                <div class="auto-task-stores">
+                  <div class="auto-task-stores-label">Магазины ЯМ</div>
+                  <div class="form-hint">Пусто — из общего списка ниже</div>
+                  <div id="auto-yam-store-list" class="auto-store-list auto-store-list--compact"></div>
+                </div>
               </div>
               <div class="auto-task-group">
                 <div class="auto-task-group-head">
                   <span class="mp-pill mp-ozon">OZON</span>
                   <span class="auto-task-group-title">Ozon</span>
                 </div>
-                <label class="toggle-row"><span>Отзывы <em class="toggle-hint">отдельная подписка API</em></span><input type="checkbox" class="toggle-input" id="auto-run-reviews-ozon"><span class="toggle-track" aria-hidden="true"></span></label>
-                <label class="toggle-row"><span>Вопросы</span><input type="checkbox" class="toggle-input" id="auto-run-questions-ozon" checked><span class="toggle-track" aria-hidden="true"></span></label>
-                <label class="toggle-row"><span>Чаты с покупателями</span><input type="checkbox" class="toggle-input" id="auto-run-ozon-chats"><span class="toggle-track" aria-hidden="true"></span></label>
-                <label class="toggle-row"><span>Уведомления Ozon</span><input type="checkbox" class="toggle-input" id="auto-run-ozon-alerts"><span class="toggle-track" aria-hidden="true"></span></label>
-                <label class="toggle-row"><span>Уведомления WB</span><input type="checkbox" class="toggle-input" id="auto-run-wb-alerts"><span class="toggle-track" aria-hidden="true"></span></label>
-                <label class="toggle-row"><span>Синхронизация акций Ozon <em class="toggle-hint">по порогу скидки или legacy</em></span><input type="checkbox" class="toggle-input" id="auto-run-ozon-actions-remove"><span class="toggle-track" aria-hidden="true"></span></label>
+                <div class="toggle-row"><span class="toggle-label">Отзывы <em class="toggle-hint">отдельная подписка API</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-reviews-ozon"><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Вопросы</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-questions-ozon" checked><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Чаты с покупателями</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-ozon-chats"><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Уведомления Ozon</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-ozon-alerts"><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Синхронизация акций Ozon <em class="toggle-hint">по порогу скидки или legacy</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-ozon-actions-remove"><span class="switch-track"></span></label></div>
+                <div class="auto-task-stores">
+                  <div class="auto-task-stores-label">Магазины Ozon (отзывы, чаты, уведомления)</div>
+                  <div class="form-hint">Пусто — из общего списка ниже</div>
+                  <div id="auto-ozon-store-list" class="auto-store-list auto-store-list--compact"></div>
+                </div>
+                <div class="auto-task-stores">
+                  <div class="auto-task-stores-label">Магазины Ozon (только акции)</div>
+                  <div class="form-hint">Пусто — как список Ozon выше или общий</div>
+                  <div id="auto-ozon-actions-store-list" class="auto-store-list auto-store-list--compact"></div>
+                </div>
               </div>
             </div>
             <p class="form-hint auto-task-hint">
@@ -1015,7 +1015,8 @@
             </p>
           </div>
           <div class="form-card auto-card-section auto-card-stores">
-            <h3>Магазины для авто</h3>
+            <h3>Магазины для авто (общий)</h3>
+            <p class="form-hint">Базовый список для всех задач. Можно сузить отдельно в блоках WB / ЯМ / Ozon выше.</p>
             <div id="auto-store-list" class="auto-store-list"></div>
           </div>
           <div class="form-card auto-card-section">
@@ -1024,6 +1025,7 @@
               <label>Статус</label>
               <div class="form-hint" id="auto-status-text">—</div>
             </div>
+            <div class="progress-container" id="auto-run-progress" aria-live="polite" hidden></div>
             <div class="settings-actions auto-card-actions">
               <button type="button" class="btn btn-primary btn-sm" id="btn-save-auto">Сохранить автозапуск</button>
               <button type="button" class="btn btn-secondary btn-sm" id="btn-run-auto-now">Запустить сейчас</button>
@@ -1048,16 +1050,16 @@
       </div>
       <div class="settings-panel">
         <div class="segmented settings-segments" id="settings-filter" role="tablist" aria-label="Разделы настроек">
-          <button type="button" class="active" data-settings-section="connection" role="tab">Подключение</button>
-          <button type="button" data-settings-section="openai" role="tab">OpenAI</button>
-          <button type="button" data-settings-section="chats" role="tab">Чаты</button>
-          <button type="button" data-settings-section="telegram" role="tab">Telegram</button>
-          <button type="button" data-settings-section="card-check" role="tab">Карточки</button>
-          <button type="button" data-settings-section="ozon-alerts" role="tab">Ozon</button>
-          <button type="button" data-settings-section="wb-alerts" role="tab">WB</button>
-          <button type="button" data-settings-section="ui" role="tab">Интерфейс</button>
-          <button type="button" data-settings-section="users" id="settings-seg-users" role="tab">Пользователи</button>
-          <button type="button" data-settings-section="prompts" role="tab">Промпты</button>
+          <button type="button" class="segment-tab active" data-settings-section="connection" role="tab">Подключение</button>
+          <button type="button" class="segment-tab" data-settings-section="openai" role="tab">OpenAI</button>
+          <button type="button" class="segment-tab" data-settings-section="chats" role="tab">Чаты</button>
+          <button type="button" class="segment-tab" data-settings-section="telegram" role="tab">Telegram</button>
+          <button type="button" class="segment-tab" data-settings-section="card-check" role="tab">Карточки</button>
+          <button type="button" class="segment-tab" data-settings-section="ozon-alerts" role="tab">Ozon</button>
+          <button type="button" class="segment-tab" data-settings-section="wb-alerts" role="tab">WB</button>
+          <button type="button" class="segment-tab" data-settings-section="ui" role="tab">Интерфейс</button>
+          <button type="button" class="segment-tab" data-settings-section="users" id="settings-seg-users" role="tab">Пользователи</button>
+          <button type="button" class="segment-tab" data-settings-section="prompts" role="tab">Промпты</button>
         </div>
 
         <div id="settings-section-connection" class="settings-section form-card">
@@ -1154,17 +1156,17 @@
             <div class="form-hint">Только этот chat_id может управлять. Несколько ID через запятую. Бот должен быть добавлен в чат.</div>
           </div>
           <div class="settings-toggle-list">
-            <label class="toggle-row"><span>Управление через Telegram <em class="toggle-hint">long polling</em></span><input type="checkbox" class="toggle-input" id="setting-telegram_agent_enabled"><span class="toggle-track" aria-hidden="true"></span></label>
+            <div class="toggle-row"><span class="toggle-label">Управление через Telegram <em class="toggle-hint">long polling</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-telegram_agent_enabled"><span class="switch-track"></span></label></div>
           </div>
 
           <h3 class="settings-subhead">Что отправлять</h3>
           <div class="settings-toggle-list">
-            <label class="toggle-row"><span>Отзывы 1–3★ и упаковка <em class="toggle-hint">мгновенно</em></span><input type="checkbox" class="toggle-input" id="setting-telegram_enabled"><span class="toggle-track" aria-hidden="true"></span></label>
-            <label class="toggle-row"><span>Ошибки в карточках <em class="toggle-hint">мгновенно</em></span><input type="checkbox" class="toggle-input" id="setting-card_check_telegram_enabled" checked><span class="toggle-track" aria-hidden="true"></span></label>
-            <label class="toggle-row"><span>Важные уведомления Ozon <em class="toggle-hint">мгновенно</em></span><input type="checkbox" class="toggle-input" id="setting-ozon_alerts_telegram_enabled" checked><span class="toggle-track" aria-hidden="true"></span></label>
-            <label class="toggle-row"><span>Важные новости WB <em class="toggle-hint">мгновенно</em></span><input type="checkbox" class="toggle-input" id="setting-wb_alerts_telegram_enabled" checked><span class="toggle-track" aria-hidden="true"></span></label>
-            <label class="toggle-row"><span>Периодический сводный отчёт</span><input type="checkbox" class="toggle-input" id="setting-telegram_report_enabled"><span class="toggle-track" aria-hidden="true"></span></label>
-            <label class="toggle-row"><span>Ошибки карточек в отчёте</span><input type="checkbox" class="toggle-input" id="setting-card_check_include_in_periodic_report" checked><span class="toggle-track" aria-hidden="true"></span></label>
+            <div class="toggle-row"><span class="toggle-label">Отзывы 1–3★ и упаковка <em class="toggle-hint">мгновенно</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-telegram_enabled"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Ошибки в карточках <em class="toggle-hint">мгновенно</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-card_check_telegram_enabled" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Важные уведомления Ozon <em class="toggle-hint">мгновенно</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-ozon_alerts_telegram_enabled" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Важные новости WB <em class="toggle-hint">мгновенно</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_alerts_telegram_enabled" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Периодический сводный отчёт</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-telegram_report_enabled"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Ошибки карточек в отчёте</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-card_check_include_in_periodic_report" checked><span class="switch-track"></span></label></div>
           </div>
           <div class="form-group">
             <label>Период отчёта</label>
@@ -1202,12 +1204,12 @@
         <div id="settings-section-ui" class="settings-section form-card" hidden>
           <h2>Интерфейс</h2>
           <div class="settings-toggle-list">
-            <label class="toggle-row"><span>Компактный режим</span><input type="checkbox" class="toggle-input" id="ui-compact"><span class="toggle-track" aria-hidden="true"></span></label>
-            <label class="toggle-row"><span>Приглушить фон</span><input type="checkbox" class="toggle-input" id="ui-dim-bg"><span class="toggle-track" aria-hidden="true"></span></label>
-            <label class="toggle-row"><span>Уменьшить анимации</span><input type="checkbox" class="toggle-input" id="ui-reduce-motion"><span class="toggle-track" aria-hidden="true"></span></label>
-            <label class="toggle-row"><span>Движение фона</span><input type="checkbox" class="toggle-input" id="ui-bg-motion"><span class="toggle-track" aria-hidden="true"></span></label>
-            <label class="toggle-row toggle-row-prominent"><span>Тёмная тема</span><input type="checkbox" class="toggle-input" id="theme-dark"><span class="toggle-track" aria-hidden="true"></span></label>
-            <label class="toggle-row"><span>Подтверждать удаления</span><input type="checkbox" class="toggle-input" id="ui-confirm-danger"><span class="toggle-track" aria-hidden="true"></span></label>
+            <div class="toggle-row"><span class="toggle-label">Компактный режим</span><label class="switch"><input type="checkbox" class="toggle-input" id="ui-compact"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Приглушить фон</span><label class="switch"><input type="checkbox" class="toggle-input" id="ui-dim-bg"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Уменьшить анимации</span><label class="switch"><input type="checkbox" class="toggle-input" id="ui-reduce-motion"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Движение фона</span><label class="switch"><input type="checkbox" class="toggle-input" id="ui-bg-motion"><span class="switch-track"></span></label></div>
+            <div class="toggle-row toggle-row-prominent"><span class="toggle-label">Тёмная тема</span><label class="switch"><input type="checkbox" class="toggle-input" id="theme-dark"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Подтверждать удаления</span><label class="switch"><input type="checkbox" class="toggle-input" id="ui-confirm-danger"><span class="switch-track"></span></label></div>
           </div>
           <div class="form-group settings-ui-toast">
             <label>Длительность уведомлений</label>
@@ -1242,7 +1244,7 @@
           <h2>Проверка ошибок в карточке</h2>
           <p class="form-hint settings-lead">При генерации ответа (вручную и в автозапуске) ИИ одним запросом формирует ответ и проверяет, нет ли в тексте покупателя признаков ошибки в карточке товара. Уведомления в Telegram — в разделе <button type="button" class="link-btn" data-settings-section="telegram">Telegram</button>.</p>
           <div class="settings-toggle-list">
-            <label class="toggle-row toggle-row-prominent"><span>Включить проверку карточки</span><input type="checkbox" class="toggle-input" id="setting-card_check_enabled" checked><span class="toggle-track" aria-hidden="true"></span></label>
+            <div class="toggle-row toggle-row-prominent"><span class="toggle-label">Включить проверку карточки</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-card_check_enabled" checked><span class="switch-track"></span></label></div>
           </div>
           <div class="settings-actions">
             <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
@@ -1253,7 +1255,7 @@
           <h2>Важные уведомления Ozon</h2>
           <p class="form-hint settings-lead">Сканирует чаты «Поддержка и новости» Ozon (штрафы, ИС, блокировки). ИИ анализирует сообщения с выбранной даты. Отправка в Telegram — в разделе <button type="button" class="link-btn" data-settings-section="telegram">Telegram</button>.</p>
           <div class="settings-toggle-list">
-            <label class="toggle-row toggle-row-prominent"><span>Включить проверку уведомлений</span><input type="checkbox" class="toggle-input" id="setting-ozon_alerts_enabled"><span class="toggle-track" aria-hidden="true"></span></label>
+            <div class="toggle-row toggle-row-prominent"><span class="toggle-label">Включить проверку уведомлений</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-ozon_alerts_enabled"><span class="switch-track"></span></label></div>
           </div>
           <div class="form-group">
             <label>Проверять сообщения с даты</label>
@@ -1270,13 +1272,14 @@
             <button type="button" class="btn btn-secondary" id="btn-ozon-alerts-scan-now">Проверить чаты</button>
             <button type="button" class="btn btn-secondary" id="btn-ozon-alerts-rescan-now" title="Сбросить пометки «не важно»">Пересканировать</button>
           </div>
+          <div class="progress-container" id="ozon-alerts-scan-progress" aria-live="polite" hidden></div>
         </div>
 
         <div id="settings-section-wb-alerts" class="settings-section form-card" hidden>
           <h2>Уведомления Wildberries</h2>
           <p class="form-hint settings-lead">Загружает новости портала продавца WB (common-api). Автоматически скрывает шум: новые заказы и уведомления о скорой отмене. ИИ отбирает важные новости; отправка в Telegram — в разделе <button type="button" class="link-btn" data-settings-section="telegram">Telegram</button>. Промпт — в <button type="button" class="link-btn" data-settings-section="prompts">Промпты</button> (группа «Уведомления WB»).</p>
           <div class="settings-toggle-list">
-            <label class="toggle-row toggle-row-prominent"><span>Включить загрузку уведомлений WB</span><input type="checkbox" class="toggle-input" id="setting-wb_alerts_enabled"><span class="toggle-track" aria-hidden="true"></span></label>
+            <div class="toggle-row toggle-row-prominent"><span class="toggle-label">Включить загрузку уведомлений WB</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_alerts_enabled"><span class="switch-track"></span></label></div>
           </div>
           <div class="form-group">
             <label>Рассматривать новости с даты</label>
@@ -1341,6 +1344,7 @@
           </select>
         </div>
       </div>
+      <div class="progress-container" id="ozon-alerts-panel-scan-progress" aria-live="polite" hidden></div>
       <div id="ozon-alerts-wrap" class="ops-log-table-wrap"></div>
     </section>
 
@@ -1606,7 +1610,7 @@
           <input type="text" name="client_id">
         </div>
         <div class="form-group">
-          <label class="toggle-row"><span>Активен</span><input type="checkbox" class="toggle-input" name="active" checked><span class="toggle-track" aria-hidden="true"></span></label>
+          <div class="toggle-row"><span class="toggle-label">Активен</span><label class="switch"><input type="checkbox" class="toggle-input" name="active" checked><span class="switch-track"></span></label></div>
         </div>
         <div class="modal-actions">
           <button type="submit" class="btn btn-primary">Сохранить</button>
@@ -1617,7 +1621,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=76"></script>
-  <script src="/static/card_links_master.js?v=6"></script>
+  <script src="/static/app.js?v=79"></script>
+  <script src="/static/card_links_master.js?v=8"></script>
 </body>
 </html>

@@ -279,6 +279,7 @@ async def _send_wb_alert_telegram(
     db: Database,
     *,
     alert_id: int,
+    news_id: int,
     store_name: str,
     news_date: str,
     news_types: str,
@@ -287,6 +288,9 @@ async def _send_wb_alert_telegram(
 ) -> bool:
     if not wb_alerts_telegram_enabled(db):
         return False
+    if db.wb_portal_news_telegram_already_sent(news_id, exclude_alert_id=alert_id):
+        db.mark_wb_portal_alert_telegram_sent(alert_id)
+        return True
     token = (db.get_setting("telegram_bot_token") or "").strip()
     chat_tg = resolve_telegram_chat_id(db, "wb_alerts")
     if not token or not chat_tg:
@@ -325,6 +329,7 @@ async def flush_pending_wb_alert_telegrams(
         if await _send_wb_alert_telegram(
             db,
             alert_id=int(row["id"]),
+            news_id=int(row.get("news_id") or 0),
             store_name=store_name,
             news_date=str(row.get("news_date") or ""),
             news_types=str(row.get("types_label") or ""),
@@ -348,7 +353,7 @@ async def maybe_record_wb_alert(
     types_label: str,
     store_name: str,
 ) -> Optional[int]:
-    if db.has_wb_portal_alert(store_id, news_id):
+    if db.has_wb_portal_news_id(news_id):
         return None
     alert_id = db.add_wb_portal_alert(
         store_id=store_id,
@@ -366,6 +371,7 @@ async def maybe_record_wb_alert(
         await _send_wb_alert_telegram(
             db,
             alert_id=alert_id,
+            news_id=news_id,
             store_name=store_name,
             news_date=news_date,
             news_types=types_label,
@@ -396,6 +402,7 @@ async def scan_wb_portal_news_for_store(
         "wb_alert_skip_reason": "",
         "wb_alert_ignored_cleared": 0,
         "wb_alert_telegram_resent": 0,
+        "wb_alert_duplicate": 0,
         "wb_alert_from_date": "",
         "wb_alert_from_date_source": "",
     }
@@ -446,7 +453,9 @@ async def scan_wb_portal_news_for_store(
             nid = int(news_id)
         except (TypeError, ValueError):
             continue
-        if db.has_wb_portal_alert(store.id, nid):
+        if db.has_wb_portal_news_id(nid):
+            if not db.has_wb_portal_alert(store.id, nid):
+                stats["wb_alert_duplicate"] += 1
             continue
 
         header = str(item.get("header") or "")

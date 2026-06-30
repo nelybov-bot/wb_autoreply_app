@@ -108,10 +108,72 @@
     btn.textContent = n >= 2 ? `Объединить выбранные (${n})` : 'Объединить выбранные';
   }
 
+  const CLM_STEPS = ['load', 'brands', 'segment', 'classify', 'plan', 'apply'];
+
+  const CLM_STEP_LABELS = {
+    load: 'Загрузка каталога WB',
+    brands: 'Нормализация брендов',
+    segment: 'Сегментация',
+    classify: 'Тип и модель',
+    plan: 'Построение плана',
+    apply: 'Применение связок',
+  };
+
+  function clmStepIndex(step) {
+    const i = CLM_STEPS.indexOf(step);
+    return i >= 0 ? i + 1 : 1;
+  }
+
+  function showClmStepProgress(step, subLabel) {
+    const container = document.getElementById('card-links-master-progress');
+    const progressApi = window.MarketAIProgress;
+    if (!container || !progressApi || typeof progressApi.showStepProgress !== 'function') return;
+    container.hidden = false;
+    container.classList.add('is-active');
+    const label = subLabel || CLM_STEP_LABELS[step] || step;
+    progressApi.showStepProgress(container, CLM_STEPS.length, clmStepIndex(step), label);
+  }
+
+  function hideClmStepProgress() {
+    const container = document.getElementById('card-links-master-progress');
+    if (!container) return;
+    container.innerHTML = '';
+    container.hidden = true;
+    container.classList.remove('is-active');
+  }
+
+  function setClmStepsBusy(busy) {
+    document.querySelectorAll('.clm-step').forEach((btn) => {
+      btn.disabled = !!busy;
+    });
+    const applyBtn = document.getElementById('btn-clm-apply-selected');
+    if (applyBtn) applyBtn.disabled = !!busy;
+  }
+
+  function syncMasterStepper(stepsData) {
+    const steps = stepsData || {};
+    let activeSet = false;
+    document.querySelectorAll('.clm-step').forEach((btn) => {
+      const key = btn.getAttribute('data-clm-step');
+      const done = Boolean(steps[key]?.ok);
+      btn.classList.toggle('done', done);
+      if (!activeSet && !done) {
+        btn.classList.add('active');
+        activeSet = true;
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+    if (!activeSet) {
+      document.querySelector('.clm-step[data-clm-step="apply"]')?.classList.add('active');
+    }
+  }
+
   async function refreshStatus() {
     const sid = storeId();
     if (!sid) {
       setStats('Выберите магазин WB.');
+      syncMasterStepper({});
       return null;
     }
     const data = await api(`/api/card-links/master/${sid}/status`);
@@ -132,6 +194,7 @@
     }
     setStats(stats);
     setLog((data.state && data.state.log) || []);
+    syncMasterStepper((data.state && data.state.steps) || {});
     return data;
   }
 
@@ -250,17 +313,24 @@
     return msg;
   }
 
-  async function pollTask(taskId, onDone) {
+  async function pollTask(taskId, step, onDone) {
     clearInterval(pollTimer);
+    showClmStepProgress(step);
+    setClmStepsBusy(true);
     pollTimer = setInterval(async () => {
       try {
         const t = await api(`/api/tasks/${taskId}`);
         if (t.status === 'running') {
           const p = t.progress || [0, 1];
-          setStats(t.detail || `Выполняется… ${p[0]}/${p[1]}`);
+          const detail = t.detail || `Выполняется… ${p[0]}/${p[1]}`;
+          setStats(detail);
+          showClmStepProgress(step, detail);
           return;
         }
         clearInterval(pollTimer);
+        pollTimer = null;
+        setClmStepsBusy(false);
+        hideClmStepProgress();
         if (t.status === 'done') {
           await refreshStatus();
           await loadBundles();
@@ -276,6 +346,9 @@
         }
       } catch (e) {
         clearInterval(pollTimer);
+        pollTimer = null;
+        setClmStepsBusy(false);
+        hideClmStepProgress();
         onDone(e.message || String(e));
       }
     }, 1200);
@@ -340,6 +413,8 @@
       } else {
         setStats('Запуск…');
       }
+      showClmStepProgress(step);
+      setClmStepsBusy(true);
       const body = { max_pages: step === 'load' ? masterMaxPages() : 100, ...extraBody };
       if (step === 'apply') {
         body.bundle_ids = selected.size ? [...selected] : [];
@@ -348,7 +423,7 @@
         method: 'POST',
         body: JSON.stringify(body),
       });
-      pollTask(res.task_id, (err, result) => {
+      pollTask(res.task_id, step, (err, result) => {
         if (err) {
           alert(err);
           return;
@@ -361,6 +436,8 @@
         }
       });
     } catch (e) {
+      setClmStepsBusy(false);
+      hideClmStepProgress();
       alert(e.message || String(e));
     }
   }

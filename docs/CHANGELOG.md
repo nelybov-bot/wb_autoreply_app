@@ -5,6 +5,70 @@
 
 ---
 
+## 2026-06-30 — Docs: правило прогресса для долгих UI-операций
+
+- AI_CONTEXT.md — канон: три компонента, fakeProgress, CSS, чеклист
+- WORKFLOW.md §3a, ARCHITECTURE.md (Frontend) — ссылки на канон
+
+## 2026-06-30 — UI: кольцевой прогресс автозапуска и Ozon-алертов (шаг 4.5)
+
+- `#auto-run-progress` + `watchAutoRunProgress` — кольцо с этапом и магазином из `/auto-schedule/status`
+- `#ozon-alerts-scan-progress` / `#ozon-alerts-panel-scan-progress` — скан и перескан чатов Ozon
+- Хелперы `startRingProgressUI` / `endRingProgressUI`
+
+## 2026-06-30 — UI: прогресс мастера связок (шаг 4.4)
+
+- `#card-links-master-progress` + `showStepProgress` в `pollTask` / `runStep` (шаги 1–6)
+- Блокировка кнопок шагов на время задачи; детали из `task.detail` в подписи
+
+## 2026-06-30 — UI: прогресс акций Ozon (шаг 4.3)
+
+- `#ozon-actions-loading` → `.progress-container`; `startLinearProgress` для load/sync/remove/auto-remove
+- После sync/remove — обновление списка отдельным прогрессом (без затирания индикатора)
+
+## 2026-06-30 — UI: прогресс чатов WB/Ozon (шаг 4.2)
+
+- `startLinearProgress` / `endLinearProgress` для списка, переписки, mass-send
+
+## 2026-06-30 — UI: прогресс отзывов и вопросов (шаг 4.1)
+
+- `pollItemsTask` + `showProgress` для load/generate/send/template
+
+## 2026-06-30 — UI: компоненты прогресса (шаг 2)
+
+- `showProgress`, `showStepProgress`, `showRingProgress`, `fakeProgress` в `app.js`
+- CSS progress v2 в `styles.css`; экспорт `window.MarketAIProgress`
+
+## 2026-06-30 — UI: разделы 4–7 (связки, автозапуск, магазины, настройки)
+
+- Степпер мастера связок `.steps-row` / `.step-item` с прогрессом по API
+- Единый `.switch` для всех toggle (автозапуск, настройки, магазины)
+- Карточки магазинов: `.store-card-meta`, `.store-card-actions`, `.btn-danger` заливка
+- Вкладки настроек: `.segment-tab`, контраст неактивных
+
+## 2026-06-30 — UI: вкладки «Связки карточек»
+
+- Единый сегмент-контрол `.view-tabs` / `.view-tab` вместо `.segmented`
+
+## 2026-06-30 — UI: пустое состояние «Отзывы» и «Вопросы»
+
+- Иконка `ti-inbox`, компактный flex-layout `.empty-state`, обычная `btn-primary`
+
+## 2026-06-30 — UI: панель фильтров «Отзывы» и «Вопросы»
+
+- Единая `.panel-toolbar` вместо двух блоков; `.toolbar-field` + `.toolbar-actions`
+- Убран `.toolbar-divider`; кнопка «Загрузить новые» только в тулбаре
+
+## 2026-06-18 — Автозапуск: выбор магазинов по площадкам
+
+- `wb_store_ids`, `yam_store_ids`, `ozon_store_ids`, `ozon_actions_store_ids` в `auto_schedule_json`
+- UI в автозапуске и в настройках акций Ozon
+
+## 2026-06-18 — WB: дедупликация новостей между ЛК
+
+- Один `news_id` — одна обработка ИИ, одна запись, одно сообщение в Telegram
+- Счётчик `wb_alert_duplicate` при сканировании второго и далее магазина
+
 ## 2026-06-18 — WB: ИИ и Telegram для новостей портала
 
 - Отдельный промпт `wb_important_alert` (Настройки → Промпты)
