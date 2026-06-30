@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-06-30 — Fix: ФСА timeout vs «не найден»
+
+- Статус `fsa_error` при сетевых ошибках (не `fsa_not_found`)
+- Проверка доступности ФСА один раз за пакет (без повторных таймаутов)
+- `FSA_PROXY_URL` / `HTTP_PROXY` для доступа с Render
+- Пояснение в UI Ozon
+
 ## 2026-06-30 — Fix: прогресс-бары v2 не отображались
 
 - `showProgress` / `showStepProgress`: класс `visible` на `.progress-wrap--v2`

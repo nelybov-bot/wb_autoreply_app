@@ -26,6 +26,7 @@ class OzonCertRowResult:
     status: str = "pending"
     message: str = ""
     fsa_found: bool = False
+    error_kind: str = ""
     pdf_source: str = ""
     certificate_id: int = 0
 
@@ -136,6 +137,16 @@ async def _create_ozon_certificate(
     return 0, str(data)[:300]
 
 
+def _fsa_row_status(fsa: Optional[FsaLookupResult], *, preview_if_found: bool = False) -> str:
+    if not fsa:
+        return "fsa_not_found"
+    if fsa.error:
+        return "fsa_error"
+    if fsa.found:
+        return "preview" if preview_if_found else "ok"
+    return "fsa_not_found"
+
+
 async def lookup_fsa_for_rows(
     rows: List[CertInputRow],
     *,
@@ -181,9 +192,11 @@ async def apply_ozon_certificates_for_store(
             doc_type=doc_type,
         )
 
-        if not fsa or not fsa.found:
-            res.status = "fsa_not_found"
+        if not fsa or fsa.error or not fsa.found:
+            res.status = _fsa_row_status(fsa)
             res.message = (fsa.message if fsa else "") or "Не найдено в ФСА"
+            if fsa:
+                res.error_kind = fsa.error_kind or ""
             results.append(res)
             continue
 
@@ -323,8 +336,9 @@ async def apply_ozon_certificates_multi_store(
                 "vendor_code": row.vendor_code,
                 "doc_number": row.doc_number,
                 "doc_type": detect_doc_type(row.doc_number),
-                "status": "preview" if fsa and fsa.found else "fsa_not_found",
+                "status": _fsa_row_status(fsa, preview_if_found=True),
                 "fsa_found": bool(fsa and fsa.found),
+                "error_kind": (fsa.error_kind if fsa else "") or "",
                 "pdf_source": (fsa.pdf_source if fsa else "") or "",
                 "message": (fsa.message if fsa else "Не найдено в ФСА"),
                 "product_names": (fsa.record.product_names[:5] if fsa and fsa.record else []),
@@ -389,6 +403,8 @@ def fsa_results_to_api(fsa_by_number: Dict[str, FsaLookupResult]) -> List[dict]:
             "doc_number": num,
             "doc_type": fsa.doc_type,
             "found": fsa.found,
+            "error": fsa.error,
+            "error_kind": fsa.error_kind,
             "message": fsa.message,
             "pdf_source": fsa.pdf_source,
             "pdf_size": len(fsa.pdf_bytes) if fsa.pdf_bytes else 0,

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -21,6 +22,22 @@ FSA_LOGIN_PASS = "hrgesf7HDR67Bd"
 
 # idStatus 6 = действует (по опыту парсеров реестра)
 _FSA_ACTIVE_STATUS = {6, "6", "ACTIVE", "Действует"}
+
+_NETWORK_ERRORS: Tuple[type, ...] = (
+    asyncio.TimeoutError,
+    ConnectionError,
+    OSError,
+)
+try:
+    from aiohttp import ClientConnectorError, ClientOSError, ServerDisconnectedError
+
+    _NETWORK_ERRORS = _NETWORK_ERRORS + (
+        ClientConnectorError,
+        ClientOSError,
+        ServerDisconnectedError,
+    )
+except ImportError:
+    pass
 
 
 @dataclass
@@ -54,6 +71,40 @@ class FsaLookupResult:
     pdf_bytes: bytes = b""
     pdf_source: str = ""  # registry | generated | none
     message: str = ""
+    error: bool = False
+    error_kind: str = ""  # network | api
+
+
+def _fsa_proxy_url() -> Optional[str]:
+    for key in ("FSA_PROXY_URL", "HTTPS_PROXY", "HTTP_PROXY"):
+        val = str(os.environ.get(key) or "").strip()
+        if val:
+            return val
+    return None
+
+
+def _is_network_error(exc: BaseException) -> bool:
+    if isinstance(exc, _NETWORK_ERRORS):
+        return True
+    msg = str(exc).casefold()
+    return any(x in msg for x in ("timeout", "connection", "cannot connect", "network is unreachable"))
+
+
+def _fsa_user_error(exc: BaseException) -> Tuple[str, str]:
+    """(error_kind, user_message)."""
+    if isinstance(exc, asyncio.TimeoutError) or "timeout" in str(exc).casefold():
+        return (
+            "network",
+            "Нет доступа к pub.fsa.gov.ru (таймаут). Реестр ФСА доступен из сети РФ. "
+            "Запустите приложение локально или задайте FSA_PROXY_URL (HTTP-прокси в России) на сервере.",
+        )
+    if _is_network_error(exc):
+        return (
+            "network",
+            f"Нет связи с реестром ФСА: {str(exc)[:120]}. "
+            "Проверьте сеть или задайте FSA_PROXY_URL на сервере.",
+        )
+    return "api", f"Ошибка ФСА: {str(exc)[:200]}"
 
 
 def _norm_number(num: str) -> str:
@@ -158,11 +209,12 @@ def _filter_payload(number: str, *, sort_column: str) -> dict:
 
 
 class FsaRegistryClient:
-    def __init__(self, *, timeout_s: float = 45.0) -> None:
+    def __init__(self, *, timeout_s: float = 45.0, proxy_url: Optional[str] = None) -> None:
         self.timeout = aiohttp.ClientTimeout(connect=20, total=timeout_s)
         self._limiter = RateLimiter(0.7)
         self._token: str = ""
         self._token_ts: float = 0.0
+        self._proxy = proxy_url if proxy_url is not None else _fsa_proxy_url()
 
     def _headers(self, *, referer: str) -> Dict[str, str]:
         h = {
@@ -191,6 +243,7 @@ class FsaRegistryClient:
                         "Origin": FSA_BASE,
                         "User-Agent": USER_AGENT,
                     },
+                    proxy=self._proxy,
                 ) as resp:
                     txt = await resp.text()
                     if resp.status >= 400:
@@ -217,6 +270,7 @@ class FsaRegistryClient:
                     f"{FSA_BASE}{path}",
                     json=body,
                     headers=self._headers(referer=referer),
+                    proxy=self._proxy,
                 ) as resp:
                     txt = await resp.text()
                     if resp.status == 401:
@@ -247,6 +301,7 @@ class FsaRegistryClient:
                 async with s.get(
                     f"{FSA_BASE}{path}",
                     headers=self._headers(referer=referer),
+                    proxy=self._proxy,
                 ) as resp:
                     if resp.status >= 400:
                         txt = await resp.text()
@@ -465,21 +520,42 @@ async def lookup_fsa_batch(
     out: Dict[str, FsaLookupResult] = {}
     keys = list(dict.fromkeys(_norm_number(n) for n, _ in items if _norm_number(n)))
     total = max(len(keys), 1)
-    for i, number in enumerate(keys):
-        doc_type = "unknown"
+
+    def _type_for(number: str) -> str:
         for n, t in items:
             if _norm_number(n) == number:
-                doc_type = t
-                break
+                return t
+        return "unknown"
+
+    def _error_result(number: str, doc_type: str, kind: str, message: str) -> FsaLookupResult:
+        return FsaLookupResult(
+            doc_number=number,
+            doc_type=doc_type,
+            found=False,
+            error=True,
+            error_kind=kind,
+            message=message,
+        )
+
+    try:
+        await client._ensure_token()
+    except Exception as e:
+        kind, msg = _fsa_user_error(e)
+        log.warning("FSA probe failed (%s): %s", kind, e)
+        for i, number in enumerate(keys):
+            out[number] = _error_result(number, _type_for(number), kind, msg)
+            if progress_cb:
+                progress_cb(i + 1, total, f"ФСА: {number[:40]}")
+        return out
+
+    for i, number in enumerate(keys):
+        doc_type = _type_for(number)
         try:
             out[number] = await client.lookup(number, doc_type=doc_type, fetch_pdf=fetch_pdf)
         except Exception as e:
-            log.exception("FSA lookup %s: %s", number, e)
-            out[number] = FsaLookupResult(
-                doc_number=number,
-                doc_type=doc_type,
-                message=f"Ошибка ФСА: {str(e)[:200]}",
-            )
+            kind, msg = _fsa_user_error(e)
+            log.warning("FSA lookup %s (%s): %s", number, kind, e)
+            out[number] = _error_result(number, doc_type, kind, msg)
         if progress_cb:
             progress_cb(i + 1, total, f"ФСА: {number[:40]}")
         await asyncio.sleep(0.05)

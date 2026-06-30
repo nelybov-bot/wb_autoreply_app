@@ -6721,6 +6721,19 @@
     }
   }
 
+  function complianceOzonStatusLabel(status) {
+    const labels = {
+      ok: 'готово',
+      preview: 'проверка',
+      fsa_not_found: 'не найден',
+      fsa_error: 'ошибка ФСА',
+      no_pdf: 'нет PDF',
+      not_found: 'товар не найден',
+      error: 'ошибка',
+    };
+    return labels[status] || status;
+  }
+
   function mergeComplianceOzonRowResults(stores) {
     const byOffer = {};
     for (const st of (stores || [])) {
@@ -6734,7 +6747,8 @@
       if (!hit) return row;
       const fsaOk = hit.fsa_found || hit.status === 'preview' || hit.status === 'ok';
       let fsaLabel = '—';
-      if (hit.status === 'fsa_not_found') fsaLabel = 'Не найден';
+      if (hit.status === 'fsa_error') fsaLabel = 'Ошибка';
+      else if (hit.status === 'fsa_not_found') fsaLabel = 'Не найден';
       else if (fsaOk) fsaLabel = 'Найден';
       let pdfLabel = '—';
       if (hit.pdf_source === 'registry_file') pdfLabel = 'Из реестра';
@@ -6765,6 +6779,12 @@
     if (result.fsa_checked != null) {
       parts.push(`<p class="form-hint">Проверено в ФСА уникальных номеров: <strong>${result.fsa_checked}</strong></p>`);
     }
+    const allRows = (result.stores || []).flatMap((st) => st.rows || []);
+    const networkErrors = allRows.filter((r) => r.status === 'fsa_error' && r.error_kind === 'network');
+    if (networkErrors.length) {
+      const hint = networkErrors[0].message || 'Нет доступа к реестру ФСА с этого сервера.';
+      parts.push(`<p class="text-error"><strong>Реестр ФСА недоступен с сервера.</strong> ${escapeHtml(hint)}</p>`);
+    }
     const stores = result.stores || [];
     for (const st of stores) {
       const title = escapeHtml(st.store_name || st.store_id || 'Магазин');
@@ -6781,7 +6801,7 @@
       if (problems.length) {
         parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>Статус</th><th>Сообщение</th></tr></thead><tbody>');
         for (const r of problems.slice(0, 80)) {
-          parts.push(`<tr><td>${escapeHtml(r.vendor_code)}</td><td>${escapeHtml(r.status)}</td><td>${escapeHtml(r.message || '')}</td></tr>`);
+          parts.push(`<tr><td>${escapeHtml(r.vendor_code)}</td><td>${escapeHtml(complianceOzonStatusLabel(r.status))}</td><td>${escapeHtml(r.message || '')}</td></tr>`);
         }
         if (problems.length > 80) parts.push(`<tr><td colspan="3">…ещё ${problems.length - 80}</td></tr>`);
         parts.push('</tbody></table>');
