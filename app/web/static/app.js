@@ -6780,7 +6780,7 @@
       parts.push(`<p class="form-hint">Проверено в ФСА уникальных номеров: <strong>${result.fsa_checked}</strong></p>`);
     }
     const allRows = (result.stores || []).flatMap((st) => st.rows || []);
-    const networkErrors = allRows.filter((r) => r.status === 'fsa_error' && r.error_kind === 'network');
+    const networkErrors = allRows.filter((r) => r.status === 'fsa_error' && (r.error_kind === 'network' || r.error_kind === 'config'));
     if (networkErrors.length) {
       const hint = networkErrors[0].message || 'Нет доступа к реестру ФСА с этого сервера.';
       parts.push(`<p class="text-error"><strong>Реестр ФСА недоступен с сервера.</strong> ${escapeHtml(hint)}</p>`);
@@ -6879,9 +6879,28 @@
     }
   }
 
+  async function refreshComplianceFsaStatus() {
+    const el = document.getElementById('compliance-fsa-status');
+    if (!el || complianceMp !== 'ozon') return;
+    try {
+      const st = await api('/compliance/fsa-status');
+      if (st.reachable) {
+        el.hidden = true;
+        el.innerHTML = '';
+        return;
+      }
+      el.hidden = false;
+      el.className = 'form-hint compliance-fsa-status text-error';
+      el.innerHTML = escapeHtml(st.message || 'Реестр ФСА недоступен с этого сервера.');
+    } catch (_) {
+      el.hidden = true;
+    }
+  }
+
   function loadCompliancePanel() {
     syncComplianceMpUI();
     renderComplianceStoreLists();
+    refreshComplianceFsaStatus();
   }
 
   function wireCompliancePanel() {
@@ -6893,6 +6912,7 @@
         if (mp === complianceMp) return;
         complianceMp = mp;
         syncComplianceMpUI();
+        if (mp === 'ozon') refreshComplianceFsaStatus();
       });
     });
     document.getElementById('btn-compliance-wb-apply')?.addEventListener('click', () => runComplianceWbApply(false));

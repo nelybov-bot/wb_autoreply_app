@@ -4532,6 +4532,14 @@ class OzonCertificatesApplyBody(BaseModel):
     fsa_only: bool = False
 
 
+@app.get("/api/compliance/fsa-status")
+async def api_compliance_fsa_status(_: UserRow = Depends(require_user)):
+    """Диагностика: прокси ФСА и доступность pub.fsa.gov.ru."""
+    from app.core.fsa_registry import check_fsa_access
+
+    return await check_fsa_access()
+
+
 @app.post("/api/compliance/parse")
 def api_compliance_parse(
     body: ComplianceParseBody,
@@ -4781,6 +4789,19 @@ async def _startup_scheduler():
         log.info("Telegram report scheduler started (MSK)")
     start_telegram_agent_task()
     log.info("Telegram agent polling started")
+    try:
+        from app.core.fsa_registry import check_fsa_access, fsa_proxy_configured, fsa_render_needs_proxy
+
+        if fsa_render_needs_proxy():
+            log.error("FSA: на Render не задан FSA_PROXY_URL — реестр ФСА не будет работать")
+        elif fsa_proxy_configured():
+            st = await check_fsa_access()
+            if st.get("reachable"):
+                log.info("FSA: прокси %s, реестр доступен", st.get("proxy_host") or "ok")
+            else:
+                log.warning("FSA: прокси задан (%s), но реестр недоступен: %s", st.get("proxy_host"), st.get("message"))
+    except Exception:
+        log.exception("FSA startup check failed")
 
 
 @app.on_event("shutdown")

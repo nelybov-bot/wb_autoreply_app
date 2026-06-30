@@ -28,7 +28,15 @@
 1. Арендуйте минимальный VPS в России (Timeweb и т.д.).
 2. На VPS: `sudo bash deploy/fsa-proxy/setup_ru_proxy.sh`
 3. В Render → **Environment** → `FSA_PROXY_URL` = строка из вывода скрипта.
-4. Перезапуск сервиса → в UI **Документы → Ozon → Проверить в ФСА**.
+4. Перезапуск сервиса → в UI **Документы → Ozon** — красная подсказка должна исчезнуть.
+
+### Если в логах `Connection timeout to host https://pub.fsa.gov.ru/login`
+
+1. **`FSA_PROXY_URL` не задан** в Render → Environment (самая частая причина).
+2. Сделайте **Manual Deploy** последнего коммита.
+3. Проверьте `PYTHON_VERSION` = `3.10.15` (в логах не должно быть Python 3.14).
+
+Диагностика: `GET /api/compliance/fsa-status` → `reachable: true` если всё ок.
 
 Подробно: [deploy/fsa-proxy/README.md](deploy/fsa-proxy/README.md)
 

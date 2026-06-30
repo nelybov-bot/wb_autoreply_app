@@ -222,6 +222,7 @@ Query-параметры каталога:
 
 | Метод | Путь | Описание |
 |-------|------|----------|
+| GET | `/api/compliance/fsa-status` | Диагностика ФСА: `proxy_configured`, `reachable`, `message` |
 | POST | `/api/compliance/parse` | Общий разбор таблицы. Body: `{ text }` → `{ rows, warnings, count }`; в `rows` также `doc_type`, `doc_type_label` |
 
 ## Сертификаты WB

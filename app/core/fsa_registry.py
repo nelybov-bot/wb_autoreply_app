@@ -83,6 +83,65 @@ def _fsa_proxy_url() -> Optional[str]:
     return None
 
 
+def fsa_proxy_configured() -> bool:
+    return bool(_fsa_proxy_url())
+
+
+def fsa_hosted_on_render() -> bool:
+    return bool(os.environ.get("RENDER") or os.environ.get("RENDER_SERVICE_ID"))
+
+
+def fsa_render_needs_proxy() -> bool:
+    return fsa_hosted_on_render() and not fsa_proxy_configured()
+
+
+_RENDER_FSA_MSG = (
+    "На Render реестр ФСА недоступен без прокси. "
+    "В Environment добавьте FSA_PROXY_URL (HTTP-прокси в РФ). "
+    "Инструкция: deploy/fsa-proxy/README.md"
+)
+
+
+def _proxy_host_label(proxy_url: Optional[str]) -> str:
+    if not proxy_url:
+        return ""
+    try:
+        from urllib.parse import urlparse
+
+        host = urlparse(proxy_url).hostname or ""
+        return host[:80]
+    except Exception:
+        return ""
+
+
+async def check_fsa_access() -> Dict[str, Any]:
+    """Проверка конфигурации и доступности pub.fsa.gov.ru (для UI/диагностики)."""
+    proxy = _fsa_proxy_url()
+    out: Dict[str, Any] = {
+        "render": fsa_hosted_on_render(),
+        "proxy_configured": bool(proxy),
+        "proxy_host": _proxy_host_label(proxy),
+        "reachable": False,
+        "message": "",
+        "error_kind": "",
+    }
+    if fsa_render_needs_proxy():
+        out["message"] = _RENDER_FSA_MSG
+        out["error_kind"] = "config"
+        return out
+    try:
+        client = FsaRegistryClient(timeout_s=25.0)
+        await client._ensure_token()
+        out["reachable"] = True
+        out["message"] = "Связь с pub.fsa.gov.ru установлена"
+        return out
+    except Exception as e:
+        kind, msg = _fsa_user_error(e)
+        out["message"] = msg
+        out["error_kind"] = kind
+        return out
+
+
 def _is_network_error(exc: BaseException) -> bool:
     if isinstance(exc, _NETWORK_ERRORS):
         return True
@@ -536,6 +595,14 @@ async def lookup_fsa_batch(
             error_kind=kind,
             message=message,
         )
+
+    if fsa_render_needs_proxy():
+        log.error("FSA: %s", _RENDER_FSA_MSG)
+        for i, number in enumerate(keys):
+            out[number] = _error_result(number, _type_for(number), "config", _RENDER_FSA_MSG)
+            if progress_cb:
+                progress_cb(i + 1, total, f"ФСА: {number[:40]}")
+        return out
 
     try:
         await client._ensure_token()

@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-06-30 — FSA: fast-fail на Render без прокси
+
+- Без `FSA_PROXY_URL` на Render — мгновенная ошибка, без минутных таймаутов
+- `GET /api/compliance/fsa-status`, предупреждение в UI Ozon
+- Startup-лог про FSA_PROXY_URL
+
 ## 2026-06-30 — Render + прокси ФСА (инструкция)
 
 - `deploy/fsa-proxy/setup_ru_proxy.sh` — squid на VPS в РФ
