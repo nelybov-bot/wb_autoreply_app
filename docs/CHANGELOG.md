@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-06-30 — Fix: WB cards/update 400 (payload + per-card errors)
+
+- Не добавлять русские имена характеристик в корень JSON
+- Сохранять все characteristics и sizes из карточки
+- Отправка по одной карточке + текст ошибки WB в отчёте
+
 ## 2026-06-30 — Fix: WB certificates `_norm_vendor` import
 
 - `wb_certificates.py` — импорт `_norm_vendor` из `compliance_docs` (ошибка при проверке магазина)

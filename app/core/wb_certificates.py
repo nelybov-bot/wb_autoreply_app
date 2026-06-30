@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .compliance_docs import (
     CertInputRow,
@@ -98,21 +99,41 @@ def _map_fields_from_charcs(charcs: List[dict]) -> CertFieldMap:
         name = _charc_name(ch)
         named = bool(ch.get("existNamedField"))
         if _match_charc(ch, _RE_DOC_NUMBER):
-            if named and name:
-                m.number_named = name
-            elif cid:
+            if cid:
                 m.number_id = cid
+            elif named and name:
+                m.number_named = name
         elif _match_charc(ch, _RE_REG_DATE):
-            if named and name:
-                m.reg_date_named = name
-            elif cid:
+            if cid:
                 m.reg_date_id = cid
+            elif named and name:
+                m.reg_date_named = name
         elif _match_charc(ch, _RE_VALID_UNTIL):
-            if named and name:
-                m.valid_until_named = name
-            elif cid:
+            if cid:
                 m.valid_until_id = cid
+            elif named and name:
+                m.valid_until_named = name
+    _resolve_named_field_ids(m, charcs)
     return m
+
+
+def _resolve_named_field_ids(fmap: CertFieldMap, charcs: List[dict]) -> None:
+    """Сопоставляет именованные поля схемы с id (для characteristics, не в корень JSON)."""
+    named_map = (
+        (fmap.number_named, "number_id"),
+        (fmap.reg_date_named, "reg_date_id"),
+        (fmap.valid_until_named, "valid_until_id"),
+    )
+    for named, attr in named_map:
+        if not named or getattr(fmap, attr):
+            continue
+        target = str(named).strip().casefold()
+        for ch in charcs:
+            if _charc_name(ch).casefold() == target:
+                cid = _charc_id(ch)
+                if cid:
+                    setattr(fmap, attr, cid)
+                    break
 
 
 def _map_fields_from_card(card: dict) -> CertFieldMap:
@@ -147,8 +168,55 @@ def _value_nonempty(val: Any) -> bool:
 
 def _char_value(val: str, existing: Any) -> Any:
     if isinstance(existing, list):
-        return [val] if val else []
+        return [val] if val else (existing if existing is not None else [])
     return val
+
+
+def _format_wb_error(e: HttpStatusError) -> str:
+    body = (e.body or "").strip()
+    if not body:
+        return f"Ошибка WB {e.status}"
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return f"Ошибка WB {e.status}: {body[:350]}"
+    if isinstance(data, dict):
+        parts: List[str] = []
+        for key in ("errorText", "message", "detail", "title"):
+            v = data.get(key)
+            if v:
+                parts.append(str(v))
+        extra = data.get("additionalErrors") or data.get("errors")
+        if isinstance(extra, list):
+            parts.extend(str(x) for x in extra[:4])
+        elif extra:
+            parts.append(str(extra))
+        if parts:
+            return f"Ошибка WB {e.status}: {'; '.join(parts)}"[:400]
+    return f"Ошибка WB {e.status}: {body[:350]}"
+
+
+def _normalize_sizes(card: dict) -> List[dict]:
+    out: List[dict] = []
+    for sz in card.get("sizes") or []:
+        if not isinstance(sz, dict):
+            continue
+        item: Dict[str, Any] = {}
+        if sz.get("chrtID") is not None:
+            try:
+                item["chrtID"] = int(sz["chrtID"])
+            except (TypeError, ValueError):
+                pass
+        if sz.get("techSize") is not None:
+            item["techSize"] = str(sz["techSize"])
+        if sz.get("wbSize") is not None:
+            item["wbSize"] = str(sz["wbSize"])
+        skus = [str(x).strip() for x in (sz.get("skus") or []) if str(x).strip()]
+        if skus:
+            item["skus"] = skus
+        if item.get("chrtID") or item.get("skus"):
+            out.append(item)
+    return out
 
 
 def build_card_update_payload(card: dict, row: CertInputRow, fmap: CertFieldMap) -> dict:
@@ -165,10 +233,10 @@ def build_card_update_payload(card: dict, row: CertInputRow, fmap: CertFieldMap)
         payload["kizMarked"] = bool(card.get("kizMarked"))
 
     dims = card.get("dimensions")
-    if isinstance(dims, dict):
+    if isinstance(dims, dict) and dims:
         payload["dimensions"] = {
             k: dims[k]
-            for k in ("length", "width", "height", "weightBrutto")
+            for k in ("length", "width", "height", "weightBrutto", "isValid")
             if dims.get(k) is not None
         }
 
@@ -188,8 +256,7 @@ def build_card_update_payload(card: dict, row: CertInputRow, fmap: CertFieldMap)
         val = ch.get("value")
         if cid in patch_ids and patch_ids[cid]:
             val = _char_value(patch_ids[cid], val)
-        if _value_nonempty(val):
-            chars_out.append({"id": cid, "value": val})
+        chars_out.append({"id": cid, "value": val})
         seen.add(cid)
 
     for cid, pval in patch_ids.items():
@@ -197,36 +264,7 @@ def build_card_update_payload(card: dict, row: CertInputRow, fmap: CertFieldMap)
             chars_out.append({"id": cid, "value": pval})
 
     payload["characteristics"] = chars_out
-
-    if fmap.number_named and row.doc_number:
-        payload[fmap.number_named] = row.doc_number
-    if fmap.reg_date_named and row.reg_date:
-        payload[fmap.reg_date_named] = row.reg_date
-    if fmap.valid_until_named and row.valid_until:
-        payload[fmap.valid_until_named] = row.valid_until
-
-    sizes_out: List[dict] = []
-    for sz in card.get("sizes") or []:
-        if not isinstance(sz, dict):
-            continue
-        item: Dict[str, Any] = {}
-        if sz.get("chrtID") is not None:
-            item["chrtID"] = int(sz["chrtID"])
-        if sz.get("techSize") is not None:
-            item["techSize"] = str(sz["techSize"])
-        if sz.get("wbSize") is not None:
-            item["wbSize"] = str(sz["wbSize"])
-        skus = sz.get("skus") or []
-        if skus:
-            item["skus"] = [str(x) for x in skus if str(x).strip()]
-        if item.get("skus") or item.get("chrtID"):
-            sizes_out.append(item)
-    if not sizes_out:
-        for sz in card.get("sizes") or []:
-            if isinstance(sz, dict) and sz.get("skus"):
-                sizes_out.append({"skus": [str(x) for x in sz["skus"]]})
-                break
-    payload["sizes"] = sizes_out
+    payload["sizes"] = _normalize_sizes(card)
     return payload
 
 
@@ -293,6 +331,7 @@ async def apply_certificates_for_store(
 
     results: List[CertApplyRowResult] = []
     updates: List[dict] = []
+    pending_results: List[CertApplyRowResult] = []
     total = len(rows)
     done = 0
 
@@ -328,34 +367,51 @@ async def apply_certificates_for_store(
             continue
 
         payload = build_card_update_payload(card, row, fmap)
+        if not payload.get("sizes"):
+            results.append(CertApplyRowResult(
+                vendor_code=row.vendor_code,
+                nm_id=nm,
+                status="error",
+                message="В карточке нет размеров (chrtID/skus) для обновления",
+            ))
+            if progress_cb:
+                progress_cb(done, total, f"Нет sizes: {row.vendor_code}")
+            continue
+
         updates.append(payload)
-        results.append(CertApplyRowResult(
+        res_row = CertApplyRowResult(
             vendor_code=row.vendor_code,
             nm_id=nm,
             status="ok" if not dry_run else "preview",
             message="Будет отправлено" if dry_run else "Отправка…",
-        ))
+        )
+        pending_results.append(res_row)
+        results.append(res_row)
         if progress_cb:
             progress_cb(done, total, f"Подготовлено: {row.vendor_code}")
 
     sent = 0
     errors: List[dict] = []
     if not dry_run and updates:
-        batch_size = 30
-        batches = [updates[i : i + batch_size] for i in range(0, len(updates), batch_size)]
-        for bi, batch in enumerate(batches):
+        for i, (payload, res) in enumerate(zip(updates, pending_results)):
             if progress_cb:
-                progress_cb(total, total, f"Отправка на WB: пакет {bi + 1}/{len(batches)}")
+                progress_cb(total, total, f"Отправка на WB: {res.vendor_code} ({i + 1}/{len(updates)})")
             try:
-                await client.update_cards(batch)
-                sent += len(batch)
+                await client.update_cards([payload])
+                sent += 1
+                res.message = "Отправлено"
             except HttpStatusError as e:
-                errors.append({"batch": bi + 1, "status": e.status, "body": (e.body or "")[:500]})
-                for r in results:
-                    if r.status == "ok":
-                        r.status = "error"
-                        r.message = f"Ошибка WB {e.status}"
-            if bi + 1 < len(batches):
+                msg = _format_wb_error(e)
+                errors.append({
+                    "vendor_code": res.vendor_code,
+                    "nm_id": res.nm_id,
+                    "status": e.status,
+                    "body": (e.body or "")[:500],
+                })
+                res.status = "error"
+                res.message = msg
+                log.warning("WB cards/update %s nm=%s: %s", res.vendor_code, res.nm_id, msg)
+            if i + 1 < len(updates):
                 await asyncio.sleep(6.5)
 
     ok_n = sum(1 for r in results if r.status in ("ok", "preview"))
