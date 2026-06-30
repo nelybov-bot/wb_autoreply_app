@@ -108,6 +108,25 @@ class WbContentClient:
                 return [x for x in rows if isinstance(x, dict)]
         return []
 
+    async def get_subject_charcs(self, subject_id: int, *, locale: str = "ru") -> List[dict]:
+        """GET /content/v2/object/charcs/{subjectId} — схема характеристик предмета."""
+        sid = int(subject_id)
+        path = f"/content/v2/object/charcs/{sid}?locale={locale}"
+        data = await self._request("GET", path)
+        if isinstance(data, dict):
+            rows = data.get("data")
+            if isinstance(rows, list):
+                return [x for x in rows if isinstance(x, dict)]
+        if isinstance(data, list):
+            return [x for x in data if isinstance(x, dict)]
+        return []
+
+    async def update_cards(self, cards: List[dict]) -> Any:
+        """POST /content/v2/cards/update — редактирование карточек (полная перезапись полей)."""
+        if not cards:
+            return {}
+        return await self._request_mutate("POST", "/content/v2/cards/update", json_body=cards)
+
     async def list_cards(
         self,
         *,

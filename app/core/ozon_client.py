@@ -680,3 +680,56 @@ class OzonClient:
         )
         return data if isinstance(data, dict) else {}
 
+    async def product_certificate_types(self) -> List[dict]:
+        """GET /v1/product/certificate/types — справочник типов документов."""
+        data = await self._request("GET", "/v1/product/certificate/types")
+        if isinstance(data, dict):
+            res = data.get("result") or data.get("types") or data.get("items")
+            if isinstance(res, list):
+                return [x for x in res if isinstance(x, dict)]
+        if isinstance(data, list):
+            return [x for x in data if isinstance(x, dict)]
+        return []
+
+    async def product_certificate_list(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> List[dict]:
+        """POST /v1/product/certificate/list — документы в кабинете Ozon."""
+        body = {
+            "page": max(int(page), 1),
+            "page_size": min(max(int(page_size), 1), 1000),
+        }
+        data = await self._request("POST", "/v1/product/certificate/list", json_body=body)
+        if not isinstance(data, dict):
+            return []
+        res = data.get("result") or data
+        if isinstance(res, dict):
+            certs = res.get("certificates") or res.get("items") or []
+        else:
+            certs = res if isinstance(res, list) else []
+        return [x for x in (certs or []) if isinstance(x, dict)]
+
+    async def product_certificate_create(self, payload: dict) -> dict:
+        """POST /v1/product/certificate/create."""
+        data = await self._request("POST", "/v1/product/certificate/create", json_body=payload)
+        return data if isinstance(data, dict) else {}
+
+    async def product_certificate_bind(
+        self,
+        *,
+        certificate_id: int,
+        product_ids: List[int],
+    ) -> dict:
+        """POST /v1/product/certificate/bind."""
+        if not certificate_id or not product_ids:
+            return {}
+        body = {
+            "certificate_id": int(certificate_id),
+            "product_id": [int(x) for x in product_ids if x],
+        }
+        data = await self._request("POST", "/v1/product/certificate/bind", json_body=body)
+        return data if isinstance(data, dict) else {}
+

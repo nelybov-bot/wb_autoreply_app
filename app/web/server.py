@@ -4509,6 +4509,153 @@ async def api_card_links_master_step(
     return {"task_id": task_id, "status": "running", "step": step}
 
 
+class WbCertificatesParseBody(BaseModel):
+    text: str = ""
+
+
+class ComplianceParseBody(BaseModel):
+    text: str = ""
+
+
+class WbCertificatesApplyBody(BaseModel):
+    store_ids: list[int] = []
+    text: str = ""
+    vendor_codes: list[str] = []
+    dry_run: bool = False
+
+
+class OzonCertificatesApplyBody(BaseModel):
+    store_ids: list[int] = []
+    text: str = ""
+    vendor_codes: list[str] = []
+    dry_run: bool = False
+    fsa_only: bool = False
+
+
+@app.post("/api/compliance/parse")
+def api_compliance_parse(
+    body: ComplianceParseBody,
+    _: UserRow = Depends(require_user),
+):
+    """Общий разбор таблицы сертификатов/деклараций (WB + Ozon)."""
+    from app.core.compliance_docs import cert_rows_to_api, parse_certificates_text
+
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(400, "Вставьте данные таблицы")
+    rows, warnings = parse_certificates_text(text)
+    return {
+        "rows": cert_rows_to_api(rows),
+        "warnings": warnings,
+        "count": len(rows),
+    }
+
+
+@app.post("/api/wb/certificates/parse")
+def api_wb_certificates_parse(
+    body: WbCertificatesParseBody,
+    _: UserRow = Depends(require_user),
+):
+    """Разбор таблицы без обращения к WB."""
+    from app.core.compliance_docs import cert_rows_to_api, parse_certificates_text
+
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(400, "Вставьте данные таблицы")
+    rows, warnings = parse_certificates_text(text)
+    return {
+        "rows": cert_rows_to_api(rows),
+        "warnings": warnings,
+        "count": len(rows),
+    }
+
+
+@app.post("/api/wb/certificates/apply")
+async def api_wb_certificates_apply(
+    body: WbCertificatesApplyBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    """Вставка таблицы сертификатов → сопоставление артикулов → cards/update на WB."""
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(400, "Вставьте данные таблицы или загрузите файл")
+    if not body.store_ids:
+        raise HTTPException(400, "Выберите хотя бы один магазин WB")
+    try:
+        vendor_codes = [str(v).strip() for v in (body.vendor_codes or []) if str(v).strip()]
+        task_id = await web_tasks.run_wb_certificates_apply(
+            db,
+            store_ids=body.store_ids,
+            text=text,
+            vendor_codes=vendor_codes or None,
+            dry_run=bool(body.dry_run),
+        )
+    except StoreBusyError as e:
+        raise HTTPException(409, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="wb_certificates_apply",
+            item_type="wb_certificate",
+            result="started",
+            meta={
+                "store_ids": body.store_ids,
+                "vendor_codes_count": len(body.vendor_codes or []),
+                "dry_run": bool(body.dry_run),
+            },
+        )
+    except Exception:
+        pass
+    return {"task_id": task_id, "status": "running"}
+
+
+@app.post("/api/ozon/certificates/apply")
+async def api_ozon_certificates_apply(
+    body: OzonCertificatesApplyBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    """ФСА → PDF → create/bind сертификатов Ozon по offer_id из таблицы."""
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(400, "Вставьте данные таблицы или загрузите файл")
+    if not body.fsa_only and not body.store_ids:
+        raise HTTPException(400, "Выберите хотя бы один магазин Ozon")
+    try:
+        vendor_codes = [str(v).strip() for v in (body.vendor_codes or []) if str(v).strip()]
+        task_id = await web_tasks.run_ozon_certificates_apply(
+            db,
+            store_ids=body.store_ids,
+            text=text,
+            vendor_codes=vendor_codes or None,
+            dry_run=bool(body.dry_run),
+            fsa_only=bool(body.fsa_only),
+        )
+    except StoreBusyError as e:
+        raise HTTPException(409, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="ozon_certificates_apply",
+            item_type="ozon_certificate",
+            result="started",
+            meta={
+                "store_ids": body.store_ids,
+                "vendor_codes_count": len(body.vendor_codes or []),
+                "dry_run": bool(body.dry_run),
+                "fsa_only": bool(body.fsa_only),
+            },
+        )
+    except Exception:
+        pass
+    return {"task_id": task_id, "status": "running"}
+
+
 # ---------- API: stats ----------
 @app.get("/api/stats")
 def api_stats(db: Database = Depends(get_db), _: UserRow = Depends(require_user)):

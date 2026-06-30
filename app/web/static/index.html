@@ -12,7 +12,7 @@
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
-  <link rel="stylesheet" href="/static/styles.css?v=34">
+  <link rel="stylesheet" href="/static/styles.css?v=38">
   <link rel="stylesheet" href="/static/fx-widgets.css?v=5">
 </head>
 <body>
@@ -72,6 +72,10 @@
     <div class="si" data-tab="card-links" title="Связки карточек" role="button" tabindex="0">
       <i class="ti ti-link" aria-hidden="true"></i>
       <span class="si-label">Связки</span>
+    </div>
+    <div class="si" data-tab="compliance" title="Документы WB и Ozon" role="button" tabindex="0">
+      <i class="ti ti-certificate" aria-hidden="true"></i>
+      <span class="si-label">Документы</span>
     </div>
 
     <div class="si" data-tab="auto" title="Автозапуск" role="button" tabindex="0">
@@ -612,6 +616,109 @@
               <button type="button" class="btn btn-secondary" id="btn-ozon-actions-remove-selected">Удалить</button>
             </div>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Документы: сертификаты и декларации WB / Ozon -->
+    <section id="panel-compliance" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Документы</div>
+        </div>
+        <div class="panel-actions"></div>
+      </div>
+      <div class="form-card form-card-wide">
+        <p class="form-hint">Сертификаты и декларации для Wildberries и Ozon. Общая таблица ниже; отправка — на вкладке нужной площадки.</p>
+        <div class="segmented compliance-mp-filter" id="compliance-mp-filter" role="tablist" aria-label="Маркетплейс">
+          <button type="button" class="active" data-mp="wb" role="tab" aria-selected="true">Wildberries</button>
+          <button type="button" data-mp="ozon" role="tab" aria-selected="false">Ozon</button>
+        </div>
+
+        <div class="compliance-shared-block">
+          <div class="compliance-input-block">
+            <div class="compliance-toolbar">
+              <span class="toolbar-label">Таблица</span>
+              <div class="compliance-toolbar-actions">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-parse">Разобрать таблицу</button>
+                <label class="btn btn-secondary btn-sm card-links-file-btn">
+                  Загрузить файл
+                  <input type="file" id="compliance-file" accept=".csv,.txt,.tsv,text/plain" hidden>
+                </label>
+              </div>
+            </div>
+            <p class="form-hint">Колонки: <strong>артикул продавца</strong>, <strong>номер документа</strong>, <strong>дата регистрации</strong>, <strong>действует до</strong>. WB: vendor_code, Ozon: offer_id.</p>
+            <textarea id="compliance-text" class="compliance-textarea" rows="10" placeholder="807758&#9;ЕАЭС N RU Д-DE.РА01.В.12345/25&#9;21.11.2025&#9;20.11.2030"></textarea>
+          </div>
+          <div id="compliance-rows-wrap" class="compliance-rows-wrap" hidden>
+            <div class="compliance-toolbar">
+              <span class="toolbar-label">Строки для обработки</span>
+              <div class="compliance-toolbar-actions">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-rows-all">Выбрать все</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-rows-none">Снять все</button>
+              </div>
+            </div>
+            <p class="form-hint" id="compliance-rows-hint"></p>
+            <div class="table-wrap">
+              <table class="items-table compliance-rows-table" id="compliance-rows-table">
+                <thead>
+                  <tr>
+                    <th class="col-check"><input type="checkbox" id="compliance-rows-check-all" title="Все"></th>
+                    <th>Артикул</th>
+                    <th>Тип</th>
+                    <th>Номер документа</th>
+                    <th>Дата рег.</th>
+                    <th>Действует до</th>
+                    <th class="compliance-col-ozon">ФСА</th>
+                    <th class="compliance-col-ozon">PDF</th>
+                  </tr>
+                </thead>
+                <tbody id="compliance-rows-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div id="compliance-pane-wb" class="compliance-mp-pane">
+          <p class="form-hint compliance-mp-hint">Wildberries: PDF не нужен — номер и даты записываются в карточку товара.</p>
+          <div class="compliance-stores-block">
+            <div class="compliance-toolbar">
+              <span class="toolbar-label">Магазины WB</span>
+              <div class="compliance-toolbar-actions">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-wb-stores-all">Все</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-wb-stores-none">Снять</button>
+              </div>
+            </div>
+            <div id="compliance-wb-store-list" class="auto-store-list auto-store-list--compact"></div>
+          </div>
+          <div class="progress-container" id="progress-compliance-wb" hidden></div>
+          <div class="compliance-actions">
+            <button type="button" class="btn btn-primary" id="btn-compliance-wb-apply">Проверить и отправить на выбранные магазины WB</button>
+            <button type="button" class="btn btn-secondary" id="btn-compliance-wb-preview">Только проверить (без отправки)</button>
+          </div>
+          <div id="compliance-wb-result" class="compliance-result" hidden></div>
+        </div>
+
+        <div id="compliance-pane-ozon" class="compliance-mp-pane" hidden>
+          <p class="form-hint compliance-mp-hint">Ozon: поиск документа в реестре ФСА (интернет), PDF и привязка к товару по <strong>offer_id</strong> из таблицы.</p>
+          <div class="compliance-stores-block">
+            <div class="compliance-toolbar">
+              <span class="toolbar-label">Магазины Ozon</span>
+              <div class="compliance-toolbar-actions">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-ozon-stores-all">Все</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-ozon-stores-none">Снять</button>
+              </div>
+            </div>
+            <div id="compliance-ozon-store-list" class="auto-store-list auto-store-list--compact"></div>
+          </div>
+          <div class="progress-container" id="progress-compliance-ozon" hidden></div>
+          <div class="compliance-actions">
+            <button type="button" class="btn btn-secondary" id="btn-compliance-ozon-fsa">Проверить в ФСА</button>
+            <button type="button" class="btn btn-primary" id="btn-compliance-ozon-apply">Загрузить на выбранные магазины Ozon</button>
+            <button type="button" class="btn btn-secondary" id="btn-compliance-ozon-preview">Только проверить (без загрузки)</button>
+          </div>
+          <div id="compliance-ozon-result" class="compliance-result" hidden></div>
         </div>
       </div>
     </section>
@@ -1621,7 +1728,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=79"></script>
+  <script src="/static/app.js?v=83"></script>
   <script src="/static/card_links_master.js?v=8"></script>
 </body>
 </html>

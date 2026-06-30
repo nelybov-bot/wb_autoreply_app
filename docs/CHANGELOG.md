@@ -5,6 +5,37 @@
 
 ---
 
+## 2026-06-30 — Документы Ozon: этап 2 (ФСА + PDF + привязка)
+
+- `fsa_registry.py` — поиск деклараций/сертификатов в pub.fsa.gov.ru
+- `pdf_registry.py` — PDF из файла реестра или сформированный из данных ФСА
+- `ozon_certificates.py` — offer_id → product_id, create/bind в Ozon Certification API
+- `OzonClient`: certificate types/list/create/bind
+- `POST /api/ozon/certificates/apply` — режимы `fsa_only`, `dry_run`, загрузка
+- UI Ozon: «Проверить в ФСА», «Только проверить», «Загрузить»; колонки ФСА/PDF в таблице
+
+## 2026-06-30 — Документы WB + Ozon: этап 1 (единая панель)
+
+- Раздел «Документы» (`compliance`): вкладки Wildberries / Ozon, общая таблица
+- `compliance_docs.py` — общий парсер, определение типа (декларация / сертификат)
+- `POST /api/compliance/parse` — разбор таблицы для обеих площадок
+- WB: отправка без изменений (`/api/wb/certificates/apply`)
+- Ozon: заглушка «следующий этап» (ФСА + PDF + привязка)
+
+## 2026-06-30 — Сертификаты WB: выбор товаров и несколько магазинов
+
+- Таблица товаров с чекбоксами после «Разобрать таблицу»
+- `vendor_codes` в apply — только отмеченные артикулы
+- `POST /api/wb/certificates/parse`
+- Прогресс: магазин N/M, итог по всем магазинам в отчёте
+
+## 2026-06-30 — Сертификаты WB: вставка таблицы и автоотправка
+
+- Панель «Сертификаты» (`wb-certs`): вставка TSV/CSV, несколько магазинов WB
+- `wb_certificates.py` — парсинг, charcs по subject, `cards/update` батчами
+- `WbContentClient.update_cards`, `get_subject_charcs`
+- `POST /api/wb/certificates/apply` + фоновая задача `wb_certificates`
+
 ## 2026-06-30 — Docs: правило прогресса для долгих UI-операций
 
 - AI_CONTEXT.md — канон: три компонента, fakeProgress, CSS, чеклист

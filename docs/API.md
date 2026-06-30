@@ -218,6 +218,33 @@ Query-параметры каталога:
 
 ---
 
+## Документы (сертификаты / декларации)
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| POST | `/api/compliance/parse` | Общий разбор таблицы. Body: `{ text }` → `{ rows, warnings, count }`; в `rows` также `doc_type`, `doc_type_label` |
+
+## Сертификаты WB
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| POST | `/api/wb/certificates/parse` | То же, что `/api/compliance/parse` (совместимость) |
+| POST | `/api/wb/certificates/apply` | Сопоставление + `cards/update`. Body: `{ store_ids, text, vendor_codes?: string[], dry_run?: bool }` → `{ task_id }` |
+
+`vendor_codes` — если не пустой, обрабатываются только эти артикулы из таблицы. Несколько `store_ids` — последовательная проверка и отправка в каждый магазин.
+
+Колонки в `text` (TSV/CSV, с заголовком или без): артикул продавца, номер сертификата/декларации, дата регистрации, действует до.
+
+## Документы Ozon
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| POST | `/api/ozon/certificates/apply` | ФСА → PDF → Ozon create/bind. Body: `{ store_ids?, text, vendor_codes?, dry_run?, fsa_only? }` → `{ task_id }` |
+
+`fsa_only: true` — только реестр ФСА (магазины не нужны). `dry_run: true` — без загрузки на Ozon. Артикул = **offer_id**.
+
+---
+
 ## Алерты и ошибки карточек
 
 | Метод | Путь | Описание |

@@ -638,6 +638,7 @@
       }
     }
     if (tabId === 'card-links') loadCardLinksPanel();
+    if (tabId === 'compliance') loadCompliancePanel();
     if (tabId === 'auto') loadAutoSchedulePanel();
     if (tabId === 'agent') loadAgentPanel();
     if (tabId === 'settings') {
@@ -1423,6 +1424,7 @@
       setTimeout(() => { ozonActionsSuppressSelectChange = false; }, 0);
     }
     syncCardLinksStoreSelect();
+    renderComplianceStoreLists();
   }
 
   function renderAutoStoreList(selectedIds) {
@@ -6483,6 +6485,426 @@
     }).catch(err => setCardLinksStatus(err.message || 'Ошибка'));
   }
 
+  let complianceParsedRows = [];
+  let complianceMp = 'wb';
+
+  function syncComplianceMpUI() {
+    document.querySelectorAll('#compliance-mp-filter [data-mp]').forEach((btn) => {
+      const mp = btn.getAttribute('data-mp') || '';
+      const active = mp === complianceMp;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    const wbPane = document.getElementById('compliance-pane-wb');
+    const ozPane = document.getElementById('compliance-pane-ozon');
+    if (wbPane) wbPane.hidden = complianceMp !== 'wb';
+    if (ozPane) ozPane.hidden = complianceMp !== 'ozon';
+    document.body.classList.toggle('compliance-show-ozon-cols', complianceMp === 'ozon');
+  }
+
+  function complianceSetOzonStoreChecks(checked) {
+    document.querySelectorAll('#compliance-ozon-store-list input[type="checkbox"]').forEach((cb) => {
+      cb.checked = !!checked;
+    });
+  }
+
+  function complianceSetWbStoreChecks(checked) {
+    document.querySelectorAll('#compliance-wb-store-list input[type="checkbox"]').forEach((cb) => {
+      cb.checked = !!checked;
+    });
+  }
+
+  function complianceSetRowChecks(checked) {
+    document.querySelectorAll('#compliance-rows-tbody input[type="checkbox"]').forEach((cb) => {
+      cb.checked = !!checked;
+    });
+    const head = document.getElementById('compliance-rows-check-all');
+    if (head) head.checked = !!checked;
+  }
+
+  function syncComplianceRowsCheckAll() {
+    const head = document.getElementById('compliance-rows-check-all');
+    const boxes = document.querySelectorAll('#compliance-rows-tbody input[type="checkbox"]');
+    if (!head) return;
+    const checked = document.querySelectorAll('#compliance-rows-tbody input[type="checkbox"]:checked');
+    head.disabled = !boxes.length;
+    head.checked = boxes.length > 0 && checked.length === boxes.length;
+    head.indeterminate = checked.length > 0 && checked.length < boxes.length;
+    const hint = document.getElementById('compliance-rows-hint');
+    if (hint) {
+      hint.textContent = boxes.length
+        ? `Выбрано ${checked.length} из ${boxes.length} строк. Обработка только по отмеченным.`
+        : '';
+    }
+  }
+
+  function renderComplianceRowsTable(rows) {
+    complianceParsedRows = Array.isArray(rows) ? rows : [];
+    const wrap = document.getElementById('compliance-rows-wrap');
+    const tbody = document.getElementById('compliance-rows-tbody');
+    if (!wrap || !tbody) return;
+    if (!complianceParsedRows.length) {
+      wrap.hidden = true;
+      tbody.innerHTML = '';
+      syncComplianceRowsCheckAll();
+      return;
+    }
+    tbody.innerHTML = complianceParsedRows.map((r, i) => `
+      <tr>
+        <td class="col-check"><input type="checkbox" class="compliance-row-check" data-idx="${i}" checked></td>
+        <td>${escapeHtml(r.vendor_code || '')}</td>
+        <td>${escapeHtml(r.doc_type_label || '—')}</td>
+        <td>${escapeHtml(r.doc_number || '')}</td>
+        <td>${escapeHtml(r.reg_date || '—')}</td>
+        <td>${escapeHtml(r.valid_until || '—')}</td>
+        <td class="compliance-col-ozon">${escapeHtml(r.fsa_label || '—')}</td>
+        <td class="compliance-col-ozon">${escapeHtml(r.pdf_label || '—')}</td>
+      </tr>
+    `).join('');
+    wrap.hidden = false;
+    syncComplianceRowsCheckAll();
+  }
+
+  function getComplianceSelectedVendorCodes() {
+    const wrap = document.getElementById('compliance-rows-wrap');
+    const useTable = wrap && !wrap.hidden && complianceParsedRows.length;
+    if (!useTable) return [];
+    const out = [];
+    document.querySelectorAll('#compliance-rows-tbody input.compliance-row-check:checked').forEach((cb) => {
+      const idx = Number(cb.getAttribute('data-idx'));
+      const row = complianceParsedRows[idx];
+      if (row && row.vendor_code) out.push(String(row.vendor_code).trim());
+    });
+    return out;
+  }
+
+  async function parseComplianceTable() {
+    const text = (document.getElementById('compliance-text')?.value || '').trim();
+    if (!text) {
+      toast('Вставьте таблицу', 'error');
+      return;
+    }
+    const btn = document.getElementById('btn-compliance-parse');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await api('/compliance/parse', {
+        method: 'POST',
+        body: JSON.stringify({ text }),
+      });
+      if (res.warnings?.length) {
+        toast(res.warnings.slice(0, 2).join('; '), res.rows?.length ? 'success' : 'error');
+      }
+      renderComplianceRowsTable(res.rows || []);
+      if (res.count) toast(`Разобрано строк: ${res.count}`);
+    } catch (err) {
+      toast(err.message || 'Ошибка разбора', 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function renderComplianceStoreLists() {
+    const wb = storesForMarketplace('wb');
+    const prevWb = getAutoMpStoreIds('compliance-wb-store-list');
+    const selectedWb = prevWb.length ? prevWb : wb.map(s => s.id);
+    renderAutoMpStoreList('compliance-wb-store-list', 'wb', selectedWb);
+
+    const oz = storesForMarketplace('ozon');
+    const prevOz = getAutoMpStoreIds('compliance-ozon-store-list');
+    const selectedOz = prevOz.length ? prevOz : oz.map(s => s.id);
+    renderAutoMpStoreList('compliance-ozon-store-list', 'ozon', selectedOz);
+  }
+
+  function renderComplianceWbResult(result) {
+    const box = document.getElementById('compliance-wb-result');
+    if (!box) return;
+    if (!result || !result.stores) {
+      box.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+    const parts = [];
+    if (result.parse_warnings?.length) {
+      parts.push('<p class="form-hint">' + result.parse_warnings.map(escapeHtml).join('<br>') + '</p>');
+    }
+    const stores = result.stores || [];
+    if (stores.length > 1) {
+      const totalSent = stores.reduce((a, s) => a + (Number(s.sent) || 0), 0);
+      const totalPrep = stores.reduce((a, s) => a + (Number(s.prepared) || 0), 0);
+      parts.push(`<p class="form-hint"><strong>Итого по ${stores.length} магазинам:</strong> подготовлено ${totalPrep}, отправлено ${totalSent}</p>`);
+    }
+    for (const st of stores) {
+      const title = escapeHtml(st.store_name || st.store_id || 'Магазин');
+      if (st.error) {
+        parts.push(`<h4 class="compliance-result-store">${title}</h4><p class="text-error">${escapeHtml(st.error)}</p>`);
+        continue;
+      }
+      const ok = (st.rows || []).filter(r => r.status === 'ok' || r.status === 'preview').length;
+      const nf = (st.rows || []).filter(r => r.status === 'not_found').length;
+      const nfld = (st.rows || []).filter(r => r.status === 'no_fields').length;
+      const err = (st.rows || []).filter(r => r.status === 'error').length;
+      parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
+      parts.push(`<p class="form-hint">Строк: ${st.parsed || 0}, найдено карточек: ${st.cards_found || 0}, готово: ${ok}, не найдено: ${nf}, нет полей в категории: ${nfld}, ошибки: ${err}${st.sent != null ? `, отправлено: ${st.sent}` : ''}</p>`);
+      const bad = (st.rows || []).filter(r => r.status !== 'ok' && r.status !== 'preview');
+      if (bad.length) {
+        parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Статус</th><th>Сообщение</th></tr></thead><tbody>');
+        for (const r of bad.slice(0, 80)) {
+          parts.push(`<tr><td>${escapeHtml(r.vendor_code)}</td><td>${r.nm_id || '—'}</td><td>${escapeHtml(r.status)}</td><td>${escapeHtml(r.message || '')}</td></tr>`);
+        }
+        if (bad.length > 80) parts.push(`<tr><td colspan="4">…ещё ${bad.length - 80}</td></tr>`);
+        parts.push('</tbody></table>');
+      }
+    }
+    box.innerHTML = parts.join('');
+    box.hidden = !parts.length;
+  }
+
+  async function runComplianceWbApply(dryRun) {
+    const storeIds = getAutoMpStoreIds('compliance-wb-store-list');
+    const text = (document.getElementById('compliance-text')?.value || '').trim();
+    const vendorCodes = getComplianceSelectedVendorCodes();
+    const wrap = document.getElementById('compliance-rows-wrap');
+    const tableVisible = wrap && !wrap.hidden && complianceParsedRows.length;
+    if (!storeIds.length) {
+      toast('Выберите хотя бы один магазин WB', 'error');
+      return;
+    }
+    if (!text) {
+      toast('Вставьте таблицу или загрузите файл', 'error');
+      return;
+    }
+    if (tableVisible && !vendorCodes.length) {
+      toast('Отметьте хотя бы одну строку в таблице', 'error');
+      return;
+    }
+    const applyBtn = document.getElementById('btn-compliance-wb-apply');
+    const previewBtn = document.getElementById('btn-compliance-wb-preview');
+    if (applyBtn) applyBtn.disabled = true;
+    if (previewBtn) previewBtn.disabled = true;
+    const storeCount = storeIds.length;
+    const itemCount = tableVisible ? vendorCodes.length : 'все из таблицы';
+    try {
+      const res = await api('/wb/certificates/apply', {
+        method: 'POST',
+        body: JSON.stringify({
+          store_ids: storeIds,
+          text,
+          vendor_codes: tableVisible ? vendorCodes : [],
+          dry_run: !!dryRun,
+        }),
+      });
+      pollItemsTask(res.task_id, 'compliance-wb', {
+        label: dryRun
+          ? `Проверка WB (${storeCount} магаз., ${itemCount} тов.)…`
+          : `Проверка и отправка WB (${storeCount} магаз., ${itemCount} тов.)…`,
+        onDone: (result) => {
+          renderComplianceWbResult(result);
+          const sent = (result?.stores || []).reduce((a, s) => a + (Number(s.sent) || 0), 0);
+          const prepared = (result?.stores || []).reduce((a, s) => a + (Number(s.prepared) || 0), 0);
+          if (dryRun) {
+            toast(`Проверка WB: ${prepared} карточек в ${storeCount} магазинах`);
+          } else {
+            toast(sent
+              ? `WB: отправлено ${sent} обновлений в ${storeCount} магазинах`
+              : `WB: готово ${prepared} карточек в ${storeCount} магазинах — см. отчёт`);
+          }
+        },
+      });
+    } catch (err) {
+      toast(err.message || 'Ошибка', 'error');
+    } finally {
+      if (applyBtn) applyBtn.disabled = false;
+      if (previewBtn) previewBtn.disabled = false;
+    }
+  }
+
+  function mergeComplianceOzonRowResults(stores) {
+    const byOffer = {};
+    for (const st of (stores || [])) {
+      for (const r of (st.rows || [])) {
+        const k = String(r.vendor_code || '').trim();
+        if (k) byOffer[k] = r;
+      }
+    }
+    complianceParsedRows = complianceParsedRows.map((row) => {
+      const hit = byOffer[String(row.vendor_code || '').trim()];
+      if (!hit) return row;
+      const fsaOk = hit.fsa_found || hit.status === 'preview' || hit.status === 'ok';
+      let fsaLabel = '—';
+      if (hit.status === 'fsa_not_found') fsaLabel = 'Не найден';
+      else if (fsaOk) fsaLabel = 'Найден';
+      let pdfLabel = '—';
+      if (hit.pdf_source === 'registry_file') pdfLabel = 'Из реестра';
+      else if (hit.pdf_source === 'generated') pdfLabel = 'Сформирован';
+      else if (hit.status === 'no_pdf') pdfLabel = 'Нет';
+      return {
+        ...row,
+        fsa_label: fsaLabel,
+        pdf_label: pdfLabel,
+        ozon_message: hit.message || '',
+      };
+    });
+    renderComplianceRowsTable(complianceParsedRows);
+  }
+
+  function renderComplianceOzonResult(result) {
+    const box = document.getElementById('compliance-ozon-result');
+    if (!box) return;
+    if (!result) {
+      box.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+    const parts = [];
+    if (result.parse_warnings?.length) {
+      parts.push('<p class="form-hint">' + result.parse_warnings.map(escapeHtml).join('<br>') + '</p>');
+    }
+    if (result.fsa_checked != null) {
+      parts.push(`<p class="form-hint">Проверено в ФСА уникальных номеров: <strong>${result.fsa_checked}</strong></p>`);
+    }
+    const stores = result.stores || [];
+    for (const st of stores) {
+      const title = escapeHtml(st.store_name || st.store_id || 'Магазин');
+      if (st.error) {
+        parts.push(`<h4 class="compliance-result-store">${title}</h4><p class="text-error">${escapeHtml(st.error)}</p>`);
+        continue;
+      }
+      const ok = (st.rows || []).filter(r => r.status === 'ok').length;
+      const prev = (st.rows || []).filter(r => r.status === 'preview').length;
+      const bad = (st.rows || []).filter(r => !['ok', 'preview'].includes(r.status)).length;
+      parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
+      parts.push(`<p class="form-hint">Строк: ${st.parsed || 0}, готово/привязано: ${ok}, проверка: ${prev}, проблемы: ${bad}${st.bound != null ? `, привязано: ${st.bound}` : ''}</p>`);
+      const problems = (st.rows || []).filter(r => !['ok', 'preview'].includes(r.status));
+      if (problems.length) {
+        parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>Статус</th><th>Сообщение</th></tr></thead><tbody>');
+        for (const r of problems.slice(0, 80)) {
+          parts.push(`<tr><td>${escapeHtml(r.vendor_code)}</td><td>${escapeHtml(r.status)}</td><td>${escapeHtml(r.message || '')}</td></tr>`);
+        }
+        if (problems.length > 80) parts.push(`<tr><td colspan="3">…ещё ${problems.length - 80}</td></tr>`);
+        parts.push('</tbody></table>');
+      }
+    }
+    box.innerHTML = parts.join('');
+    box.hidden = !parts.length;
+  }
+
+  async function runComplianceOzonApply({ dryRun = false, fsaOnly = false } = {}) {
+    const storeIds = fsaOnly ? [] : getAutoMpStoreIds('compliance-ozon-store-list');
+    const text = (document.getElementById('compliance-text')?.value || '').trim();
+    const vendorCodes = getComplianceSelectedVendorCodes();
+    const wrap = document.getElementById('compliance-rows-wrap');
+    const tableVisible = wrap && !wrap.hidden && complianceParsedRows.length;
+    if (!fsaOnly && !storeIds.length) {
+      toast('Выберите хотя бы один магазин Ozon', 'error');
+      return;
+    }
+    if (!text) {
+      toast('Вставьте таблицу или загрузите файл', 'error');
+      return;
+    }
+    if (tableVisible && !vendorCodes.length) {
+      toast('Отметьте хотя бы одну строку в таблице', 'error');
+      return;
+    }
+    const fsaBtn = document.getElementById('btn-compliance-ozon-fsa');
+    const applyBtn = document.getElementById('btn-compliance-ozon-apply');
+    const previewBtn = document.getElementById('btn-compliance-ozon-preview');
+    if (fsaBtn) fsaBtn.disabled = true;
+    if (applyBtn) applyBtn.disabled = true;
+    if (previewBtn) previewBtn.disabled = true;
+    const storeCount = storeIds.length || 0;
+    const itemCount = tableVisible ? vendorCodes.length : 'все из таблицы';
+    const label = fsaOnly
+      ? `Проверка ФСА (${itemCount} строк)…`
+      : (dryRun
+        ? `Проверка Ozon (${storeCount} магаз., ${itemCount} тов.)…`
+        : `Загрузка на Ozon (${storeCount} магаз., ${itemCount} тов.)…`);
+    try {
+      const res = await api('/ozon/certificates/apply', {
+        method: 'POST',
+        body: JSON.stringify({
+          store_ids: storeIds,
+          text,
+          vendor_codes: tableVisible ? vendorCodes : [],
+          dry_run: !!dryRun,
+          fsa_only: !!fsaOnly,
+        }),
+      });
+      pollItemsTask(res.task_id, 'compliance-ozon', {
+        label,
+        onDone: (result) => {
+          renderComplianceOzonResult(result);
+          mergeComplianceOzonRowResults(result?.stores);
+          if (fsaOnly) {
+            const found = (result?.stores || []).reduce((a, s) => a + (s.rows || []).filter(r => r.fsa_found).length, 0);
+            toast(`ФСА: найдено ${found} из ${(result?.stores?.[0]?.rows || []).length || itemCount}`);
+          } else if (dryRun) {
+            toast('Проверка Ozon завершена — см. отчёт');
+          } else {
+            const bound = (result?.stores || []).reduce((a, s) => a + (Number(s.bound) || 0), 0);
+            toast(bound ? `Ozon: привязано ${bound} товаров` : 'Ozon: готово — см. отчёт');
+          }
+        },
+      });
+    } catch (err) {
+      toast(err.message || 'Ошибка', 'error');
+    } finally {
+      if (fsaBtn) fsaBtn.disabled = false;
+      if (applyBtn) applyBtn.disabled = false;
+      if (previewBtn) previewBtn.disabled = false;
+    }
+  }
+
+  function loadCompliancePanel() {
+    syncComplianceMpUI();
+    renderComplianceStoreLists();
+  }
+
+  function wireCompliancePanel() {
+    if (wireCompliancePanel._done) return;
+    wireCompliancePanel._done = true;
+    document.querySelectorAll('#compliance-mp-filter [data-mp]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mp = btn.getAttribute('data-mp') || 'wb';
+        if (mp === complianceMp) return;
+        complianceMp = mp;
+        syncComplianceMpUI();
+      });
+    });
+    document.getElementById('btn-compliance-wb-apply')?.addEventListener('click', () => runComplianceWbApply(false));
+    document.getElementById('btn-compliance-wb-preview')?.addEventListener('click', () => runComplianceWbApply(true));
+    document.getElementById('btn-compliance-ozon-fsa')?.addEventListener('click', () => runComplianceOzonApply({ fsaOnly: true }));
+    document.getElementById('btn-compliance-ozon-apply')?.addEventListener('click', () => runComplianceOzonApply({ dryRun: false }));
+    document.getElementById('btn-compliance-ozon-preview')?.addEventListener('click', () => runComplianceOzonApply({ dryRun: true }));
+    document.getElementById('btn-compliance-ozon-stores-all')?.addEventListener('click', () => complianceSetOzonStoreChecks(true));
+    document.getElementById('btn-compliance-ozon-stores-none')?.addEventListener('click', () => complianceSetOzonStoreChecks(false));
+    document.getElementById('btn-compliance-parse')?.addEventListener('click', () => parseComplianceTable());
+    document.getElementById('btn-compliance-wb-stores-all')?.addEventListener('click', () => complianceSetWbStoreChecks(true));
+    document.getElementById('btn-compliance-wb-stores-none')?.addEventListener('click', () => complianceSetWbStoreChecks(false));
+    document.getElementById('btn-compliance-rows-all')?.addEventListener('click', () => complianceSetRowChecks(true));
+    document.getElementById('btn-compliance-rows-none')?.addEventListener('click', () => complianceSetRowChecks(false));
+    document.getElementById('compliance-rows-check-all')?.addEventListener('change', (e) => {
+      complianceSetRowChecks(!!e.target.checked);
+    });
+    document.getElementById('compliance-rows-tbody')?.addEventListener('change', (e) => {
+      if (e.target?.classList?.contains('compliance-row-check')) syncComplianceRowsCheckAll();
+    });
+    document.getElementById('compliance-file')?.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const ta = document.getElementById('compliance-text');
+        if (ta) ta.value = text;
+        toast('Файл загружен — нажмите «Разобрать таблицу»');
+      } catch (err) {
+        toast(err.message || 'Не удалось прочитать файл', 'error');
+      }
+      e.target.value = '';
+    });
+    syncComplianceMpUI();
+  }
+
   function wireCardLinksPanel() {
     if (wireCardLinksPanel._done) return;
     wireCardLinksPanel._done = true;
@@ -8976,6 +9398,7 @@
     wireOzonChatsPanel();
     wireOzonActionsPanel();
     wireCardLinksPanel();
+    wireCompliancePanel();
     wireAgentPanel();
     ensureStoresLoaded().then(() => {
       fillStoreSelects();

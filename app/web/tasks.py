@@ -583,3 +583,254 @@ async def list_tasks(*, status: Optional[str] = None, limit: int = 15) -> list[d
         if len(out) >= safe_limit:
             break
     return out
+
+
+async def run_wb_certificates_apply(
+    db: Any,
+    *,
+    store_ids: list[int],
+    text: str = "",
+    vendor_codes: Optional[list[str]] = None,
+    dry_run: bool = False,
+) -> str:
+    from app.core.wb_certificates import (
+        apply_certificates_multi_store,
+        filter_cert_rows,
+        parse_certificates_text,
+    )
+    from app.core.net import HttpStatusError, UnauthorizedStoreError
+
+    rows, parse_warnings = parse_certificates_text(text)
+    if not rows:
+        raise ValueError(parse_warnings[0] if parse_warnings else "Нет данных для обработки")
+
+    if vendor_codes:
+        rows, filter_warnings = filter_cert_rows(rows, vendor_codes)
+        parse_warnings = list(parse_warnings) + filter_warnings
+        if not rows:
+            raise ValueError(
+                filter_warnings[0] if filter_warnings else "Ни один из выбранных артикулов не найден в таблице"
+            )
+
+    sids = sorted({int(x) for x in store_ids if int(x) > 0})
+    if not sids:
+        raise ValueError("Выберите хотя бы один магазин WB")
+
+    stores_payload: list[tuple[int, str, str]] = []
+    by_id = {s.id: s for s in db.list_stores()}
+    for sid in sids:
+        st = by_id.get(sid)
+        if not st or str(st.marketplace or "").lower() != "wb":
+            raise ValueError(f"Магазин {sid} не найден или не WB")
+        if not (st.api_key or "").strip():
+            raise ValueError(f"У магазина «{st.name}» нет API-ключа")
+        stores_payload.append((sid, st.name, st.api_key.strip()))
+
+    task_id = _make_id()
+    try:
+        await store_locks.acquire(
+            sids, "wb_certificates", task_id,
+            store_names=_store_names(db, sids),
+        )
+    except StoreBusyError:
+        await store_locks.release_all_for_owner(task_id)
+        raise
+
+    total_steps = max(len(rows) * len(sids), 1)
+    await _init_task(task_id, "wb_certificates", "Сертификаты WB", total_steps)
+    async with _tasks_lock:
+        _tasks[task_id]["store_ids"] = sids
+        _tasks[task_id]["parse_warnings"] = parse_warnings
+
+    def _progress(cur: int, tot: int, detail: str) -> None:
+        if _tasks.get(task_id, {}).get("status") != "running":
+            return
+        safe_tot = max(int(tot or 0), 1)
+        safe_cur = max(0, min(int(cur or 0), safe_tot))
+
+        async def _set() -> None:
+            async with _tasks_lock:
+                if task_id in _tasks:
+                    _tasks[task_id]["progress"] = [safe_cur, safe_tot]
+                    _tasks[task_id]["detail"] = detail
+
+        asyncio.create_task(_set())
+
+    async def _run() -> None:
+        try:
+            result = await apply_certificates_multi_store(
+                stores_payload,
+                rows=rows,
+                dry_run=dry_run,
+                progress_cb=_progress,
+            )
+            if parse_warnings:
+                result["parse_warnings"] = parse_warnings
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "done"
+                _tasks[task_id]["result"] = result
+                sent = sum(int(s.get("sent") or 0) for s in result.get("stores") or [])
+                prepared = sum(int(s.get("prepared") or 0) for s in result.get("stores") or [])
+                if dry_run:
+                    _tasks[task_id]["detail"] = f"Проверка: {prepared} карточек в {len(sids)} магазинах"
+                else:
+                    _tasks[task_id]["detail"] = f"Отправлено {sent} обновлений в {len(sids)} магазинах"
+                _tasks[task_id]["progress"] = [total_steps, total_steps]
+            _mark_finished(task_id, "done")
+        except asyncio.CancelledError:
+            async with _tasks_lock:
+                if task_id in _tasks and _tasks[task_id].get("status") == "running":
+                    _tasks[task_id]["status"] = "cancelled"
+                    _tasks[task_id]["error"] = "Остановлено пользователем"
+            _mark_finished(task_id, "cancelled")
+        except UnauthorizedStoreError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+        except HttpStatusError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e.body or e)[:400]
+            _mark_finished(task_id, "error")
+        except Exception as e:
+            log.exception("wb_certificates task %s failed: %s", task_id, e)
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+        finally:
+            await store_locks.release(sids, task_id)
+
+    _handles[task_id] = asyncio.create_task(_run())
+    return task_id
+
+
+async def run_ozon_certificates_apply(
+    db: Any,
+    *,
+    store_ids: list[int],
+    text: str = "",
+    vendor_codes: Optional[list[str]] = None,
+    dry_run: bool = False,
+    fsa_only: bool = False,
+) -> str:
+    from app.core.compliance_docs import filter_cert_rows, parse_certificates_text
+    from app.core.net import HttpStatusError, UnauthorizedStoreError
+    from app.core.ozon_certificates import apply_ozon_certificates_multi_store
+
+    rows, parse_warnings = parse_certificates_text(text)
+    if not rows:
+        raise ValueError(parse_warnings[0] if parse_warnings else "Нет данных для обработки")
+
+    if vendor_codes:
+        rows, filter_warnings = filter_cert_rows(rows, vendor_codes)
+        parse_warnings = list(parse_warnings) + filter_warnings
+        if not rows:
+            raise ValueError(
+                filter_warnings[0] if filter_warnings else "Ни один из выбранных артикулов не найден в таблице"
+            )
+
+    stores_payload: list[tuple[int, str, str, str]] = []
+    sids: list[int] = []
+    if not fsa_only:
+        sids = sorted({int(x) for x in store_ids if int(x) > 0})
+        if not sids:
+            raise ValueError("Выберите хотя бы один магазин Ozon")
+        by_id = {s.id: s for s in db.list_stores()}
+        for sid in sids:
+            st = by_id.get(sid)
+            if not st or str(st.marketplace or "").lower() != "ozon":
+                raise ValueError(f"Магазин {sid} не найден или не Ozon")
+            cid = str(st.client_id or "").strip()
+            key = str(st.api_key or "").strip()
+            if not cid or not key:
+                raise ValueError(f"У магазина «{st.name}» нет Client-Id / Api-Key")
+            stores_payload.append((sid, st.name, cid, key))
+
+    unique_docs = len({str(r.doc_number or "").strip() for r in rows if str(r.doc_number or "").strip()})
+    total_steps = max(unique_docs + (0 if fsa_only else len(rows) * len(sids)), 1)
+
+    task_id = _make_id()
+    if sids:
+        try:
+            await store_locks.acquire(
+                sids, "ozon_certificates", task_id,
+                store_names=_store_names(db, sids),
+            )
+        except StoreBusyError:
+            await store_locks.release_all_for_owner(task_id)
+            raise
+
+    label = "ФСА" if fsa_only else ("Проверка Ozon" if dry_run else "Документы Ozon")
+    await _init_task(task_id, "ozon_certificates", label, total_steps)
+    async with _tasks_lock:
+        _tasks[task_id]["store_ids"] = sids
+        _tasks[task_id]["parse_warnings"] = parse_warnings
+
+    def _progress(cur: int, tot: int, detail: str) -> None:
+        if _tasks.get(task_id, {}).get("status") != "running":
+            return
+        safe_tot = max(int(tot or 0), 1)
+        safe_cur = max(0, min(int(cur or 0), safe_tot))
+
+        async def _set() -> None:
+            async with _tasks_lock:
+                if task_id in _tasks:
+                    _tasks[task_id]["progress"] = [safe_cur, safe_tot]
+                    _tasks[task_id]["detail"] = detail
+
+        asyncio.create_task(_set())
+
+    async def _run() -> None:
+        try:
+            result = await apply_ozon_certificates_multi_store(
+                stores_payload,
+                rows=rows,
+                dry_run=dry_run,
+                fsa_only=fsa_only,
+                progress_cb=_progress,
+            )
+            if parse_warnings:
+                result["parse_warnings"] = parse_warnings
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "done"
+                _tasks[task_id]["result"] = result
+                if fsa_only:
+                    found = sum(
+                        1 for st in (result.get("stores") or [])
+                        for r in (st.get("rows") or [])
+                        if r.get("fsa_found")
+                    )
+                    _tasks[task_id]["detail"] = f"ФСА: найдено {found} из {len(rows)}"
+                elif dry_run:
+                    prepared = sum(int(s.get("prepared") or 0) for s in result.get("stores") or [])
+                    _tasks[task_id]["detail"] = f"Проверка: {prepared} строк в {len(sids)} магазинах"
+                else:
+                    bound = sum(int(s.get("bound") or 0) for s in result.get("stores") or [])
+                    _tasks[task_id]["detail"] = f"Привязано {bound} товаров в {len(sids)} магазинах"
+                _tasks[task_id]["progress"] = [total_steps, total_steps]
+            _mark_finished(task_id, "done")
+        except asyncio.CancelledError:
+            async with _tasks_lock:
+                if task_id in _tasks and _tasks[task_id].get("status") == "running":
+                    _tasks[task_id]["status"] = "cancelled"
+                    _tasks[task_id]["error"] = "Остановлено пользователем"
+            _mark_finished(task_id, "cancelled")
+        except HttpStatusError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e.body or e)[:400]
+            _mark_finished(task_id, "error")
+        except Exception as e:
+            log.exception("ozon_certificates task %s failed: %s", task_id, e)
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+        finally:
+            if sids:
+                await store_locks.release(sids, task_id)
+
+    _handles[task_id] = asyncio.create_task(_run())
+    return task_id

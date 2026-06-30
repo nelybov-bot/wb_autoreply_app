@@ -12,6 +12,8 @@ _OP_LABELS = {
     "send": "отправка",
     "auto_run": "автозапуск",
     "card_links": "связки карточек",
+    "wb_certificates": "сертификаты WB",
+    "ozon_certificates": "документы Ozon",
 }
 
 
