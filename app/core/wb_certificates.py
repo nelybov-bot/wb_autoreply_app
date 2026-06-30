@@ -12,6 +12,7 @@ from .compliance_docs import (
     filter_cert_rows,
     parse_certificates_file,
     parse_certificates_text,
+    _norm_vendor,
 )
 from .net import HttpStatusError
 from .wb_content_client import WbContentClient

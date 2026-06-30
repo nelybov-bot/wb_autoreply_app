@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-06-30 — Fix: WB certificates `_norm_vendor` import
+
+- `wb_certificates.py` — импорт `_norm_vendor` из `compliance_docs` (ошибка при проверке магазина)
+
 ## 2026-06-30 — Документы Ozon: этап 2 (ФСА + PDF + привязка)
 
 - `fsa_registry.py` — поиск деклараций/сертификатов в pub.fsa.gov.ru
