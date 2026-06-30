@@ -3189,7 +3189,12 @@ body.theme-dark .summary-ops-card .summary-item {
 }
 
 /* Прогресс */
-.progress-wrap:not(.visible) {
+.progress-wrap.progress-wrap--v2.visible,
+.progress-container:not([hidden]) > .progress-wrap--v2 {
+  display: block;
+}
+
+.progress-wrap:not(.visible):not(.progress-wrap--v2) {
   display: none;
 }
 

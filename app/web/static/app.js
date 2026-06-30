@@ -199,7 +199,7 @@
   function showProgress(containerEl, { label = 'Выполняется...' } = {}) {
     if (!containerEl) return null;
     containerEl.innerHTML = `
-    <div class="progress-wrap progress-wrap--v2">
+    <div class="progress-wrap progress-wrap--v2 visible">
       <div class="progress-head">
         <span class="progress-label">${escapeHtml(label)}</span>
         <span class="progress-percent">0%</span>
@@ -236,7 +236,7 @@
     const step = Math.max(0, Math.min(total, Number(currentStep) || 0));
     const pct = Math.round((step / total) * 100);
     containerEl.innerHTML = `
-    <div class="progress-wrap progress-wrap--v2">
+    <div class="progress-wrap progress-wrap--v2 visible">
       <div class="progress-head">
         <span class="progress-label">Шаг ${step} из ${total} — ${escapeHtml(label || '')}</span>
         <span class="progress-percent">${pct}%</span>
@@ -381,7 +381,7 @@
     hideItemsProgressContainer(containerEl);
   }
 
-  function pollItemsTask(taskId, panelPrefix, { label = 'Выполняется…', onDone } = {}) {
+  function pollItemsTask(taskId, panelPrefix, { label = 'Выполняется…', onDone, onFinish } = {}) {
     const container = document.getElementById('progress-' + panelPrefix);
     if (!container) return;
 
@@ -415,8 +415,9 @@
     container._stopFake = fakeProgress(tracker, 8000);
     if (panelPrefix) setActiveTask(panelPrefix, taskId);
 
-    const finish = () => {
+    const finish = (opts = {}) => {
       clearItemsProgressPoll(container);
+      if (!opts.skipFinish && onFinish) onFinish();
     };
 
     container._pollInterval = setInterval(async () => {
@@ -6679,8 +6680,11 @@
     }
     const applyBtn = document.getElementById('btn-compliance-wb-apply');
     const previewBtn = document.getElementById('btn-compliance-wb-preview');
-    if (applyBtn) applyBtn.disabled = true;
-    if (previewBtn) previewBtn.disabled = true;
+    const setBusy = (busy) => {
+      if (applyBtn) applyBtn.disabled = busy;
+      if (previewBtn) previewBtn.disabled = busy;
+    };
+    setBusy(true);
     const storeCount = storeIds.length;
     const itemCount = tableVisible ? vendorCodes.length : 'все из таблицы';
     try {
@@ -6697,6 +6701,7 @@
         label: dryRun
           ? `Проверка WB (${storeCount} магаз., ${itemCount} тов.)…`
           : `Проверка и отправка WB (${storeCount} магаз., ${itemCount} тов.)…`,
+        onFinish: () => setBusy(false),
         onDone: (result) => {
           renderComplianceWbResult(result);
           const sent = (result?.stores || []).reduce((a, s) => a + (Number(s.sent) || 0), 0);
@@ -6711,10 +6716,8 @@
         },
       });
     } catch (err) {
+      setBusy(false);
       toast(err.message || 'Ошибка', 'error');
-    } finally {
-      if (applyBtn) applyBtn.disabled = false;
-      if (previewBtn) previewBtn.disabled = false;
     }
   }
 
@@ -6809,9 +6812,12 @@
     const fsaBtn = document.getElementById('btn-compliance-ozon-fsa');
     const applyBtn = document.getElementById('btn-compliance-ozon-apply');
     const previewBtn = document.getElementById('btn-compliance-ozon-preview');
-    if (fsaBtn) fsaBtn.disabled = true;
-    if (applyBtn) applyBtn.disabled = true;
-    if (previewBtn) previewBtn.disabled = true;
+    const setBusy = (busy) => {
+      if (fsaBtn) fsaBtn.disabled = busy;
+      if (applyBtn) applyBtn.disabled = busy;
+      if (previewBtn) previewBtn.disabled = busy;
+    };
+    setBusy(true);
     const storeCount = storeIds.length || 0;
     const itemCount = tableVisible ? vendorCodes.length : 'все из таблицы';
     const label = fsaOnly
@@ -6832,6 +6838,7 @@
       });
       pollItemsTask(res.task_id, 'compliance-ozon', {
         label,
+        onFinish: () => setBusy(false),
         onDone: (result) => {
           renderComplianceOzonResult(result);
           mergeComplianceOzonRowResults(result?.stores);
@@ -6847,11 +6854,8 @@
         },
       });
     } catch (err) {
+      setBusy(false);
       toast(err.message || 'Ошибка', 'error');
-    } finally {
-      if (fsaBtn) fsaBtn.disabled = false;
-      if (applyBtn) applyBtn.disabled = false;
-      if (previewBtn) previewBtn.disabled = false;
     }
   }
 

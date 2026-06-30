@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-06-30 — Fix: прогресс-бары v2 не отображались
+
+- `showProgress` / `showStepProgress`: класс `visible` на `.progress-wrap--v2`
+- CSS: v2 виден внутри открытого `.progress-container`
+- Документы WB/Ozon: кнопки заблокированы до завершения задачи
+
 ## 2026-06-30 — Fix: WB cards/update 400 (payload + per-card errors)
 
 - Не добавлять русские имена характеристик в корень JSON
