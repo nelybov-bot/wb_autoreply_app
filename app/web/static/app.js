@@ -2604,7 +2604,7 @@
       const part = a.is_participating ? 'да' : 'нет';
       const cnt = `${a.participating_products_count || 0} / ${a.potential_products_count || 0}`;
       return `<tr data-action-id="${a.id}">
-        <td class="col-check"><input type="checkbox" class="ozon-action-check" value="${a.id}" ${a.participating_products_count > 0 ? '' : 'disabled'}></td>
+        <td class="col-check"><input type="checkbox" class="ozon-action-check" value="${a.id}"></td>
         <td class="col-id">${a.id ?? '—'}</td>
         <td class="col-title">${escapeHtml(a.title || '')}${badges.length ? ' ' + badges.join(' ') : ''}</td>
         <td class="col-type">${escapeHtml(a.action_type || '—')}</td>
@@ -2705,8 +2705,9 @@
     }
     if (r.mode === 'discount_threshold' || r.participants_kept != null || r.products_added != null) {
       const skipped = r.skipped_data_count ?? 0;
+      const repriced = r.participants_repriced ?? r.products_repriced ?? 0;
       const msg = `Синхронизация: −${r.participants_removed ?? r.products_removed ?? 0} / +${r.products_added ?? r.candidates_added ?? 0}, `
-        + `оставлено ${r.participants_kept ?? 0}, пропусков данных ${skipped}, акций ${r.actions_processed ?? 0}`;
+        + `цена ${repriced}, оставлено ${r.participants_kept ?? 0}, пропусков данных ${skipped}, акций ${r.actions_processed ?? 0}`;
       return { toast: msg, status: msg };
     }
     const msg = `Автоудаление: удалено ${r.products_removed ?? 0} из ${r.actions_processed ?? 0} акций`;
@@ -2720,7 +2721,11 @@
       return;
     }
     const threshold = document.getElementById('ozon-actions-threshold')?.value || '3';
-    if (!confirm(`Синхронизировать акции по порогу ${threshold}%?`)) return;
+    const selected = getSelectedOzonActionIds();
+    const scope = selected.length
+      ? `только ${selected.length} отмеченных акций`
+      : 'всех акций по настройкам';
+    if (!confirm(`Синхронизировать ${scope} по порогу ${threshold}%?`)) return;
     await saveOzonActionsSettings();
     const btn = document.getElementById('btn-ozon-actions-sync-discount');
     const progressEl = document.getElementById('ozon-actions-loading');
@@ -2732,7 +2737,7 @@
     try {
       syncResult = await api(`/ozon/actions/${sid}/sync-discount`, {
         method: 'POST',
-        body: JSON.stringify({}),
+        body: JSON.stringify({ action_ids: selected }),
         timeoutMs: 600000,
       });
       const fmt = formatOzonActionsResult(syncResult);
@@ -2907,7 +2912,7 @@
     document.getElementById('ozon-actions-sync-mode')?.addEventListener('change', updateOzonActionsModeUi);
     document.getElementById('ozon-actions-check-all')?.addEventListener('change', (e) => {
       const checked = !!e.target.checked;
-      document.querySelectorAll('.ozon-action-check:not(:disabled)').forEach(el => { el.checked = checked; });
+      document.querySelectorAll('.ozon-action-check').forEach(el => { el.checked = checked; });
     });
   }
 

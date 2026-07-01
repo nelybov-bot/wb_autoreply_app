@@ -238,16 +238,22 @@ def participating_discount_percent(product: dict) -> Tuple[Optional[float], Opti
     if price is None:
         return None, "no_price"
     action_price = _parse_positive_float(product.get("action_price"))
-    if action_price is not None:
-        if action_price > price:
-            return None, "action_price_above_price"
-        return round((price - action_price) / price * 100.0, 4), None
-    max_ap = _parse_positive_float(product.get("max_action_price"))
-    if max_ap is not None:
-        if max_ap > price:
-            return None, "max_action_price_above_price"
-        return round((price - max_ap) / price * 100.0, 4), None
-    return None, "no_action_price"
+    if action_price is None:
+        return None, "no_action_price"
+    if action_price > price:
+        return None, "action_price_above_price"
+    return round((price - action_price) / price * 100.0, 4), None
+
+
+def participant_target_price(row: dict, threshold_pct: float) -> Tuple[Optional[float], Optional[str]]:
+    """Целевая цена для участника: минимальная скидка в рамках порога."""
+    price = _parse_positive_float(row.get("price"))
+    if price is None:
+        return None, "no_price"
+    max_ap = _parse_positive_float(row.get("max_action_price"))
+    if max_ap is None:
+        return None, "no_max_action_price"
+    return target_action_price(price, threshold_pct, max_ap), None
 
 
 def candidate_min_discount_percent(product: dict) -> Tuple[Optional[float], Optional[str]]:
@@ -382,6 +388,7 @@ def _finalize_sync_stats(stats: dict) -> dict:
     stats.setdefault("skipped_samples", [])
     stats["products_removed"] = int(stats.get("participants_removed") or 0)
     stats["products_added"] = int(stats.get("candidates_added") or 0)
+    stats["products_repriced"] = int(stats.get("participants_repriced") or 0)
     return stats
 
 
@@ -400,7 +407,7 @@ async def sync_actions_by_discount_threshold(
 ) -> Dict[str, Any]:
     """
     Синхронизация всех акций по порогу скидки.
-    ≤ порога — оставить / добавить; > порога — снять (+ очистить auto-add).
+    ≤ порога — оставить / подправить цену / добавить; > порога — снять (+ очистить auto-add).
     """
     threshold = max(0.0, float(threshold_percent))
     exclude_ids = {int(x) for x in (exclude_action_ids or [])}
@@ -414,6 +421,7 @@ async def sync_actions_by_discount_threshold(
         "actions_skipped": 0,
         "participants_kept": 0,
         "participants_removed": 0,
+        "participants_repriced": 0,
         "candidates_added": 0,
         "products_rejected": 0,
         "auto_add_cleared": 0,
@@ -474,6 +482,7 @@ async def sync_actions_by_discount_threshold(
             continue
 
         remove_ids: List[int] = []
+        to_reprice: List[dict] = []
         for row in participants:
             pid = _product_id_from_row(row)
             if not pid:
@@ -486,6 +495,19 @@ async def sync_actions_by_discount_threshold(
                 continue
             if pct <= threshold + 1e-6:
                 stats["participants_kept"] += 1
+                if enable_add:
+                    current_ap = _parse_positive_float(row.get("action_price"))
+                    target_ap, t_reason = participant_target_price(row, threshold)
+                    if current_ap is not None and target_ap is not None and current_ap < target_ap - 0.009:
+                        item: Dict[str, Any] = {"product_id": pid, "action_price": target_ap}
+                        if row.get("stock") is not None:
+                            try:
+                                item["stock"] = int(row["stock"])
+                            except (TypeError, ValueError):
+                                pass
+                        to_reprice.append(item)
+                    elif target_ap is None and t_reason:
+                        _inc_skip(stats, action_id=aid, product_id=pid, reason=t_reason)
             elif enable_remove:
                 remove_ids.append(pid)
             else:
@@ -527,6 +549,23 @@ async def sync_actions_by_discount_threshold(
                         continue
                     cleared = ar.get("product_ids") or []
                     stats["auto_add_cleared"] += len(cleared) if isinstance(cleared, list) else 0
+
+        if enable_add and to_reprice:
+            repriced_n = 0
+            for i in range(0, len(to_reprice), batch_size):
+                chunk = to_reprice[i : i + batch_size]
+                try:
+                    result = await client.activate_action_products(aid, chunk)
+                except Exception as e:
+                    log.warning("ozon sync reprice action=%s: %s", aid, e)
+                    stats["errors"].append({"action_id": aid, "phase": "reprice", "error": str(e)[:300]})
+                    stats["products_rejected"] += len(chunk)
+                    continue
+                updated = result.get("product_ids") or []
+                rejected = result.get("rejected") or []
+                repriced_n += len(updated) if isinstance(updated, list) else 0
+                stats["products_rejected"] += len(rejected) if isinstance(rejected, list) else 0
+            stats["participants_repriced"] += repriced_n
 
         if not enable_add:
             stats["actions_processed"] += 1

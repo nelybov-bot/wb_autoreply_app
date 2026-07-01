@@ -526,6 +526,10 @@ class OzonActionsRemoveBody(BaseModel):
     only_auto_add: bool = False
 
 
+class OzonActionsSyncBody(BaseModel):
+    action_ids: list[int] = []
+
+
 OZON_ACTIONS_SETTINGS_KEY = "ozon_actions_settings_json"
 AUTO_SCHEDULE_KEY = "auto_schedule_json"
 AUTO_LAST_RUN_KEY = "auto_schedule_last_run_at"
@@ -3736,12 +3740,17 @@ async def api_ozon_actions_remove(
 @app.post("/api/ozon/actions/{store_id}/sync-discount")
 async def api_ozon_actions_sync_discount(
     store_id: int,
+    body: OzonActionsSyncBody = OzonActionsSyncBody(),
     db: Database = Depends(get_db),
     user: UserRow = Depends(require_user),
 ):
     s = _require_ozon_store_for_chats(db, store_id)
     cfg = _get_ozon_actions_settings(db)
     sync_cfg = _store_ozon_sync_settings(cfg, store_id)
+    only_ids = sync_cfg.get("only_action_ids")
+    req_ids = [int(x) for x in (body.action_ids or []) if x is not None]
+    if req_ids:
+        only_ids = req_ids
     try:
         stats = await ozon_actions_sync_discount_for_store(
             s,
@@ -3750,7 +3759,7 @@ async def api_ozon_actions_sync_discount(
             enable_add=bool(sync_cfg.get("sync_enable_add", True)),
             exclude_voucher_actions=bool(sync_cfg.get("exclude_voucher_actions", False)),
             exclude_action_ids=sync_cfg.get("exclude_action_ids") or None,
-            only_action_ids=sync_cfg.get("only_action_ids"),
+            only_action_ids=only_ids,
         )
     except HttpStatusError as e:
         raise _ozon_chat_http_error(e) from e
