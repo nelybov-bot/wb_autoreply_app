@@ -15,6 +15,27 @@ log = logging.getLogger("ozon.certificates")
 
 ProgressCb = Callable[[int, int, str], None]
 
+_LEGACY_TYPE = {
+    "declaration": "DECLARATION",
+    "certificate": "GOST_CERTIFICATE",
+}
+
+_DECL_TYPE_HINTS = ("декларац", "declaration")
+_CERT_TYPE_HINTS = ("сертификат", "certificate", "гост", "gost")
+_SGR_TYPE_HINTS = ("сгр", "sgr", "государствен")
+_ACCORDANCE_HINTS = (
+    "техническ", "регламент", "тр тс", "тр еаэс", "еаэс", "eaeu", "tr ts", "соответств",
+)
+
+
+@dataclass
+class _OzonCertCatalog:
+    doc_types: List[dict] = field(default_factory=list)
+    accordance_types: List[dict] = field(default_factory=list)
+
+
+_catalog_by_client: Dict[str, _OzonCertCatalog] = {}
+
 
 @dataclass
 class OzonCertRowResult:
@@ -45,10 +66,155 @@ def _iso_date(dmy: str) -> str:
     return ""
 
 
-def _ozon_type_code(doc_type: str) -> str:
+def _type_entry_code(entry: dict) -> str:
+    for key in ("value", "code", "type_code"):
+        val = str(entry.get(key) or "").strip()
+        if val:
+            return val
+    return ""
+
+
+def _type_entry_name(entry: dict) -> str:
+    for key in ("name", "title", "label"):
+        val = str(entry.get(key) or "").strip()
+        if val:
+            return val
+    return ""
+
+
+def _accordance_entry_code(entry: dict) -> str:
+    for key in ("code", "value", "type_code"):
+        val = str(entry.get(key) or "").strip()
+        if val:
+            return val
+    return ""
+
+
+def _accordance_entry_title(entry: dict) -> str:
+    for key in ("title", "name", "label"):
+        val = str(entry.get(key) or "").strip()
+        if val:
+            return val
+    return ""
+
+
+def _type_match_score(text: str, doc_type: str) -> int:
+    t = text.casefold()
+    if doc_type == "declaration":
+        if any(h in t for h in _DECL_TYPE_HINTS):
+            return 100
+        if any(h in t for h in _CERT_TYPE_HINTS + _SGR_TYPE_HINTS):
+            return -50
+        return 0
     if doc_type == "certificate":
-        return "GOST_CERTIFICATE"
-    return "DECLARATION"
+        if any(h in t for h in _CERT_TYPE_HINTS):
+            return 100
+        if any(h in t for h in _DECL_TYPE_HINTS):
+            return -50
+        if any(h in t for h in _SGR_TYPE_HINTS):
+            return 10
+        return 0
+    if any(h in t for h in _DECL_TYPE_HINTS):
+        return 80
+    if any(h in t for h in _CERT_TYPE_HINTS):
+        return 60
+    return 0
+
+
+def _resolve_type_code(doc_types: List[dict], doc_type: str) -> str:
+    best_code = ""
+    best_score = -999
+    legacy = _LEGACY_TYPE.get(doc_type, "")
+    available = {_type_entry_code(x) for x in doc_types if _type_entry_code(x)}
+
+    if legacy and legacy in available:
+        return legacy
+
+    for entry in doc_types:
+        code = _type_entry_code(entry)
+        if not code:
+            continue
+        label = f"{_type_entry_name(entry)} {code}"
+        score = _type_match_score(label, doc_type)
+        if score > best_score:
+            best_score = score
+            best_code = code
+
+    if best_code and best_score > 0:
+        return best_code
+    if legacy:
+        return legacy
+    if doc_types:
+        return _type_entry_code(doc_types[0])
+    return ""
+
+
+def _resolve_accordance_type_code(accordance_types: List[dict], doc_type: str) -> str:
+    if not accordance_types:
+        return ""
+    best_code = ""
+    best_score = -999
+    for entry in accordance_types:
+        code = _accordance_entry_code(entry)
+        if not code:
+            continue
+        title = _accordance_entry_title(entry)
+        text = f"{title} {code}".casefold()
+        score = sum(3 for h in _ACCORDANCE_HINTS if h in text)
+        if doc_type == "declaration" and "декларац" in text:
+            score += 5
+        if doc_type == "certificate" and "сертификат" in text:
+            score += 5
+        if score > best_score:
+            best_score = score
+            best_code = code
+    if best_code and best_score > 0:
+        return best_code
+    return _accordance_entry_code(accordance_types[0])
+
+
+async def _load_ozon_cert_catalog(client: OzonClient) -> _OzonCertCatalog:
+    key = client.client_id or "default"
+    cached = _catalog_by_client.get(key)
+    if cached and (cached.doc_types or cached.accordance_types):
+        return cached
+
+    catalog = _OzonCertCatalog()
+    try:
+        catalog.doc_types = await client.product_certificate_types()
+    except HttpStatusError as e:
+        log.warning("ozon certificate types: %s", e)
+    try:
+        catalog.accordance_types = await client.product_certificate_accordance_types()
+    except HttpStatusError as e:
+        log.warning("ozon certificate accordance types: %s", e)
+
+    if catalog.doc_types or catalog.accordance_types:
+        _catalog_by_client[key] = catalog
+        log.info(
+            "ozon cert catalog client=%s: %d doc types, %d accordance types",
+            key[:8],
+            len(catalog.doc_types),
+            len(catalog.accordance_types),
+        )
+    return catalog
+
+
+def _ozon_type_code(doc_type: str, doc_types: Optional[List[dict]] = None) -> str:
+    if doc_types:
+        code = _resolve_type_code(doc_types, doc_type)
+        if code:
+            return code
+    return _LEGACY_TYPE.get(doc_type, "DECLARATION")
+
+
+def _ozon_accordance_type_code(
+    doc_type: str,
+    accordance_types: Optional[List[dict]] = None,
+) -> str:
+    if accordance_types:
+        return _resolve_accordance_type_code(accordance_types, doc_type)
+    return ""
 
 
 def _extract_certificate_id(data: dict) -> int:
@@ -118,24 +284,47 @@ async def _create_ozon_certificate(
     doc_number: str,
     doc_type: str,
     issue_date: str,
+    expire_date: str,
     pdf_bytes: bytes,
     title: str,
+    catalog: Optional[_OzonCertCatalog] = None,
 ) -> Tuple[int, str]:
     if not pdf_bytes:
         return 0, "Пустой PDF"
+    if catalog is None:
+        catalog = await _load_ozon_cert_catalog(client)
+
+    type_code = _ozon_type_code(doc_type, catalog.doc_types)
+    accordance_code = _ozon_accordance_type_code(doc_type, catalog.accordance_types)
+    if not type_code:
+        return 0, "Не удалось определить type_code (справочник Ozon пуст)"
+
     safe_name = re.sub(r"[^\w.\-]+", "_", str(doc_number or "doc"))[:80] or "document"
     filename = f"{safe_name}.pdf"
+    log.info(
+        "ozon certificate create: doc_type=%s type_code=%s accordance=%s number=%s",
+        doc_type,
+        type_code,
+        accordance_code or "-",
+        doc_number[:60],
+    )
     data = await client.product_certificate_create(
         name=title[:250] or doc_number[:250],
-        type_code=_ozon_type_code(doc_type),
+        type_code=type_code,
         number=doc_number,
         issue_date=issue_date,
+        expire_date=expire_date,
+        accordance_type_code=accordance_code,
         pdf_bytes=pdf_bytes,
         filename=filename,
     )
     cid = _extract_certificate_id(data)
     if cid:
-        return cid, "created"
+        note = f"created (type={type_code}"
+        if accordance_code:
+            note += f", accordance={accordance_code}"
+        note += ")"
+        return cid, note
     return 0, str(data)[:300]
 
 
@@ -172,6 +361,7 @@ async def apply_ozon_certificates_for_store(
     client = OzonClient(client_id, api_key, timeout_s=90.0)
     offer_ids = [_norm_offer(r.vendor_code) for r in rows]
     product_by_offer = await _map_offers_to_product_ids(client, offer_ids)
+    cert_catalog = await _load_ozon_cert_catalog(client)
 
     results: List[OzonCertRowResult] = []
     cert_cache: Dict[str, int] = {}
@@ -249,24 +439,37 @@ async def apply_ozon_certificates_for_store(
                     row.reg_date
                     or (fsa.record.reg_date if fsa.record else "")
                 )
+                expire = _iso_date(
+                    row.valid_until
+                    or (fsa.record.end_date if fsa.record else "")
+                )
                 if not issue:
                     res.status = "error"
                     res.message = "Нет даты регистрации для Ozon"
                     results.append(res)
                     continue
                 title = doc_type_label(doc_type)
+                type_code = _ozon_type_code(doc_type, cert_catalog.doc_types)
+                accordance_code = _ozon_accordance_type_code(
+                    doc_type, cert_catalog.accordance_types
+                )
                 try:
                     cert_id, note = await _create_ozon_certificate(
                         client,
                         doc_number=row.doc_number,
                         doc_type=doc_type,
                         issue_date=issue,
+                        expire_date=expire,
                         pdf_bytes=fsa.pdf_bytes,
                         title=title,
+                        catalog=cert_catalog,
                     )
                 except HttpStatusError as e:
                     res.status = "error"
-                    res.message = f"Ozon create: {str(e)[:250]}"
+                    res.message = (
+                        f"Ozon create (type={type_code}, "
+                        f"accordance={accordance_code or '-'}): {str(e)[:220]}"
+                    )
                     results.append(res)
                     continue
                 if not cert_id:

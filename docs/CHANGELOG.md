@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-07-01 — Fix: Ozon certificate type_code из справочника API
+
+- `type_code` и `accordance_type_code` берутся из `GET /v1/product/certificate/types` и `accordance-types` (v2/v1), а не хардкод `DECLARATION` / `GOST_CERTIFICATE`
+- В create передаётся `expire_date` (дата окончания из таблицы или ФСА)
+- В ошибках create — выбранные `type` и `accordance` для диагностики
+- Исправлена ошибка Ozon `wrong certificate type` при загрузке деклараций ЕАЭС
+
 ## 2026-07-01 — Ozon акции: пересчёт скидок и выбор акций
 
 - Исправлен расчёт скидки участника: только `action_price`, без ошибочного fallback на `max_action_price`

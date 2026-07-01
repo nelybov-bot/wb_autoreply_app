@@ -721,6 +721,40 @@ class OzonClient:
             return [x for x in data if isinstance(x, dict)]
         return []
 
+    async def product_certificate_accordance_types(self) -> List[dict]:
+        """Типы соответствия: v2 list, при ошибке — v1."""
+        flat: List[dict] = []
+
+        def _extend(block: Any) -> None:
+            if isinstance(block, list):
+                for item in block:
+                    if isinstance(item, dict):
+                        flat.append(item)
+
+        try:
+            data = await self._request("GET", "/v2/product/certificate/accordance-types/list")
+            if isinstance(data, dict):
+                res = data.get("result") or data
+                if isinstance(res, dict):
+                    _extend(res.get("base"))
+                    _extend(res.get("hazard"))
+                elif isinstance(res, list):
+                    _extend(res)
+            if flat:
+                return flat
+        except HttpStatusError:
+            pass
+
+        data = await self._request("GET", "/v1/product/certificate/accordance-types")
+        if isinstance(data, dict):
+            res = data.get("result") or data
+            if isinstance(res, dict):
+                _extend(res.get("base"))
+                _extend(res.get("hazard"))
+            elif isinstance(res, list):
+                _extend(res)
+        return flat
+
     async def product_certificate_list(
         self,
         *,
@@ -751,6 +785,8 @@ class OzonClient:
         issue_date: str,
         pdf_bytes: bytes,
         filename: str = "certificate.pdf",
+        accordance_type_code: str = "",
+        expire_date: str = "",
     ) -> dict:
         """POST /v1/product/certificate/create — multipart/form-data с файлом PDF."""
         form = aiohttp.FormData()
@@ -758,6 +794,10 @@ class OzonClient:
         form.add_field("type_code", str(type_code or ""))
         form.add_field("number", str(number or ""))
         form.add_field("issue_date", str(issue_date or ""))
+        if accordance_type_code:
+            form.add_field("accordance_type_code", str(accordance_type_code))
+        if expire_date:
+            form.add_field("expire_date", str(expire_date))
         form.add_field(
             "files",
             pdf_bytes,
