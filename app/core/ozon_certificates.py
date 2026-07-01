@@ -1,7 +1,6 @@
 """Ozon: декларации/сертификаты — ФСА → PDF → create/bind."""
 from __future__ import annotations
 
-import base64
 import logging
 import re
 from dataclasses import dataclass, field
@@ -48,7 +47,7 @@ def _iso_date(dmy: str) -> str:
 
 def _ozon_type_code(doc_type: str) -> str:
     if doc_type == "certificate":
-        return "CERTIFICATE"
+        return "GOST_CERTIFICATE"
     return "DECLARATION"
 
 
@@ -122,15 +121,18 @@ async def _create_ozon_certificate(
     pdf_bytes: bytes,
     title: str,
 ) -> Tuple[int, str]:
-    b64_pdf = base64.standard_b64encode(pdf_bytes).decode("ascii")
-    payload = {
-        "name": title[:250] or doc_number[:250],
-        "type_code": _ozon_type_code(doc_type),
-        "number": doc_number,
-        "issue_date": issue_date,
-        "files": [b64_pdf],
-    }
-    data = await client.product_certificate_create(payload)
+    if not pdf_bytes:
+        return 0, "Пустой PDF"
+    safe_name = re.sub(r"[^\w.\-]+", "_", str(doc_number or "doc"))[:80] or "document"
+    filename = f"{safe_name}.pdf"
+    data = await client.product_certificate_create(
+        name=title[:250] or doc_number[:250],
+        type_code=_ozon_type_code(doc_type),
+        number=doc_number,
+        issue_date=issue_date,
+        pdf_bytes=pdf_bytes,
+        filename=filename,
+    )
     cid = _extract_certificate_id(data)
     if cid:
         return cid, "created"

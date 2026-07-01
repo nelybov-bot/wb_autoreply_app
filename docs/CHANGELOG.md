@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-07-01 — Ozon акции: минимальная скидка при добавлении
+
+- При добавлении кандидата в акцию цена = `max_action_price` (минимальная скидка Ozon), а не порог 3%
+- Пример: Ozon требует 2,4% → ставим 2,4%, не 3%
+
+## 2026-06-30 — Fix: Ozon certificate create multipart
+
+- `POST /v1/product/certificate/create` — multipart/form-data с PDF (не JSON base64)
+- Исправлена ошибка `failed to parse multiform`
+
 ## 2026-06-30 — FSA: fast-fail на Render без прокси
 
 - Без `FSA_PROXY_URL` на Render — мгновенная ошибка, без минутных таймаутов

@@ -37,6 +37,14 @@ class OzonClient:
             "User-Agent": USER_AGENT,
         }
 
+    def _auth_headers(self) -> Dict[str, str]:
+        """Заголовки без Content-Type (для multipart)."""
+        return {
+            "Client-Id": self.client_id,
+            "Api-Key": self.api_key,
+            "User-Agent": USER_AGENT,
+        }
+
     async def _request(self, method: str, path: str, *, json_body: Optional[dict] = None) -> Any:
         url = BASE + path
 
@@ -53,6 +61,28 @@ class OzonClient:
                             return None
                         if not txt:
                             return None
+                        try:
+                            return json.loads(txt)
+                        except Exception as e:
+                            log.warning("Ozon API invalid JSON: %s", e)
+                            raise HttpStatusError(502, f"Invalid JSON: {(str(e)[:200])}")
+
+        return await retry(_do)
+
+    async def _request_multipart(self, path: str, form: aiohttp.FormData) -> Any:
+        url = BASE + path
+
+        async def _do():
+            await self._limiter.wait()
+            connector = aiohttp.TCPConnector(force_close=True, family=socket.AF_INET)
+            async with connector:
+                async with aiohttp.ClientSession(timeout=self.timeout, connector=connector) as s:
+                    async with s.post(url, headers=self._auth_headers(), data=form) as resp:
+                        txt = await resp.text()
+                        if resp.status >= 400:
+                            raise HttpStatusError(resp.status, txt)
+                        if not txt:
+                            return {}
                         try:
                             return json.loads(txt)
                         except Exception as e:
@@ -712,9 +742,29 @@ class OzonClient:
             certs = res if isinstance(res, list) else []
         return [x for x in (certs or []) if isinstance(x, dict)]
 
-    async def product_certificate_create(self, payload: dict) -> dict:
-        """POST /v1/product/certificate/create."""
-        data = await self._request("POST", "/v1/product/certificate/create", json_body=payload)
+    async def product_certificate_create(
+        self,
+        *,
+        name: str,
+        type_code: str,
+        number: str,
+        issue_date: str,
+        pdf_bytes: bytes,
+        filename: str = "certificate.pdf",
+    ) -> dict:
+        """POST /v1/product/certificate/create — multipart/form-data с файлом PDF."""
+        form = aiohttp.FormData()
+        form.add_field("name", str(name or "")[:250])
+        form.add_field("type_code", str(type_code or ""))
+        form.add_field("number", str(number or ""))
+        form.add_field("issue_date", str(issue_date or ""))
+        form.add_field(
+            "files",
+            pdf_bytes,
+            filename=filename,
+            content_type="application/pdf",
+        )
+        data = await self._request_multipart("/v1/product/certificate/create", form)
         return data if isinstance(data, dict) else {}
 
     async def product_certificate_bind(
