@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -69,7 +70,7 @@ class FsaLookupResult:
     found: bool = False
     record: Optional[FsaRecord] = None
     pdf_bytes: bytes = b""
-    pdf_source: str = ""  # registry | generated | none
+    pdf_source: str = ""  # registry_file | registry_print | generated | none
     message: str = ""
     error: bool = False
     error_kind: str = ""  # network | api
@@ -460,6 +461,15 @@ class FsaRegistryClient:
 
         return await retry(_do, retries=2)
 
+    async def _get_json(self, path: str, *, referer: str) -> Any:
+        raw = await self._get_bytes(path, referer=referer)
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+
     async def _search_items(
         self,
         doc_type: str,
@@ -520,63 +530,113 @@ class FsaRegistryClient:
             raw=item,
         )
 
+    async def _fetch_item_detail(self, record: FsaRecord) -> dict:
+        """Полная карточка по id — в ней есть idFile вложений (в /get его часто нет)."""
+        fsa_id = int(record.fsa_id or 0)
+        if not fsa_id:
+            return record.raw
+        if record.doc_type == "certificate":
+            path = f"/api/v1/rss/common/certificates/{fsa_id}"
+            referer = record.view_url or f"{FSA_BASE}/rss/certificate/view/{fsa_id}"
+        else:
+            path = f"/api/v1/rds/common/declarations/{fsa_id}"
+            referer = record.view_url or f"{FSA_BASE}/rds/declaration/view/{fsa_id}"
+        try:
+            data = await self._get_json(path, referer=referer)
+        except HttpStatusError as e:
+            log.warning("FSA detail %s id=%s: %s", record.doc_type, fsa_id, e)
+            return record.raw
+        if isinstance(data, dict) and data:
+            merged = dict(record.raw)
+            merged.update(data)
+            return merged
+        return record.raw
+
     def _collect_file_ids(self, item: dict) -> List[int]:
         ids: List[int] = []
-        labs = item.get("testingLabs")
-        if isinstance(labs, list):
-            for lab in labs:
-                if not isinstance(lab, dict):
-                    continue
-                protos = lab.get("protocols")
-                if not isinstance(protos, list):
-                    continue
-                for pr in protos:
-                    if not isinstance(pr, dict):
-                        continue
-                    try:
-                        fid = int(pr.get("idFile") or 0)
-                    except (TypeError, ValueError):
-                        fid = 0
-                    if fid:
-                        ids.append(fid)
-        docs = item.get("documents")
-        if isinstance(docs, dict):
-            for v in docs.values():
-                if isinstance(v, list):
-                    for d in v:
-                        if isinstance(d, dict):
-                            try:
-                                fid = int(d.get("idFile") or d.get("id") or 0)
-                            except (TypeError, ValueError):
-                                fid = 0
-                            if fid:
-                                ids.append(fid)
+
+        def _add(raw: Any) -> None:
+            try:
+                fid = int(raw or 0)
+            except (TypeError, ValueError):
+                return
+            if fid > 0:
+                ids.append(fid)
+
+        def _walk(obj: Any) -> None:
+            if isinstance(obj, dict):
+                for key, val in obj.items():
+                    if key in ("idFile", "fileId", "id_file"):
+                        _add(val)
+                    else:
+                        _walk(val)
+            elif isinstance(obj, list):
+                for x in obj:
+                    _walk(x)
+
+        _walk(item)
         return list(dict.fromkeys(ids))
 
-    async def _try_download_file(self, file_id: int, *, referer: str) -> bytes:
-        paths = [
-            f"/api/v1/rds/common/file/download/{file_id}",
-            f"/api/v1/rds/common/files/{file_id}/download",
-            f"/api/v1/common/file/download/{file_id}",
-            f"/api/v1/common/download/file/{file_id}",
-        ]
+    async def _try_download_file(self, file_id: int, *, referer: str, doc_type: str) -> bytes:
+        if doc_type == "certificate":
+            prefixes = ("/api/v1/rss/common", "/api/v1/rds/common", "/api/v1/common")
+        else:
+            prefixes = ("/api/v1/rds/common", "/api/v1/rss/common", "/api/v1/common")
+        paths: List[str] = []
+        for prefix in prefixes:
+            paths.extend([
+                f"{prefix}/file/download/{file_id}",
+                f"{prefix}/files/{file_id}/download",
+                f"{prefix}/download/file/{file_id}",
+            ])
         for p in paths:
             try:
                 data = await self._get_bytes(p, referer=referer)
-                if data and (is_probably_pdf(data) or len(data) > 200):
+                if data and is_probably_pdf(data):
                     return data
             except HttpStatusError:
                 continue
         return b""
 
+    async def _try_download_print_pdf(self, record: FsaRecord) -> Tuple[bytes, str]:
+        fsa_id = int(record.fsa_id or 0)
+        if not fsa_id:
+            return b"", ""
+        referer = record.view_url or FSA_BASE
+        if record.doc_type == "certificate":
+            paths = [
+                f"/api/v1/rss/common/certificates/{fsa_id}/print",
+                f"/api/v1/rss/common/certificates/print/{fsa_id}",
+            ]
+        else:
+            paths = [
+                f"/api/v1/rds/common/declarations/{fsa_id}/print",
+                f"/api/v1/rds/common/declarations/print/{fsa_id}",
+            ]
+        for p in paths:
+            try:
+                data = await self._get_bytes(p, referer=referer)
+                if is_probably_pdf(data):
+                    return data, "registry_print"
+            except HttpStatusError:
+                continue
+        return b"", ""
+
     async def _build_pdf(self, record: FsaRecord) -> Tuple[bytes, str]:
-        referer = (
-            f"{FSA_BASE}/rss/certificate"
+        full = await self._fetch_item_detail(record)
+        record.raw = full
+        referer = record.view_url or (
+            f"{FSA_BASE}/rss/certificate/view/{record.fsa_id}"
             if record.doc_type == "certificate"
-            else f"{FSA_BASE}/rds/declaration"
+            else f"{FSA_BASE}/rds/declaration/view/{record.fsa_id}"
         )
-        for fid in self._collect_file_ids(record.raw):
-            data = await self._try_download_file(fid, referer=referer)
+
+        print_data, print_src = await self._try_download_print_pdf(record)
+        if print_data:
+            return print_data, print_src
+
+        for fid in self._collect_file_ids(full):
+            data = await self._try_download_file(fid, referer=referer, doc_type=record.doc_type)
             if is_probably_pdf(data):
                 return data, "registry_file"
 
@@ -644,6 +704,14 @@ class FsaRegistryClient:
             except Exception as e:
                 log.warning("FSA pdf for %s: %s", number, e)
                 msg = f"{msg}; PDF: ошибка ({e})"
+            else:
+                if pdf_source == "generated":
+                    msg = (
+                        f"{msg}; PDF: сформирован из данных реестра "
+                        "(официальный скан не скачан — откройте ссылку вручную)"
+                    )
+                elif pdf_source in ("registry_file", "registry_print"):
+                    msg = f"{msg}; PDF: из реестра ФСА"
 
         if fetch_pdf and not pdf_bytes:
             msg = f"{msg}; PDF не получен"

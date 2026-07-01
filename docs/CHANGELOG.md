@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-07-01 — ФСА: попытка скачать официальный PDF вместо заглушки
+
+- После поиска подгружается полная карточка `GET /declarations/{id}` (в `/get` часто нет `idFile`)
+- Дополнительно: print-эндпоинты и расширенный поиск вложений по `idFile`
+- Если скан не скачан — fallback «сформированный» PDF + явное предупреждение в UI («Сформирован (не скан)»)
+
 ## 2026-07-01 — Fix: Ozon certificate type_code из справочника API
 
 - `type_code` и `accordance_type_code` берутся из `GET /v1/product/certificate/types` и `accordance-types` (v2/v1), а не хардкод `DECLARATION` / `GOST_CERTIFICATE`

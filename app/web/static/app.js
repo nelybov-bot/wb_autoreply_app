@@ -6756,8 +6756,8 @@
       else if (hit.status === 'fsa_not_found') fsaLabel = 'Не найден';
       else if (fsaOk) fsaLabel = 'Найден';
       let pdfLabel = '—';
-      if (hit.pdf_source === 'registry_file') pdfLabel = 'Из реестра';
-      else if (hit.pdf_source === 'generated') pdfLabel = 'Сформирован';
+      if (hit.pdf_source === 'registry_file' || hit.pdf_source === 'registry_print') pdfLabel = 'Из реестра';
+      else if (hit.pdf_source === 'generated') pdfLabel = 'Сформирован (не скан)';
       else if (hit.status === 'no_pdf') pdfLabel = 'Нет';
       return {
         ...row,
