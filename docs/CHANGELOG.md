@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-07-01 — Render: persistent disk в render.yaml
+
+- `plan: starter`, disk 1 GB, mount `/opt/render/project/src/data`
+- `SESSION_SECRET` (generate), `COOKIE_SECURE`, чеклист секретов в DEPLOY.md
+
 ## 2026-07-01 — ФСА: попытка скачать официальный PDF вместо заглушки
 
 - После поиска подгружается полная карточка `GET /declarations/{id}` (в `/get` часто нет `idFile`)

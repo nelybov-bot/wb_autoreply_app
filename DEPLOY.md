@@ -12,12 +12,28 @@
 
 ## Постоянное хранилище на Render (Starter)
 
-1. **Dashboard** → сервис → **Disks** → Add Disk  
-2. **Mount Path:** `/opt/render/project/src/data` (или путь к папке `data` проекта)  
-3. **Size:** 1 GB  
-4. **Save** → **Manual Deploy** → Deploy latest commit  
+Диск описан в `render.yaml` (mount `data/`, 1 GB). Можно также добавить вручную:
 
-База `data/reviews.db` сохранится между деплоями. Без диска на Free данные могут сбрасываться при перезапуске.
+1. **Dashboard** → сервис → **Disks** → Add Disk  
+2. **Mount Path:** `/opt/render/project/src/data`  
+3. **Size:** 1 GB (на Render нет 2 GB — только 1, 5, 10…)  
+4. **Save** → **Manual Deploy**
+
+База `data/reviews.db` сохранится между деплоями.
+
+### Environment (заполнить в Dashboard)
+
+| Переменная | Значение |
+|------------|----------|
+| `SESSION_SECRET` | длинная случайная строка (или **Generate** в Render) |
+| `ADMIN_INIT_PASSWORD` | пароль первого `admin` (только если users пуста) |
+| `ADMIN_RESET_TOKEN` | токен для экстренного сброса (опционально) |
+| `COOKIE_SECURE` | `1` (HTTPS) |
+| `FSA_PROXY_URL` | прокси для ФСА, если нужны документы Ozon |
+
+После первого деплоя с диском: **Магазины** и **Настройки** в UI (или импорт `config/export`).
+
+**Ограничения диска:** один инстанс, zero-downtime deploy отключён.
 
 ## Render + реестр ФСА (Ozon «Документы»)
 
