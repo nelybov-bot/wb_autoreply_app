@@ -264,9 +264,9 @@ def candidate_min_discount_percent(product: dict) -> Tuple[Optional[float], Opti
 
 
 def target_action_price(price: float, threshold_pct: float, max_action_price: float) -> float:
-    """Цена участия: не глубже порога, но в рамках лимита Ozon (max_action_price)."""
+    """Цена участия: минимальная скидка для входа (max_action_price), не глубже порога."""
     by_threshold = price * (1.0 - threshold_pct / 100.0)
-    return round(min(by_threshold, max_action_price), 2)
+    return round(max(by_threshold, max_action_price), 2)
 
 
 def _parse_iso_dt(raw: str) -> Optional[datetime]:
