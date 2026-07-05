@@ -6771,10 +6771,24 @@
     if (!Array.isArray(fills) || !fills.length) return '—';
     return fills.map((f) => {
       const name = (f.name || `id ${f.charc_id}`).trim();
-      const val = f.value != null && f.value !== '' ? String(f.value) : '(пусто)';
+      const usable = complianceFillValueUsable(f);
+      const val = usable ? String(f.value) : '(пусто/0 — не отправится)';
       const conf = (f.confidence || '').trim();
       return conf ? `${name}: ${val} [${conf}]` : `${name}: ${val}`;
     }).join('<br>');
+  }
+
+  function complianceFillValueUsable(f) {
+    const name = (f.name || '').toLowerCase().replace(/ё/g, 'е');
+    const unit = (f.unit_name || '').toLowerCase().replace(/ё/g, 'е');
+    const val = f.value;
+    if (val == null || String(val).trim() === '') return false;
+    const isVol = name.includes('объем') || unit === 'мл';
+    if (isVol) {
+      const n = Number(String(val).replace(',', '.'));
+      if (!Number.isNaN(n) && n <= 0) return false;
+    }
+    return true;
   }
 
   function buildComplianceWbFillPayload(result) {
@@ -6783,7 +6797,7 @@
       const sid = Number(st.store_id) || 0;
       if (!sid) continue;
       for (const r of (st.rows || [])) {
-        const ai = (r.ai_fills || []).filter((f) => f.value != null && String(f.value).trim() !== '');
+        const ai = (r.ai_fills || []).filter((f) => complianceFillValueUsable(f));
         if (!ai.length) continue;
         fills.push({
           store_id: sid,

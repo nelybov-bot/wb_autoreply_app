@@ -33,10 +33,12 @@ _AI_FILL_SYSTEM = """Ты помогаешь заполнить обязател
 1) Заполняй только поля из fields_to_fill; charc_id должен совпадать.
 2) value — строка или число. Для объёма в мл (unit_name «мл») — только число (например 14), без «мл».
 3) Опирайся на title и description. Не выдумывай ТН ВЭД, ГОСТ, состав, если их нет в тексте.
-4) Если данных нет — confidence: low, value: "" (пустая строка), reason объясни.
-5) Для аромата косметики без указания в тексте — «без аромата» (confidence medium), не выдумывай цветочные ноты.
-6) Для капсул/ампул: если объём одной капсулы неизвестен — не угадывай; low + пустое value.
-7) Язык value — русский, как принято на WB (кроме брендов и латиницы в названиях).
+4) Каждое поле из fields_to_fill ОБЯЗАТЕЛЬНО должно получить value — пустые строки запрещены, иначе товар останется в черновике.
+5) Для аромата косметики без указания в тексте — «без аромата» (confidence medium).
+6) Для «Объем товара» в мл: ищи число с «мл» в title/description. Если только «N капсул» — суммарный объём ≈ N × 0.35 мл (округли до 1 знака).
+7) Если объём совсем неясен — поставь разумную оценку (например 10 мл для масел/сывороток), не 0 и не пусто.
+8) НИКОГДА не ставь 0 в объём.
+9) Язык value — русский, как принято на WB.
 """
 
 
@@ -364,6 +366,152 @@ async def scan_card_drafts_multi_store(
     return {"stores": out_stores}
 
 
+def _is_volume_field(name: str, unit_name: str) -> bool:
+    n = (name or "").casefold().replace("ё", "е")
+    u = (unit_name or "").casefold().replace("ё", "е")
+    return "объем" in n or u == "мл"
+
+
+def _numeric_le_zero(val: Any) -> bool:
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return float(val) <= 0
+    s = str(val or "").strip().replace(",", ".")
+    if not s:
+        return False
+    try:
+        return float(s) <= 0
+    except ValueError:
+        return False
+
+
+def _fill_value_usable(
+    val: Any,
+    *,
+    name: str = "",
+    unit_name: str = "",
+) -> bool:
+    if val is None:
+        return False
+    if isinstance(val, list):
+        return any(_fill_value_usable(x, name=name, unit_name=unit_name) for x in val)
+    s = str(val).strip()
+    if not s:
+        return False
+    if _is_volume_field(name, unit_name) and _numeric_le_zero(val):
+        return False
+    return True
+
+
+def _extract_volume_ml_from_text(*texts: str) -> Optional[float]:
+    combined = " ".join(t for t in texts if (t or "").strip())
+    if not combined:
+        return None
+    for pat in (
+        r"(\d+(?:[.,]\d+)?)\s*мл\b",
+        r"объ[её]м\w*\s*[:—\-]?\s*(\d+(?:[.,]\d+)?)",
+        r"(\d+(?:[.,]\d+)?)\s*ml\b",
+    ):
+        m = re.search(pat, combined, re.I)
+        if m:
+            v = float(m.group(1).replace(",", "."))
+            if v > 0:
+                return round(v, 2)
+    cap_m = re.search(r"(\d+)\s*капсул", combined, re.I)
+    if cap_m:
+        n = int(cap_m.group(1))
+        if 1 <= n <= 200:
+            return round(n * 0.35, 1)
+    return None
+
+
+def _default_volume_ml(row: CardDraftRow) -> float:
+    vol = _extract_volume_ml_from_text(row.title, row.description)
+    if vol and vol > 0:
+        return vol
+    text = f"{row.title} {row.description}".casefold()
+    cat = (row.subject_name or "").casefold()
+    if "капсул" in text or "ампул" in text:
+        return 2.5
+    if "масл" in cat or "сыворот" in cat or "концентрат" in text:
+        return 10.0
+    return 10.0
+
+
+def _default_fill_for_required(row: CardDraftRow, m: dict) -> dict:
+    name = str(m.get("name") or "")
+    unit = str(m.get("unit_name") or "")
+    cid = int(m.get("charc_id") or 0)
+    base: Dict[str, Any] = {
+        "charc_id": cid,
+        "name": name,
+        "unit_name": unit,
+        "charc_type": m.get("charc_type"),
+    }
+    nlow = name.casefold().replace("ё", "е")
+
+    if _is_volume_field(name, unit):
+        vol = _default_volume_ml(row)
+        return {
+            **base,
+            "value": vol,
+            "confidence": "medium",
+            "reason": "Объём из текста, оценка для капсул или значение по умолчанию",
+        }
+
+    if "аромат" in nlow:
+        return {
+            **base,
+            "value": "без аромата",
+            "confidence": "medium",
+            "reason": "Аромат не указан в карточке",
+        }
+
+    if m.get("charc_type") == 4 or (unit or "").casefold() in ("мл", "г", "кг", "см", "мм"):
+        return {
+            **base,
+            "value": 1,
+            "confidence": "low",
+            "reason": "Числовое значение по умолчанию — проверьте вручную",
+        }
+
+    snippet = (row.title or row.brand or "стандартный").strip()[:80]
+    return {
+        **base,
+        "value": snippet,
+        "confidence": "low",
+        "reason": "Текстовое значение по умолчанию из названия — проверьте вручную",
+    }
+
+
+def _ensure_all_required_filled(row: CardDraftRow, fills: List[dict]) -> List[dict]:
+    """Гарантирует value для каждого обязательного поля — пустые не допускаются."""
+    by_id: Dict[int, dict] = {}
+    for f in fills:
+        try:
+            cid = int(f.get("charc_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if cid:
+            by_id[cid] = f
+
+    out: List[dict] = []
+    for m in row.missing_required:
+        try:
+            cid = int(m.get("charc_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not cid:
+            continue
+        name = str(m.get("name") or "")
+        unit = str(m.get("unit_name") or "")
+        cur = by_id.get(cid)
+        if cur and _fill_value_usable(cur.get("value"), name=name, unit_name=unit):
+            out.append(cur)
+        else:
+            out.append(_default_fill_for_required(row, m))
+    return out
+
+
 def _parse_ai_fill_json(raw: str) -> List[dict]:
     text = (raw or "").strip()
     if text.startswith("```"):
@@ -379,27 +527,41 @@ def _parse_ai_fill_json(raw: str) -> List[dict]:
     return []
 
 
-def _normalize_ai_value(val: Any, *, unit_name: str = "", charc_type: Any = None) -> Any:
+def _normalize_ai_value(val: Any, *, unit_name: str = "", charc_type: Any = None, name: str = "") -> Any:
     if val is None:
         return ""
     if isinstance(val, (int, float)) and not isinstance(val, bool):
+        if _is_volume_field(name, unit_name) and float(val) <= 0:
+            return ""
         if charc_type == 4 or (unit_name or "").strip().lower() in ("мл", "г", "кг", "см", "мм"):
             return val
         return str(val)
     s = str(val).strip()
     if not s:
         return ""
+    if _is_volume_field(name, unit_name) and _numeric_le_zero(s):
+        return ""
     unit = (unit_name or "").strip().lower()
     if unit in ("мл", "г", "кг") or charc_type == 4:
         m = re.search(r"(\d+(?:[.,]\d+)?)", s.replace(",", "."))
         if m:
             num = m.group(1)
-            return float(num) if "." in num else int(num)
+            parsed: Any = float(num) if "." in num else int(num)
+            if _is_volume_field(name, unit_name) and _numeric_le_zero(parsed):
+                return ""
+            return parsed
     return s
 
 
-def _coerce_patch_value(raw_val: Any, existing: Any, *, unit_name: str = "", charc_type: Any = None) -> Any:
-    norm = _normalize_ai_value(raw_val, unit_name=unit_name, charc_type=charc_type)
+def _coerce_patch_value(
+    raw_val: Any,
+    existing: Any,
+    *,
+    unit_name: str = "",
+    charc_type: Any = None,
+    name: str = "",
+) -> Any:
+    norm = _normalize_ai_value(raw_val, unit_name=unit_name, charc_type=charc_type, name=name)
     if not _value_nonempty(norm):
         return norm
     if isinstance(existing, list):
@@ -442,14 +604,19 @@ async def _ai_suggest_fills_for_row(
         if not cid or cid not in allowed or cid in seen:
             continue
         meta = meta_by_id.get(cid) or {}
+        fname = str(meta.get("name") or item.get("name") or "")
+        funit = str(meta.get("unit_name") or "")
         val = _normalize_ai_value(
             item.get("value"),
-            unit_name=str(meta.get("unit_name") or ""),
+            unit_name=funit,
             charc_type=meta.get("charc_type"),
+            name=fname,
         )
+        if not _fill_value_usable(val, name=fname, unit_name=funit):
+            val = ""
         out.append({
             "charc_id": cid,
-            "name": str(meta.get("name") or item.get("name") or ""),
+            "name": fname,
             "value": val,
             "confidence": str(item.get("confidence") or "medium").strip().lower(),
             "reason": str(item.get("reason") or "")[:200],
@@ -473,13 +640,18 @@ def _fills_to_patches(fills: List[dict], card: dict) -> Dict[int, Any]:
             cid = int(f.get("charc_id") or 0)
         except (TypeError, ValueError):
             continue
-        if not cid or not _value_nonempty(f.get("value")):
+        if not cid or not _fill_value_usable(
+            f.get("value"),
+            name=str(f.get("name") or ""),
+            unit_name=str(f.get("unit_name") or ""),
+        ):
             continue
         patches[cid] = _coerce_patch_value(
             f.get("value"),
             existing_by_id.get(cid),
             unit_name=str(f.get("unit_name") or ""),
             charc_type=f.get("charc_type"),
+            name=str(f.get("name") or ""),
         )
     return patches
 
@@ -565,26 +737,32 @@ async def fill_card_drafts_for_store(
                 row.message = "Нет подсказок для отправки"
                 continue
             row.ai_fills = _merge_manual_fills(row, manual)
+            row.ai_fills = _ensure_all_required_filled(row, row.ai_fills)
         elif ai_client:
             try:
                 row.ai_fills = await _ai_suggest_fills_for_row(row, openai_key=openai_key, client=ai_client)
+                row.ai_fills = _ensure_all_required_filled(row, row.ai_fills)
             except (json.JSONDecodeError, ValueError) as e:
-                row.status = "error"
-                row.message = f"ИИ вернул неверный JSON: {e}"
-                continue
+                log.warning("AI fill JSON %s: %s", row.vendor_code, e)
+                row.ai_fills = _ensure_all_required_filled(row, [])
             except Exception as e:
-                row.status = "error"
-                row.message = str(e)[:200]
                 log.warning("AI fill %s: %s", row.vendor_code, e)
-                continue
+                row.ai_fills = _ensure_all_required_filled(row, [])
         else:
-            row.status = "error"
-            row.message = "Не задан OpenAI ключ"
+            row.ai_fills = _ensure_all_required_filled(row, [])
+
+        if not row.missing_required:
+            row.status = "skipped"
+            row.message = "Нет пустых обязательных полей"
             continue
 
-        if not any(_value_nonempty(f.get("value")) for f in row.ai_fills):
-            row.status = "no_suggestions"
-            row.message = "ИИ не предложил значений"
+        filled_count = sum(
+            1 for f in row.ai_fills
+            if _fill_value_usable(f.get("value"), name=str(f.get("name") or ""), unit_name=str(f.get("unit_name") or ""))
+        )
+        if filled_count < len(row.missing_required):
+            row.status = "error"
+            row.message = f"Заполнено {filled_count} из {len(row.missing_required)} полей"
         else:
             row.status = "preview" if dry_run else "pending"
             row.message = "Просмотр" if dry_run else "Готово к отправке"
@@ -601,8 +779,8 @@ async def fill_card_drafts_for_store(
                 continue
             patches = _fills_to_patches(row.ai_fills, card)
             if not patches:
-                row.status = "no_suggestions"
-                row.message = "Нет значений для отправки"
+                row.status = "error"
+                row.message = "Не удалось собрать характеристики для отправки"
                 continue
             payload = build_card_char_patches_payload(card, patches, vendor_code=row.vendor_code)
             if not payload.get("sizes"):
@@ -627,7 +805,12 @@ async def fill_card_drafts_for_store(
     sent = sum(1 for r in draft_rows if r.status == "ok")
     prepared = sum(
         1 for r in draft_rows
-        if r.status in ("preview", "pending", "ok") and any(_value_nonempty(f.get("value")) for f in r.ai_fills)
+        if r.status in ("preview", "pending", "ok")
+        and len(r.ai_fills) >= len(r.missing_required)
+        and all(
+            _fill_value_usable(f.get("value"), name=str(f.get("name") or ""), unit_name=str(f.get("unit_name") or ""))
+            for f in r.ai_fills
+        )
     )
     return {
         **scan,
