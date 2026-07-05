@@ -1186,12 +1186,23 @@ async def _process_auto_store(
         elif int(oz_al.get("ozon_alert_new") or 0):
             summary_parts.append(
                 f"Уведомления Ozon: важных {int(oz_al.get('ozon_alert_new') or 0)} "
-                f"(чатов {int(oz_al.get('ozon_alert_chats_scanned') or 0)})"
+                f"(сообщений {int(oz_al.get('ozon_alert_messages_checked') or 0)}, "
+                f"чатов {int(oz_al.get('ozon_alert_chats_scanned') or 0)})"
             )
-        elif oz_al.get("ozon_alert_chats_scanned"):
-            summary_parts.append(
-                f"Уведомления Ozon: проверено чатов {int(oz_al.get('ozon_alert_chats_scanned') or 0)}, новых нет"
-            )
+        elif oz_al.get("ozon_alert_chats_opened") or oz_al.get("ozon_alert_chats_scanned"):
+            opened = int(oz_al.get("ozon_alert_chats_opened") or oz_al.get("ozon_alert_chats_scanned") or 0)
+            msgs = int(oz_al.get("ozon_alert_messages_checked") or 0)
+            active = int(oz_al.get("ozon_alert_chats_scanned") or 0)
+            if msgs:
+                summary_parts.append(
+                    f"Уведомления Ozon: новых важных нет, проверено сообщений {msgs} "
+                    f"({active} чатов с новым текстом, открыто {opened})"
+                )
+            else:
+                summary_parts.append(
+                    f"Уведомления Ozon: новых нет, открыто {opened} чатов "
+                    f"(все сообщения уже в базе)"
+                )
     oa = result.get("ozon_actions") if isinstance(result.get("ozon_actions"), dict) else {}
     if oa:
         if oa.get("skipped"):

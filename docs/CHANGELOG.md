@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-07-05 — Ozon акции: удаление невалидных участников
+
+- Снятие при отрицательной скидке (action_price > price)
+- Снятие при цене выше max_action_price (красные плашки в ЛК)
+- Раньше такие товары пропускались и оставались в акции
+
+## 2026-07-01 — Ozon уведомления: честный автозапуск
+
+- Скан с конца чата (новые сообщения первыми)
+- Отбор support-чатов по last_message_at, не только unread_count
+- Метрики: chats_opened vs chats_scanned vs messages_checked; понятный текст в журнале
+
 ## 2026-07-01 — Render: persistent disk в render.yaml
 
 - `plan: starter`, disk 1 GB, mount `/opt/render/project/src/data`

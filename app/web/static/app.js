@@ -8482,8 +8482,14 @@
       parts.push(`чаты Ozon: ${oz.ozon_chat_sent || 0} отв.`);
     }
     const ozAl = r.ozon_alerts;
-    if (ozAl && (Number(ozAl.ozon_alert_new) || Number(ozAl.ozon_alert_chats_scanned))) {
-      parts.push(`уведомл. Ozon: ${ozAl.ozon_alert_new || 0} важн., чатов ${ozAl.ozon_alert_chats_scanned || 0}`);
+    if (ozAl && (Number(ozAl.ozon_alert_new) || Number(ozAl.ozon_alert_chats_opened) || Number(ozAl.ozon_alert_chats_scanned))) {
+      const msgs = Number(ozAl.ozon_alert_messages_checked || 0);
+      const opened = Number(ozAl.ozon_alert_chats_opened || ozAl.ozon_alert_chats_scanned || 0);
+      const active = Number(ozAl.ozon_alert_chats_scanned || 0);
+      parts.push(
+        `уведомл. Ozon: ${ozAl.ozon_alert_new || 0} важн., `
+        + `сообщ. ${msgs}, чатов ${active}/${opened}`,
+      );
     }
     const oa = r.ozon_actions;
     if (oa) {
@@ -8556,7 +8562,15 @@
       if (meta.ozon_alert_heuristic_important) heur.push(`без ИИ важных ${meta.ozon_alert_heuristic_important}`);
       if (meta.ozon_alert_ai_calls) heur.push(`ИИ ${meta.ozon_alert_ai_calls}`);
       const heurPart = heur.length ? ` (${heur.join(', ')})` : '';
-      return `Ozon уведомления: новых ${meta.ozon_alert_new ?? 0}, чатов ${meta.ozon_alert_chats_scanned ?? 0}${heurPart}`;
+      const msgs = meta.ozon_alert_messages_checked ?? 0;
+      const opened = meta.ozon_alert_chats_opened ?? meta.ozon_alert_chats_scanned ?? 0;
+      const active = meta.ozon_alert_chats_scanned ?? 0;
+      if (msgs) {
+        return `Ozon уведомления: новых ${meta.ozon_alert_new ?? 0}, сообщений ${msgs} `
+          + `(чатов ${active}/${opened})${heurPart}`;
+      }
+      return `Ozon уведомления: новых ${meta.ozon_alert_new ?? 0}, открыто ${opened} чатов `
+        + `(всё уже в базе)${heurPart}`;
     }
     if (action === 'store_wb_chats_auto' || action === 'store_ozon_chats_auto') {
       const sent = meta.wb_chat_sent ?? meta.ozon_chat_sent ?? 0;

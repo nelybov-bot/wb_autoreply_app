@@ -144,6 +144,31 @@ def is_ozon_support_chat_row(row: dict) -> bool:
     return ct in ("crm", "notification", "news") or "news" in ct
 
 
+def ozon_chat_last_activity_iso(row: dict) -> str:
+    """Последняя активность чата для сортировки при скане уведомлений."""
+    chat_obj = row.get("chat") if isinstance(row.get("chat"), dict) else {}
+    return str(
+        chat_obj.get("last_message_at")
+        or chat_obj.get("updated_at")
+        or chat_obj.get("created_at")
+        or ""
+    ).strip()
+
+
+def pick_support_chats_for_alert_scan(
+    rows: List[dict],
+    *,
+    max_chats: int = 40,
+) -> List[dict]:
+    """Support-чаты для скана: сначала с недавней активностью, не только с unread."""
+    support = [r for r in (rows or []) if isinstance(r, dict) and is_ozon_support_chat_row(r)]
+    support.sort(
+        key=lambda r: (ozon_chat_last_activity_iso(r), int(r.get("unread_count") or 0)),
+        reverse=True,
+    )
+    return support[: max(1, int(max_chats))]
+
+
 def ozon_chat_category(row: dict) -> str:
     """buyer | support | other — для UI и фильтров."""
     if is_ozon_buyer_chat_row(row):

@@ -50,6 +50,7 @@ from .ozon_buyer_chat import (
     last_client_message_info as ozon_last_client_info,
     ozon_chat_row_id,
     ozon_chat_type,
+    pick_support_chats_for_alert_scan,
     ozon_reply_window_hint,
     ozon_http_skip_reason,
     ozon_feature_unavailable_user_message,
@@ -1888,6 +1889,7 @@ async def scan_ozon_important_alerts_for_store(
 
     stats: Dict[str, Any] = {
         "ozon_alert_chats_scanned": 0,
+        "ozon_alert_chats_opened": 0,
         "ozon_alert_messages_checked": 0,
         "ozon_alert_new": 0,
         "ozon_alert_ai_failed": 0,
@@ -1935,15 +1937,13 @@ async def scan_ozon_important_alerts_for_store(
             return stats
         raise
 
-    support_rows = [r for r in rows if isinstance(r, dict) and is_ozon_support_chat_row(r)]
-    support_rows.sort(key=lambda r: int(r.get("unread_count") or 0), reverse=True)
-    take = support_rows[: max(1, int(max_chats))]
+    support_rows = pick_support_chats_for_alert_scan(rows, max_chats=max_chats)
 
-    for row in take:
+    for row in support_rows:
         chat_id = ozon_chat_row_id(row)
         if not chat_id:
             continue
-        stats["ozon_alert_chats_scanned"] += 1
+        stats["ozon_alert_chats_opened"] += 1
         chat_type = ozon_chat_type(row) or "support"
         try:
             hist = await oz_client.chat_history(chat_id, limit=80)
@@ -1963,7 +1963,7 @@ async def scan_ozon_important_alerts_for_store(
             messages = []
         lines = collect_ozon_thread_lines(messages)
         checked = 0
-        for role, text, mid, created in lines:
+        for role, text, mid, created in reversed(lines):
             if role == "seller":
                 continue
             if not ozon_iso_after_cutoff(created, cutoff):
@@ -2021,6 +2021,8 @@ async def scan_ozon_important_alerts_for_store(
             )
             if alert_id:
                 stats["ozon_alert_new"] += 1
+        if checked > 0:
+            stats["ozon_alert_chats_scanned"] += 1
         await asyncio.sleep(1.05)
     return stats
 
@@ -2036,6 +2038,8 @@ async def auto_process_ozon_important_alerts(
         "ozon_alert_stores": 0,
         "ozon_alert_new": 0,
         "ozon_alert_chats_scanned": 0,
+        "ozon_alert_chats_opened": 0,
+        "ozon_alert_messages_checked": 0,
         "ozon_alert_skipped_no_access": 0,
         "ozon_alert_heuristic_important": 0,
         "ozon_alert_heuristic_ignored": 0,
@@ -2064,6 +2068,12 @@ async def auto_process_ozon_important_alerts(
             continue
         stats["ozon_alert_new"] += int(part.get("ozon_alert_new") or 0)
         stats["ozon_alert_chats_scanned"] += int(part.get("ozon_alert_chats_scanned") or 0)
+        stats["ozon_alert_chats_opened"] = int(stats.get("ozon_alert_chats_opened") or 0) + int(
+            part.get("ozon_alert_chats_opened") or 0
+        )
+        stats["ozon_alert_messages_checked"] = int(stats.get("ozon_alert_messages_checked") or 0) + int(
+            part.get("ozon_alert_messages_checked") or 0
+        )
         stats["ozon_alert_skipped_no_access"] += int(part.get("ozon_alert_skipped_no_access") or 0)
         for k in (
             "ozon_alert_heuristic_important",

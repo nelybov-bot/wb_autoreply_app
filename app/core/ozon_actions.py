@@ -199,8 +199,10 @@ SKIP_REASON_LABELS: Dict[str, str] = {
     "no_price": "нет цены price",
     "no_action_price": "нет action_price и max_action_price",
     "no_max_action_price": "нет max_action_price",
-    "action_price_above_price": "action_price > price",
+    "action_price_above_price": "цена в акции выше вашей (отриц. скидка)",
+    "action_price_above_max": "цена в акции выше допустимой Ozon",
     "max_action_price_above_price": "max_action_price > price",
+    "discount_above_threshold": "скидка глубже порога",
     "invalid_product_id": "нет product_id",
     "already_participating": "уже в акции",
 }
@@ -240,9 +242,31 @@ def participating_discount_percent(product: dict) -> Tuple[Optional[float], Opti
     action_price = _parse_positive_float(product.get("action_price"))
     if action_price is None:
         return None, "no_action_price"
-    if action_price > price:
+    if action_price > price + 0.009:
         return None, "action_price_above_price"
     return round((price - action_price) / price * 100.0, 4), None
+
+
+def participant_remove_reason(row: dict, threshold_pct: float) -> Optional[str]:
+    """
+    Причина снятия участника из акции или None, если условия соблюдены.
+    Невалидные позиции (отриц. скидка, не проходят минимум Ozon) — удалять, не пропускать.
+    """
+    price = _parse_positive_float(row.get("price"))
+    if price is None:
+        return None
+    action_price = _parse_positive_float(row.get("action_price"))
+    if action_price is None:
+        return "no_action_price"
+    if action_price > price + 0.009:
+        return "action_price_above_price"
+    max_ap = _parse_positive_float(row.get("max_action_price"))
+    if max_ap is not None and action_price > max_ap + 0.009:
+        return "action_price_above_max"
+    pct = round((price - action_price) / price * 100.0, 4)
+    if pct > float(threshold_pct) + 1e-6:
+        return "discount_above_threshold"
+    return None
 
 
 def participant_target_price(row: dict, threshold_pct: float) -> Tuple[Optional[float], Optional[str]]:
@@ -489,29 +513,41 @@ async def sync_actions_by_discount_threshold(
                 _inc_skip(stats, action_id=aid, product_id=None, reason="invalid_product_id")
                 continue
             participating_ids.add(pid)
-            pct, reason = participating_discount_percent(row)
-            if pct is None:
-                _inc_skip(stats, action_id=aid, product_id=pid, reason=reason or "no_action_price")
+            remove_reason = participant_remove_reason(row, threshold)
+            if remove_reason:
+                if enable_remove:
+                    remove_ids.append(pid)
+                else:
+                    stats["participants_kept"] += 1
                 continue
-            if pct <= threshold + 1e-6:
-                stats["participants_kept"] += 1
-                if enable_add:
-                    current_ap = _parse_positive_float(row.get("action_price"))
-                    target_ap, t_reason = participant_target_price(row, threshold)
-                    if current_ap is not None and target_ap is not None and current_ap < target_ap - 0.009:
-                        item: Dict[str, Any] = {"product_id": pid, "action_price": target_ap}
-                        if row.get("stock") is not None:
-                            try:
-                                item["stock"] = int(row["stock"])
-                            except (TypeError, ValueError):
-                                pass
-                        to_reprice.append(item)
-                    elif target_ap is None and t_reason:
-                        _inc_skip(stats, action_id=aid, product_id=pid, reason=t_reason)
-            elif enable_remove:
-                remove_ids.append(pid)
-            else:
-                stats["participants_kept"] += 1
+            price = _parse_positive_float(row.get("price"))
+            if price is None:
+                _inc_skip(stats, action_id=aid, product_id=pid, reason="no_price")
+                continue
+            target_ap, t_reason = participant_target_price(row, threshold)
+            if target_ap is not None and target_ap > price + 0.009:
+                if enable_remove:
+                    remove_ids.append(pid)
+                else:
+                    stats["participants_kept"] += 1
+                continue
+            stats["participants_kept"] += 1
+            if enable_add:
+                current_ap = _parse_positive_float(row.get("action_price"))
+                if (
+                    current_ap is not None
+                    and target_ap is not None
+                    and current_ap < target_ap - 0.009
+                ):
+                    item: Dict[str, Any] = {"product_id": pid, "action_price": target_ap}
+                    if row.get("stock") is not None:
+                        try:
+                            item["stock"] = int(row["stock"])
+                        except (TypeError, ValueError):
+                            pass
+                    to_reprice.append(item)
+                elif target_ap is None and t_reason:
+                    _inc_skip(stats, action_id=aid, product_id=pid, reason=t_reason)
 
         if enable_remove and remove_ids:
             removed_n = 0
