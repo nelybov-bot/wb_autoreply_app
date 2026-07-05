@@ -52,10 +52,36 @@ def _split_line(line: str) -> List[str]:
 
 
 def detect_doc_type(doc_number: str) -> str:
-    """declaration | certificate | unknown — по номеру документа ЕАЭС/ГОСТ."""
+    """declaration | certificate | unknown — по номеру документа ЕАЭС/ГОСТ/РОСС."""
     text = str(doc_number or "").strip()
     if not text:
         return "unknown"
+    # РОСС/POCC RU: буква после RU — Д = декларация, С = сертификат (инструкция WB)
+    m_ross = re.search(
+        r"^(?:POCC|POSS|РОСС|ROSS)\s+RU\s+([СCДD])",
+        text,
+        re.I,
+    )
+    if m_ross:
+        letter = m_ross.group(1).upper().replace("D", "Д").replace("C", "С")
+        if letter == "Д":
+            return "declaration"
+        if letter == "С":
+            return "certificate"
+    if re.search(r"^RU\.(?:С|C)\b", text, re.I):
+        return "certificate"
+    if re.search(r"^RU\s+Д", text, re.I):
+        return "declaration"
+    if re.search(r"ЕАЭС\s+N\s+RU\s+Д", text, re.I):
+        return "declaration"
+    if re.search(r"ЕАЭС\s+N\s+RU\s+С", text, re.I):
+        return "certificate"
+    if re.search(r"ЕАЭС\s+RU\s+С", text, re.I):
+        return "certificate"
+    if re.search(r"ТС\s+N\s+RU\s+Д", text, re.I):
+        return "declaration"
+    if re.search(r"ТС\s+RU\s+С", text, re.I):
+        return "certificate"
     if _RE_DECLARATION.search(text):
         return "declaration"
     if _RE_CERTIFICATE.search(text):

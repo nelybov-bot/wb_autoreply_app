@@ -10,6 +10,8 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .compliance_docs import (
     CertInputRow,
+    detect_doc_type,
+    doc_type_label,
     filter_cert_rows,
     parse_certificates_file,
     parse_certificates_text,
@@ -27,12 +29,30 @@ _RE_DOC_NUMBER = re.compile(
     r"регистрационн.*номер|номер.*документ|документ.*номер",
     re.I,
 )
+_RE_DECL_NUMBER = re.compile(r"номер.*декларац|декларац.*номер", re.I)
+_RE_CERT_NUMBER = re.compile(r"номер.*сертификат|сертификат.*номер", re.I)
 _RE_REG_DATE = re.compile(
-    r"дата.*регистрац|регистрац.*дата|дата.*начала|начало.*действ",
+    r"дата.*регистрац|регистрац.*дата|дата.*начала|начало.*действ|действует\s*от",
+    re.I,
+)
+_RE_DECL_REG_DATE = re.compile(
+    r"декларац.*(дата|регистрац|действует\s*от)|(дата|регистрац|действует\s*от).*декларац",
+    re.I,
+)
+_RE_CERT_REG_DATE = re.compile(
+    r"сертификат.*(дата|регистрац|действует\s*от)|(дата|регистрац|действует\s*от).*сертификат",
     re.I,
 )
 _RE_VALID_UNTIL = re.compile(
     r"действует.*до|дата.*окончан|окончан.*действ|срок.*действ|конец.*действ",
+    re.I,
+)
+_RE_DECL_VALID = re.compile(
+    r"декларац.*(действует\s*до|окончан|срок)|(действует\s*до|окончан|срок).*декларац",
+    re.I,
+)
+_RE_CERT_VALID = re.compile(
+    r"сертификат.*(действует\s*до|окончан|срок)|(действует\s*до|окончан|срок).*сертификат",
     re.I,
 )
 
@@ -40,18 +60,25 @@ _RE_VALID_UNTIL = re.compile(
 @dataclass
 class CertFieldMap:
     subject_id: int
-    number_id: Optional[int] = None
-    reg_date_id: Optional[int] = None
-    valid_until_id: Optional[int] = None
-    number_named: Optional[str] = None
-    reg_date_named: Optional[str] = None
-    valid_until_named: Optional[str] = None
+    decl_number_id: Optional[int] = None
+    decl_reg_date_id: Optional[int] = None
+    decl_valid_until_id: Optional[int] = None
+    cert_number_id: Optional[int] = None
+    cert_reg_date_id: Optional[int] = None
+    cert_valid_until_id: Optional[int] = None
+    generic_number_id: Optional[int] = None
+    generic_reg_date_id: Optional[int] = None
+    generic_valid_until_id: Optional[int] = None
+    # имена полей (для отчёта)
+    decl_number_name: str = ""
+    cert_number_name: str = ""
+    generic_number_name: str = ""
 
     def ok(self) -> bool:
         return bool(
-            self.number_id or self.number_named
-            or self.reg_date_id or self.reg_date_named
-            or self.valid_until_id or self.valid_until_named
+            self.decl_number_id or self.cert_number_id or self.generic_number_id
+            or self.decl_reg_date_id or self.cert_reg_date_id or self.generic_reg_date_id
+            or self.decl_valid_until_id or self.cert_valid_until_id or self.generic_valid_until_id
         )
 
 
@@ -61,6 +88,8 @@ class CertApplyRowResult:
     nm_id: int = 0
     status: str = "pending"  # ok | skipped | error | not_found | no_fields
     message: str = ""
+    doc_type: str = ""
+    mapped_fields: Optional[List[str]] = None
 
 
 def _charc_id(ch: dict) -> int:
@@ -97,43 +126,30 @@ def _map_fields_from_charcs(charcs: List[dict]) -> CertFieldMap:
             continue
         cid = _charc_id(ch)
         name = _charc_name(ch)
-        named = bool(ch.get("existNamedField"))
-        if _match_charc(ch, _RE_DOC_NUMBER):
-            if cid:
-                m.number_id = cid
-            elif named and name:
-                m.number_named = name
-        elif _match_charc(ch, _RE_REG_DATE):
-            if cid:
-                m.reg_date_id = cid
-            elif named and name:
-                m.reg_date_named = name
-        elif _match_charc(ch, _RE_VALID_UNTIL):
-            if cid:
-                m.valid_until_id = cid
-            elif named and name:
-                m.valid_until_named = name
-    _resolve_named_field_ids(m, charcs)
-    return m
-
-
-def _resolve_named_field_ids(fmap: CertFieldMap, charcs: List[dict]) -> None:
-    """Сопоставляет именованные поля схемы с id (для characteristics, не в корень JSON)."""
-    named_map = (
-        (fmap.number_named, "number_id"),
-        (fmap.reg_date_named, "reg_date_id"),
-        (fmap.valid_until_named, "valid_until_id"),
-    )
-    for named, attr in named_map:
-        if not named or getattr(fmap, attr):
+        if not cid:
             continue
-        target = str(named).strip().casefold()
-        for ch in charcs:
-            if _charc_name(ch).casefold() == target:
-                cid = _charc_id(ch)
-                if cid:
-                    setattr(fmap, attr, cid)
-                    break
+        if _RE_DECL_NUMBER.search(name):
+            m.decl_number_id = cid
+            m.decl_number_name = name
+        elif _RE_CERT_NUMBER.search(name):
+            m.cert_number_id = cid
+            m.cert_number_name = name
+        elif _RE_DOC_NUMBER.search(name) and not m.generic_number_id:
+            m.generic_number_id = cid
+            m.generic_number_name = name
+        if _RE_DECL_REG_DATE.search(name):
+            m.decl_reg_date_id = cid
+        elif _RE_CERT_REG_DATE.search(name):
+            m.cert_reg_date_id = cid
+        elif _RE_REG_DATE.search(name) and not m.generic_reg_date_id:
+            m.generic_reg_date_id = cid
+        if _RE_DECL_VALID.search(name):
+            m.decl_valid_until_id = cid
+        elif _RE_CERT_VALID.search(name):
+            m.cert_valid_until_id = cid
+        elif _RE_VALID_UNTIL.search(name) and not m.generic_valid_until_id:
+            m.generic_valid_until_id = cid
+    return m
 
 
 def _map_fields_from_card(card: dict) -> CertFieldMap:
@@ -147,15 +163,95 @@ def _map_fields_from_card(card: dict) -> CertFieldMap:
             continue
         cid = _charc_id(ch)
         name = _charc_name(ch)
-        if _match_charc(ch, _RE_DOC_NUMBER) and cid:
-            m.number_id = cid
-        elif _match_charc(ch, _RE_REG_DATE) and cid:
-            m.reg_date_id = cid
-        elif _match_charc(ch, _RE_VALID_UNTIL) and cid:
-            m.valid_until_id = cid
-        elif name and _match_charc(ch, _RE_DOC_NUMBER):
-            m.number_named = name
+        if not cid:
+            continue
+        if _RE_DECL_NUMBER.search(name):
+            m.decl_number_id = cid
+            m.decl_number_name = name
+        elif _RE_CERT_NUMBER.search(name):
+            m.cert_number_id = cid
+            m.cert_number_name = name
+        elif _RE_DOC_NUMBER.search(name) and not m.generic_number_id:
+            m.generic_number_id = cid
+            m.generic_number_name = name
+        if _RE_DECL_REG_DATE.search(name):
+            m.decl_reg_date_id = cid
+        elif _RE_CERT_REG_DATE.search(name):
+            m.cert_reg_date_id = cid
+        elif _RE_REG_DATE.search(name) and not m.generic_reg_date_id:
+            m.generic_reg_date_id = cid
+        if _RE_DECL_VALID.search(name):
+            m.decl_valid_until_id = cid
+        elif _RE_CERT_VALID.search(name):
+            m.cert_valid_until_id = cid
+        elif _RE_VALID_UNTIL.search(name) and not m.generic_valid_until_id:
+            m.generic_valid_until_id = cid
     return m
+
+
+def _empty_char_value(existing: Any) -> Any:
+    if isinstance(existing, list):
+        return []
+    return ""
+
+
+def _build_cert_patch_ids(row: CertInputRow, fmap: CertFieldMap) -> Tuple[Dict[int, Any], List[str]]:
+    """Патч characteristics: правильные поля по типу документа + очистка «чужого» типа."""
+    doc_type = detect_doc_type(row.doc_number)
+    patches: Dict[int, Any] = {}
+    mapped: List[str] = []
+
+    def _set(cid: Optional[int], val: str, label: str) -> None:
+        if cid and val:
+            patches[cid] = val
+            mapped.append(label)
+
+    def _clear(cid: Optional[int], label: str) -> None:
+        if cid:
+            patches[cid] = ""
+            mapped.append(f"очистка: {label}")
+
+    if doc_type == "declaration":
+        if fmap.decl_number_id:
+            _set(fmap.decl_number_id, row.doc_number, f"декларация номер ({fmap.decl_number_name or fmap.decl_number_id})")
+        elif fmap.generic_number_id:
+            _set(fmap.generic_number_id, row.doc_number, f"номер ({fmap.generic_number_name or fmap.generic_number_id})")
+        if fmap.decl_reg_date_id:
+            _set(fmap.decl_reg_date_id, row.reg_date, "декларация дата рег.")
+        elif fmap.generic_reg_date_id:
+            _set(fmap.generic_reg_date_id, row.reg_date, "дата рег.")
+        if fmap.decl_valid_until_id:
+            _set(fmap.decl_valid_until_id, row.valid_until, "декларация действует до")
+        elif fmap.generic_valid_until_id:
+            _set(fmap.generic_valid_until_id, row.valid_until, "действует до")
+        _clear(fmap.cert_number_id, "номер сертификата")
+        _clear(fmap.cert_reg_date_id, "дата сертификата")
+        _clear(fmap.cert_valid_until_id, "срок сертификата")
+    elif doc_type == "certificate":
+        if fmap.cert_number_id:
+            _set(fmap.cert_number_id, row.doc_number, f"сертификат номер ({fmap.cert_number_name or fmap.cert_number_id})")
+        elif fmap.generic_number_id:
+            _set(fmap.generic_number_id, row.doc_number, f"номер ({fmap.generic_number_name or fmap.generic_number_id})")
+        if fmap.cert_reg_date_id:
+            _set(fmap.cert_reg_date_id, row.reg_date, "сертификат дата рег.")
+        elif fmap.generic_reg_date_id:
+            _set(fmap.generic_reg_date_id, row.reg_date, "дата рег.")
+        if fmap.cert_valid_until_id:
+            _set(fmap.cert_valid_until_id, row.valid_until, "сертификат действует до")
+        elif fmap.generic_valid_until_id:
+            _set(fmap.generic_valid_until_id, row.valid_until, "действует до")
+        _clear(fmap.decl_number_id, "номер декларации")
+        _clear(fmap.decl_reg_date_id, "дата декларации")
+        _clear(fmap.decl_valid_until_id, "срок декларации")
+    else:
+        cid = fmap.generic_number_id or fmap.decl_number_id or fmap.cert_number_id
+        _set(cid, row.doc_number, "номер (тип не определён)")
+        rid = fmap.generic_reg_date_id or fmap.decl_reg_date_id or fmap.cert_reg_date_id
+        _set(rid, row.reg_date, "дата рег.")
+        uid = fmap.generic_valid_until_id or fmap.decl_valid_until_id or fmap.cert_valid_until_id
+        _set(uid, row.valid_until, "действует до")
+
+    return patches, mapped
 
 
 def _value_nonempty(val: Any) -> bool:
@@ -219,8 +315,16 @@ def _normalize_sizes(card: dict) -> List[dict]:
     return out
 
 
-def build_card_update_payload(card: dict, row: CertInputRow, fmap: CertFieldMap) -> dict:
+def build_card_update_payload(
+    card: dict,
+    row: CertInputRow,
+    fmap: CertFieldMap,
+    *,
+    patch_ids: Optional[Dict[int, Any]] = None,
+) -> dict:
     """Собирает тело cards/update с сохранением остальных полей карточки."""
+    if patch_ids is None:
+        patch_ids, _ = _build_cert_patch_ids(row, fmap)
     nm = int(card.get("nmID") or card.get("nmId") or 0)
     payload: Dict[str, Any] = {
         "nmID": nm,
@@ -240,11 +344,7 @@ def build_card_update_payload(card: dict, row: CertInputRow, fmap: CertFieldMap)
             if dims.get(k) is not None
         }
 
-    patch_ids = {
-        fmap.number_id: row.doc_number,
-        fmap.reg_date_id: row.reg_date,
-        fmap.valid_until_id: row.valid_until,
-    }
+    patch_ids = dict(patch_ids or {})
     chars_out: List[dict] = []
     seen: Set[int] = set()
     for ch in card.get("characteristics") or []:
@@ -254,13 +354,21 @@ def build_card_update_payload(card: dict, row: CertInputRow, fmap: CertFieldMap)
         if not cid:
             continue
         val = ch.get("value")
-        if cid in patch_ids and patch_ids[cid]:
-            val = _char_value(patch_ids[cid], val)
+        if cid in patch_ids:
+            pval = patch_ids[cid]
+            if pval == "" or pval is None:
+                val = _empty_char_value(val)
+            elif pval:
+                val = _char_value(str(pval), val)
         chars_out.append({"id": cid, "value": val})
         seen.add(cid)
 
     for cid, pval in patch_ids.items():
-        if cid and cid not in seen and pval:
+        if not cid or cid in seen:
+            continue
+        if pval == "" or pval is None:
+            chars_out.append({"id": cid, "value": ""})
+        elif pval:
             chars_out.append({"id": cid, "value": pval})
 
     payload["characteristics"] = chars_out
@@ -421,7 +529,9 @@ async def apply_certificates_for_store(
                 progress_cb(done, total, f"Нет полей: {row.vendor_code}")
             continue
 
-        payload = build_card_update_payload(card, row, fmap)
+        patch_ids, mapped = _build_cert_patch_ids(row, fmap)
+        doc_type = detect_doc_type(row.doc_number)
+        payload = build_card_update_payload(card, row, fmap, patch_ids=patch_ids)
         if not payload.get("sizes"):
             results.append(CertApplyRowResult(
                 vendor_code=row.vendor_code,
@@ -434,11 +544,20 @@ async def apply_certificates_for_store(
             continue
 
         updates.append(payload)
+        preview_msg = "Будет отправлено"
+        if dry_run:
+            parts = [doc_type_label(doc_type)]
+            if mapped:
+                parts.append("; ".join(mapped))
+            preview_msg = " · ".join(parts)
+
         res_row = CertApplyRowResult(
             vendor_code=row.vendor_code,
             nm_id=nm,
             status="ok" if not dry_run else "preview",
-            message="Будет отправлено" if dry_run else "Отправка…",
+            message=preview_msg if dry_run else "Отправка…",
+            doc_type=doc_type,
+            mapped_fields=mapped,
         )
         pending_results.append(res_row)
         results.append(res_row)
@@ -483,6 +602,8 @@ async def apply_certificates_for_store(
                 "nm_id": r.nm_id,
                 "status": r.status,
                 "message": r.message,
+                "doc_type": r.doc_type,
+                "mapped_fields": r.mapped_fields or [],
             }
             for r in results
         ],

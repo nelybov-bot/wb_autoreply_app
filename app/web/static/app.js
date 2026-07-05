@@ -6652,6 +6652,17 @@
       const err = (st.rows || []).filter(r => r.status === 'error').length;
       parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
       parts.push(`<p class="form-hint">Строк: ${st.parsed || 0}, найдено карточек: ${st.cards_found || 0}, готово: ${ok}, не найдено: ${nf}, нет полей в категории: ${nfld}, ошибки: ${err}${st.sent != null ? `, отправлено: ${st.sent}` : ''}</p>`);
+      const good = (st.rows || []).filter(r => r.status === 'ok' || r.status === 'preview');
+      if (good.length) {
+        parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Тип</th><th>Поля WB</th><th>Статус</th></tr></thead><tbody>');
+        for (const r of good.slice(0, 80)) {
+          const dtype = r.doc_type === 'declaration' ? 'Декларация' : r.doc_type === 'certificate' ? 'Сертификат' : '—';
+          const fields = Array.isArray(r.mapped_fields) ? r.mapped_fields.join('; ') : (r.message || '');
+          parts.push(`<tr><td>${escapeHtml(r.vendor_code)}</td><td>${r.nm_id || '—'}</td><td>${escapeHtml(dtype)}</td><td>${escapeHtml(fields)}</td><td>${escapeHtml(r.status)}</td></tr>`);
+        }
+        if (good.length > 80) parts.push(`<tr><td colspan="5">…ещё ${good.length - 80}</td></tr>`);
+        parts.push('</tbody></table>');
+      }
       const bad = (st.rows || []).filter(r => r.status !== 'ok' && r.status !== 'preview');
       if (bad.length) {
         parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Статус</th><th>Сообщение</th></tr></thead><tbody>');
