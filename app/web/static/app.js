@@ -6665,6 +6665,107 @@
     box.hidden = !parts.length;
   }
 
+  function formatMissingRequiredFields(missing) {
+    if (!Array.isArray(missing) || !missing.length) return '—';
+    return missing.map((m) => {
+      const name = (m.name || `id ${m.charc_id}`).trim();
+      const unit = (m.unit_name || '').trim();
+      return unit ? `${name} (${unit})` : name;
+    }).join('; ');
+  }
+
+  function renderComplianceWbDraftsResult(result) {
+    const box = document.getElementById('compliance-wb-drafts-result');
+    if (!box) return;
+    if (!result || !result.stores) {
+      box.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+    const parts = [];
+    const stores = result.stores || [];
+    if (stores.length > 1) {
+      const totalDrafts = stores.reduce((a, s) => a + (Number(s.draft_count) || 0), 0);
+      const totalMissing = stores.reduce((a, s) => a + (Number(s.with_missing_required) || 0), 0);
+      parts.push(`<p class="form-hint"><strong>Итого по ${stores.length} магазинам:</strong> черновиков ${totalDrafts}, с пустыми обязательными полями ${totalMissing}</p>`);
+    }
+    for (const st of stores) {
+      const title = escapeHtml(st.store_name || st.store_id || 'Магазин');
+      if (st.error) {
+        parts.push(`<h4 class="compliance-result-store">${title}</h4><p class="text-error">${escapeHtml(st.error)}</p>`);
+        continue;
+      }
+      const draftCount = Number(st.draft_count) || 0;
+      const missingCount = Number(st.with_missing_required) || 0;
+      parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
+      if (!draftCount) {
+        parts.push('<p class="form-hint">Черновиков с ошибками не найдено.</p>');
+        continue;
+      }
+      parts.push(`<p class="form-hint">Черновиков: ${draftCount}, с пустыми обязательными полями: ${missingCount}</p>`);
+      parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Категория</th><th>Название</th><th>Ошибки WB</th><th>Пустые обязательные поля</th></tr></thead><tbody>');
+      const rows = (st.rows || []).slice(0, 150);
+      for (const r of rows) {
+        const errs = (r.wb_errors || []).map(escapeHtml).join('<br>') || '—';
+        const miss = escapeHtml(formatMissingRequiredFields(r.missing_required));
+        parts.push(`<tr><td>${escapeHtml(r.vendor_code)}</td><td>${r.nm_id || '—'}</td><td>${escapeHtml(r.subject_name || '')}</td><td>${escapeHtml((r.title || '').slice(0, 80))}</td><td class="text-error">${errs}</td><td>${miss}</td></tr>`);
+      }
+      if ((st.rows || []).length > 150) {
+        parts.push(`<tr><td colspan="6">…ещё ${st.rows.length - 150}</td></tr>`);
+      }
+      parts.push('</tbody></table>');
+    }
+    box.innerHTML = parts.join('');
+    box.hidden = !parts.length;
+  }
+
+  async function runComplianceWbDraftsScan() {
+    const storeIds = getAutoMpStoreIds('compliance-wb-store-list');
+    const vendorCodes = getComplianceSelectedVendorCodes();
+    const wrap = document.getElementById('compliance-rows-wrap');
+    const tableVisible = wrap && !wrap.hidden && complianceParsedRows.length;
+    if (!storeIds.length) {
+      toast('Выберите хотя бы один магазин WB', 'error');
+      return;
+    }
+    const draftsBtn = document.getElementById('btn-compliance-wb-drafts');
+    const applyBtn = document.getElementById('btn-compliance-wb-apply');
+    const previewBtn = document.getElementById('btn-compliance-wb-preview');
+    const setBusy = (busy) => {
+      if (draftsBtn) draftsBtn.disabled = busy;
+      if (applyBtn) applyBtn.disabled = busy;
+      if (previewBtn) previewBtn.disabled = busy;
+    };
+    setBusy(true);
+    const storeCount = storeIds.length;
+    const filterHint = tableVisible && vendorCodes.length
+      ? `, фильтр: ${vendorCodes.length} арт.`
+      : '';
+    try {
+      const res = await api('/wb/certificates/drafts-scan', {
+        method: 'POST',
+        body: JSON.stringify({
+          store_ids: storeIds,
+          vendor_codes: tableVisible ? vendorCodes : [],
+        }),
+      });
+      pollItemsTask(res.task_id, 'compliance-wb', {
+        label: `Черновики WB (${storeCount} магаз.${filterHint})…`,
+        onFinish: () => setBusy(false),
+        onDone: (result) => {
+          renderComplianceWbDraftsResult(result);
+          const drafts = (result?.stores || []).reduce((a, s) => a + (Number(s.draft_count) || 0), 0);
+          toast(drafts
+            ? `Черновики WB: найдено ${drafts} в ${storeCount} магазинах`
+            : `Черновиков с ошибками не найдено (${storeCount} магаз.)`);
+        },
+      });
+    } catch (err) {
+      setBusy(false);
+      toast(err.message || 'Ошибка', 'error');
+    }
+  }
+
   async function runComplianceWbApply(dryRun) {
     const storeIds = getAutoMpStoreIds('compliance-wb-store-list');
     const text = (document.getElementById('compliance-text')?.value || '').trim();
@@ -6685,9 +6786,11 @@
     }
     const applyBtn = document.getElementById('btn-compliance-wb-apply');
     const previewBtn = document.getElementById('btn-compliance-wb-preview');
+    const draftsBtn = document.getElementById('btn-compliance-wb-drafts');
     const setBusy = (busy) => {
       if (applyBtn) applyBtn.disabled = busy;
       if (previewBtn) previewBtn.disabled = busy;
+      if (draftsBtn) draftsBtn.disabled = busy;
     };
     setBusy(true);
     const storeCount = storeIds.length;
@@ -6928,6 +7031,7 @@
     });
     document.getElementById('btn-compliance-wb-apply')?.addEventListener('click', () => runComplianceWbApply(false));
     document.getElementById('btn-compliance-wb-preview')?.addEventListener('click', () => runComplianceWbApply(true));
+    document.getElementById('btn-compliance-wb-drafts')?.addEventListener('click', () => { void runComplianceWbDraftsScan(); });
     document.getElementById('btn-compliance-ozon-fsa')?.addEventListener('click', () => runComplianceOzonApply({ fsaOnly: true }));
     document.getElementById('btn-compliance-ozon-apply')?.addEventListener('click', () => runComplianceOzonApply({ dryRun: false }));
     document.getElementById('btn-compliance-ozon-preview')?.addEventListener('click', () => runComplianceOzonApply({ dryRun: true }));

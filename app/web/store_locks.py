@@ -13,6 +13,7 @@ _OP_LABELS = {
     "auto_run": "автозапуск",
     "card_links": "связки карточек",
     "wb_certificates": "сертификаты WB",
+    "wb_card_drafts": "черновики WB",
     "ozon_certificates": "документы Ozon",
 }
 

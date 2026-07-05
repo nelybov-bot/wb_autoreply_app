@@ -4544,6 +4544,11 @@ class WbCertificatesApplyBody(BaseModel):
     dry_run: bool = False
 
 
+class WbCardDraftsScanBody(BaseModel):
+    store_ids: list[int] = []
+    vendor_codes: list[str] = []
+
+
 class OzonCertificatesApplyBody(BaseModel):
     store_ids: list[int] = []
     text: str = ""
@@ -4633,6 +4638,42 @@ async def api_wb_certificates_apply(
                 "store_ids": body.store_ids,
                 "vendor_codes_count": len(body.vendor_codes or []),
                 "dry_run": bool(body.dry_run),
+            },
+        )
+    except Exception:
+        pass
+    return {"task_id": task_id, "status": "running"}
+
+
+@app.post("/api/wb/certificates/drafts-scan")
+async def api_wb_card_drafts_scan(
+    body: WbCardDraftsScanBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    """Черновики WB: ошибки cards/error/list + пустые обязательные характеристики."""
+    if not body.store_ids:
+        raise HTTPException(400, "Выберите хотя бы один магазин WB")
+    try:
+        vendor_codes = [str(v).strip() for v in (body.vendor_codes or []) if str(v).strip()]
+        task_id = await web_tasks.run_wb_card_drafts_scan(
+            db,
+            store_ids=body.store_ids,
+            vendor_codes=vendor_codes or None,
+        )
+    except StoreBusyError as e:
+        raise HTTPException(409, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="wb_card_drafts_scan",
+            item_type="wb_certificate",
+            result="started",
+            meta={
+                "store_ids": body.store_ids,
+                "vendor_codes_count": len(body.vendor_codes or []),
             },
         )
     except Exception:

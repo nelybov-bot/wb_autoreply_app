@@ -127,6 +127,65 @@ class WbContentClient:
             return {}
         return await self._request_mutate("POST", "/content/v2/cards/update", json_body=cards)
 
+    async def list_card_errors_page(
+        self,
+        *,
+        limit: int = 100,
+        updated_at: Optional[str] = None,
+        batch_uuid: Optional[str] = None,
+        ascending: bool = True,
+        locale: str = "ru",
+    ) -> dict:
+        """POST /content/v2/cards/error/list — одна страница черновиков с ошибками."""
+        cursor: Dict[str, Any] = {"limit": min(max(int(limit), 1), 100)}
+        if updated_at:
+            cursor["updatedAt"] = str(updated_at)
+        if batch_uuid:
+            cursor["batchUUID"] = str(batch_uuid)
+        body = {
+            "cursor": cursor,
+            "order": {"ascending": bool(ascending)},
+        }
+        path = f"/content/v2/cards/error/list?locale={locale}"
+        data = await self._request_mutate("POST", path, json_body=body)
+        return data if isinstance(data, dict) else {}
+
+    async def list_card_errors_all(
+        self,
+        *,
+        max_batches: int = 200,
+        locale: str = "ru",
+        progress_cb: Optional[Any] = None,
+    ) -> List[dict]:
+        """Все пачки черновиков с ошибками (пагинация по updatedAt + batchUUID)."""
+        max_b = max(1, int(max_batches))
+        items: List[dict] = []
+        updated_at: Optional[str] = None
+        batch_uuid: Optional[str] = None
+        for page in range(max_b):
+            if progress_cb:
+                progress_cb(page + 1, max_b, f"Черновики WB: пачка {page + 1}…")
+            raw = await self.list_card_errors_page(
+                updated_at=updated_at,
+                batch_uuid=batch_uuid,
+                ascending=True,
+                locale=locale,
+            )
+            inner = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+            batch = inner.get("items") or []
+            if isinstance(batch, list):
+                items.extend(x for x in batch if isinstance(x, dict))
+            cur = inner.get("cursor") if isinstance(inner.get("cursor"), dict) else {}
+            if not cur.get("next"):
+                break
+            updated_at = str(cur.get("updatedAt") or "").strip() or None
+            batch_uuid = str(cur.get("batchUUID") or "").strip() or None
+            if not updated_at or not batch_uuid:
+                break
+            if page + 1 < max_b:
+                await asyncio.sleep(6.5)
+        return items
+
     async def list_cards(
         self,
         *,
