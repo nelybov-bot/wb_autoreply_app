@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-07-05 — WB: ИИ-дозаполнение черновиков (шаг 2)
+
+- `POST /api/wb/certificates/drafts-fill` — OpenAI подбирает значения, `dry_run` или отправка
+- `build_card_char_patches_payload`, логика в `wb_card_drafts.py`
+- UI: «Подобрать ИИ (просмотр)» + «Отправить подобранное на WB»
+
 ## 2026-07-05 — WB: скан черновиков (шаг 1, без ИИ)
 
 - `POST /api/wb/certificates/drafts-scan` — список черновиков `cards/error/list`

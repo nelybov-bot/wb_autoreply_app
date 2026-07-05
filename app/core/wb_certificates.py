@@ -268,6 +268,61 @@ def build_card_update_payload(card: dict, row: CertInputRow, fmap: CertFieldMap)
     return payload
 
 
+def build_card_char_patches_payload(
+    card: dict,
+    patches: Dict[int, Any],
+    *,
+    vendor_code: str = "",
+) -> dict:
+    """cards/update с подстановкой произвольных characteristics по id."""
+    nm = int(card.get("nmID") or card.get("nmId") or 0)
+    vc = str(
+        card.get("vendorCode")
+        or card.get("supplierVendorCode")
+        or vendor_code
+        or ""
+    )
+    payload: Dict[str, Any] = {
+        "nmID": nm,
+        "vendorCode": vc,
+        "brand": str(card.get("brand") or ""),
+        "title": str(card.get("title") or ""),
+        "description": str(card.get("description") or ""),
+    }
+    if card.get("kizMarked") is not None:
+        payload["kizMarked"] = bool(card.get("kizMarked"))
+
+    dims = card.get("dimensions")
+    if isinstance(dims, dict) and dims:
+        payload["dimensions"] = {
+            k: dims[k]
+            for k in ("length", "width", "height", "weightBrutto", "isValid")
+            if dims.get(k) is not None
+        }
+
+    chars_out: List[dict] = []
+    seen: Set[int] = set()
+    for ch in card.get("characteristics") or []:
+        if not isinstance(ch, dict):
+            continue
+        cid = _charc_id(ch)
+        if not cid:
+            continue
+        val = ch.get("value")
+        if cid in patches and patches[cid] is not None and _value_nonempty(patches[cid]):
+            val = _char_value(patches[cid], val)
+        chars_out.append({"id": cid, "value": val})
+        seen.add(cid)
+
+    for cid, pval in patches.items():
+        if cid and cid not in seen and pval is not None and _value_nonempty(pval):
+            chars_out.append({"id": int(cid), "value": pval})
+
+    payload["characteristics"] = chars_out
+    payload["sizes"] = _normalize_sizes(card)
+    return payload
+
+
 async def _load_field_maps(
     client: WbContentClient,
     cards: List[dict],

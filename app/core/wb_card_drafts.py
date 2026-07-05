@@ -1,19 +1,43 @@
-"""Черновики WB: cards/error/list + пустые обязательные характеристики (без ИИ)."""
+"""Черновики WB: cards/error/list + пустые обязательные характеристики + ИИ-дозаполнение."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .compliance_docs import _norm_vendor
 from .net import HttpStatusError
-from .wb_certificates import _charc_id, _value_nonempty
+from .wb_certificates import (
+    _char_value,
+    _charc_id,
+    _format_wb_error,
+    _value_nonempty,
+    build_card_char_patches_payload,
+)
 from .wb_content_client import WbContentClient
 
 log = logging.getLogger("wb.card_drafts")
 
 ProgressCb = Callable[[int, int, str], None]
+
+_AI_FILL_SYSTEM = """Ты помогаешь заполнить обязательные характеристики карточки товара Wildberries.
+На вход — JSON с названием, описанием, брендом, категорией и списком полей для заполнения.
+
+Верни ТОЛЬКО JSON (без markdown):
+{"fills": [{"charc_id": 123, "value": "текст или число", "confidence": "high|medium|low", "reason": "кратко"}]}
+
+Правила:
+1) Заполняй только поля из fields_to_fill; charc_id должен совпадать.
+2) value — строка или число. Для объёма в мл (unit_name «мл») — только число (например 14), без «мл».
+3) Опирайся на title и description. Не выдумывай ТН ВЭД, ГОСТ, состав, если их нет в тексте.
+4) Если данных нет — confidence: low, value: "" (пустая строка), reason объясни.
+5) Для аромата косметики без указания в тексте — «без аромата» (confidence medium), не выдумывай цветочные ноты.
+6) Для капсул/ампул: если объём одной капсулы неизвестен — не угадывай; low + пустое value.
+7) Язык value — русский, как принято на WB (кроме брендов и латиницы в названиях).
+"""
 
 
 @dataclass
@@ -23,9 +47,14 @@ class CardDraftRow:
     subject_id: int = 0
     subject_name: str = ""
     title: str = ""
+    brand: str = ""
+    description: str = ""
     wb_errors: List[str] = field(default_factory=list)
     missing_required: List[dict] = field(default_factory=list)
     updated_at: str = ""
+    ai_fills: List[dict] = field(default_factory=list)
+    status: str = "pending"
+    message: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -34,9 +63,14 @@ class CardDraftRow:
             "subject_id": self.subject_id,
             "subject_name": self.subject_name,
             "title": self.title,
+            "brand": self.brand,
+            "description": self.description[:500] if self.description else "",
             "wb_errors": list(self.wb_errors),
             "missing_required": list(self.missing_required),
             "updated_at": self.updated_at,
+            "ai_fills": list(self.ai_fills),
+            "status": self.status,
+            "message": self.message,
         }
 
 
@@ -229,6 +263,8 @@ async def scan_card_drafts_for_store(
         if card:
             nm = int(card.get("nmID") or card.get("nmId") or 0)
             title = str(card.get("title") or "")[:200]
+            brand = str(card.get("brand") or "")[:80]
+            description = str(card.get("description") or "")
             try:
                 csid = int(card.get("subjectID") or card.get("subjectId") or 0)
             except (TypeError, ValueError):
@@ -247,6 +283,8 @@ async def scan_card_drafts_for_store(
             subject_id=sid,
             subject_name=subj_name,
             title=title,
+            brand=brand,
+            description=description,
             wb_errors=list(entry.get("wb_errors") or []),
             missing_required=missing,
             updated_at=str(entry.get("updated_at") or ""),
@@ -324,3 +362,346 @@ async def scan_card_drafts_multi_store(
             })
 
     return {"stores": out_stores}
+
+
+def _parse_ai_fill_json(raw: str) -> List[dict]:
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```\w*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text)
+    obj = json.loads(text)
+    if isinstance(obj, dict):
+        fills = obj.get("fills")
+        if isinstance(fills, list):
+            return [x for x in fills if isinstance(x, dict)]
+    if isinstance(obj, list):
+        return [x for x in obj if isinstance(x, dict)]
+    return []
+
+
+def _normalize_ai_value(val: Any, *, unit_name: str = "", charc_type: Any = None) -> Any:
+    if val is None:
+        return ""
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        if charc_type == 4 or (unit_name or "").strip().lower() in ("мл", "г", "кг", "см", "мм"):
+            return val
+        return str(val)
+    s = str(val).strip()
+    if not s:
+        return ""
+    unit = (unit_name or "").strip().lower()
+    if unit in ("мл", "г", "кг") or charc_type == 4:
+        m = re.search(r"(\d+(?:[.,]\d+)?)", s.replace(",", "."))
+        if m:
+            num = m.group(1)
+            return float(num) if "." in num else int(num)
+    return s
+
+
+def _coerce_patch_value(raw_val: Any, existing: Any, *, unit_name: str = "", charc_type: Any = None) -> Any:
+    norm = _normalize_ai_value(raw_val, unit_name=unit_name, charc_type=charc_type)
+    if not _value_nonempty(norm):
+        return norm
+    if isinstance(existing, list):
+        return _char_value(str(norm) if not isinstance(norm, (int, float)) else norm, existing)
+    if isinstance(norm, (int, float)) and charc_type == 4:
+        return norm
+    return str(norm)
+
+
+async def _ai_suggest_fills_for_row(
+    row: CardDraftRow,
+    *,
+    openai_key: str,
+    client: Any = None,
+) -> List[dict]:
+    from app.core.openai_client import OpenAIClient
+
+    if not row.missing_required:
+        return []
+    ai_client = client or OpenAIClient(openai_key)
+    payload = {
+        "vendor_code": row.vendor_code,
+        "title": row.title,
+        "description": (row.description or "")[:3000],
+        "brand": row.brand,
+        "category": row.subject_name,
+        "fields_to_fill": row.missing_required,
+    }
+    raw = await ai_client.generate(_AI_FILL_SYSTEM, json.dumps(payload, ensure_ascii=False))
+    parsed = _parse_ai_fill_json(raw)
+    allowed = {int(m["charc_id"]) for m in row.missing_required if m.get("charc_id")}
+    meta_by_id = {int(m["charc_id"]): m for m in row.missing_required if m.get("charc_id")}
+    out: List[dict] = []
+    seen: Set[int] = set()
+    for item in parsed:
+        try:
+            cid = int(item.get("charc_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not cid or cid not in allowed or cid in seen:
+            continue
+        meta = meta_by_id.get(cid) or {}
+        val = _normalize_ai_value(
+            item.get("value"),
+            unit_name=str(meta.get("unit_name") or ""),
+            charc_type=meta.get("charc_type"),
+        )
+        out.append({
+            "charc_id": cid,
+            "name": str(meta.get("name") or item.get("name") or ""),
+            "value": val,
+            "confidence": str(item.get("confidence") or "medium").strip().lower(),
+            "reason": str(item.get("reason") or "")[:200],
+            "unit_name": str(meta.get("unit_name") or ""),
+            "charc_type": meta.get("charc_type"),
+        })
+        seen.add(cid)
+    return out
+
+
+def _fills_to_patches(fills: List[dict], card: dict) -> Dict[int, Any]:
+    existing_by_id: Dict[int, Any] = {}
+    for ch in card.get("characteristics") or []:
+        if isinstance(ch, dict):
+            cid = _charc_id(ch)
+            if cid:
+                existing_by_id[cid] = ch.get("value")
+    patches: Dict[int, Any] = {}
+    for f in fills:
+        try:
+            cid = int(f.get("charc_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not cid or not _value_nonempty(f.get("value")):
+            continue
+        patches[cid] = _coerce_patch_value(
+            f.get("value"),
+            existing_by_id.get(cid),
+            unit_name=str(f.get("unit_name") or ""),
+            charc_type=f.get("charc_type"),
+        )
+    return patches
+
+
+def _merge_manual_fills(
+    row: CardDraftRow,
+    manual: Optional[List[dict]],
+) -> List[dict]:
+    if not manual:
+        return list(row.ai_fills)
+    by_id = {int(f["charc_id"]): f for f in row.ai_fills if f.get("charc_id")}
+    for f in manual:
+        try:
+            cid = int(f.get("charc_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if cid:
+            by_id[cid] = {**by_id.get(cid, {}), **f, "charc_id": cid}
+    return list(by_id.values())
+
+
+async def fill_card_drafts_for_store(
+    api_key: str,
+    *,
+    openai_key: str = "",
+    vendor_codes: Optional[List[str]] = None,
+    dry_run: bool = True,
+    manual_fills: Optional[Dict[str, List[dict]]] = None,
+    progress_cb: Optional[ProgressCb] = None,
+) -> dict:
+    """ИИ-подбор значений для пустых полей + опциональная отправка cards/update."""
+    scan = await scan_card_drafts_for_store(
+        api_key,
+        vendor_codes=vendor_codes,
+        progress_cb=progress_cb,
+    )
+    rows_data = scan.get("rows") or []
+    if not rows_data:
+        return {**scan, "dry_run": dry_run, "prepared": 0, "sent": 0, "rows": []}
+
+    client = WbContentClient(api_key, timeout_s=120.0)
+    vendor_list = [str(r.get("vendor_code") or "") for r in rows_data if r.get("vendor_code")]
+    cards = await client.list_cards_all(vendor_codes=vendor_list)
+    card_by_vendor: Dict[str, dict] = {}
+    for card in cards:
+        vc = _norm_vendor(card.get("vendorCode") or card.get("supplierVendorCode") or "").casefold()
+        if vc and vc not in card_by_vendor:
+            card_by_vendor[vc] = card
+
+    draft_rows: List[CardDraftRow] = []
+    for r in rows_data:
+        row = CardDraftRow(
+            vendor_code=str(r.get("vendor_code") or ""),
+            nm_id=int(r.get("nm_id") or 0),
+            subject_id=int(r.get("subject_id") or 0),
+            subject_name=str(r.get("subject_name") or ""),
+            title=str(r.get("title") or ""),
+            brand=str(r.get("brand") or ""),
+            description=str(r.get("description") or ""),
+            wb_errors=list(r.get("wb_errors") or []),
+            missing_required=list(r.get("missing_required") or []),
+            updated_at=str(r.get("updated_at") or ""),
+        )
+        draft_rows.append(row)
+
+    ai_client = None
+    if openai_key and not manual_fills:
+        from app.core.openai_client import OpenAIClient
+        ai_client = OpenAIClient(openai_key)
+
+    total = max(len(draft_rows), 1)
+    for i, row in enumerate(draft_rows):
+        if progress_cb:
+            progress_cb(i, total, f"ИИ: {row.vendor_code} ({i + 1}/{total})")
+        if not row.missing_required:
+            row.status = "skipped"
+            row.message = "Нет пустых обязательных полей"
+            continue
+        manual = (manual_fills or {}).get(row.vendor_code) or (manual_fills or {}).get(row.vendor_code.casefold())
+        if manual_fills is not None:
+            if not manual:
+                row.status = "error"
+                row.message = "Нет подсказок для отправки"
+                continue
+            row.ai_fills = _merge_manual_fills(row, manual)
+        elif ai_client:
+            try:
+                row.ai_fills = await _ai_suggest_fills_for_row(row, openai_key=openai_key, client=ai_client)
+            except (json.JSONDecodeError, ValueError) as e:
+                row.status = "error"
+                row.message = f"ИИ вернул неверный JSON: {e}"
+                continue
+            except Exception as e:
+                row.status = "error"
+                row.message = str(e)[:200]
+                log.warning("AI fill %s: %s", row.vendor_code, e)
+                continue
+        else:
+            row.status = "error"
+            row.message = "Не задан OpenAI ключ"
+            continue
+
+        if not any(_value_nonempty(f.get("value")) for f in row.ai_fills):
+            row.status = "no_suggestions"
+            row.message = "ИИ не предложил значений"
+        else:
+            row.status = "preview" if dry_run else "pending"
+            row.message = "Просмотр" if dry_run else "Готово к отправке"
+
+    updates: List[Tuple[CardDraftRow, dict]] = []
+    if not dry_run:
+        for row in draft_rows:
+            if row.status in ("error", "skipped", "no_suggestions"):
+                continue
+            card = card_by_vendor.get(row.vendor_code.casefold())
+            if not card:
+                row.status = "error"
+                row.message = "Карточка не найдена"
+                continue
+            patches = _fills_to_patches(row.ai_fills, card)
+            if not patches:
+                row.status = "no_suggestions"
+                row.message = "Нет значений для отправки"
+                continue
+            payload = build_card_char_patches_payload(card, patches, vendor_code=row.vendor_code)
+            if not payload.get("sizes"):
+                row.status = "error"
+                row.message = "В карточке нет sizes"
+                continue
+            updates.append((row, payload))
+
+        for i, (row, payload) in enumerate(updates):
+            if progress_cb:
+                progress_cb(i, len(updates), f"Отправка: {row.vendor_code} ({i + 1}/{len(updates)})")
+            try:
+                await client.update_cards([payload])
+                row.status = "ok"
+                row.message = "Отправлено"
+            except HttpStatusError as e:
+                row.status = "error"
+                row.message = _format_wb_error(e)
+            if i + 1 < len(updates):
+                await asyncio.sleep(6.5)
+
+    sent = sum(1 for r in draft_rows if r.status == "ok")
+    prepared = sum(
+        1 for r in draft_rows
+        if r.status in ("preview", "pending", "ok") and any(_value_nonempty(f.get("value")) for f in r.ai_fills)
+    )
+    return {
+        **scan,
+        "dry_run": dry_run,
+        "prepared": prepared,
+        "sent": sent,
+        "rows": [r.to_dict() for r in draft_rows],
+    }
+
+
+async def fill_card_drafts_multi_store(
+    stores: List[Tuple[int, str, str]],
+    *,
+    openai_key: str = "",
+    vendor_codes: Optional[List[str]] = None,
+    dry_run: bool = True,
+    manual_fills_by_store: Optional[Dict[int, Dict[str, List[dict]]]] = None,
+    progress_cb: Optional[ProgressCb] = None,
+) -> dict:
+    out_stores: List[dict] = []
+    total_stores = len(stores)
+    row_total = max(len(vendor_codes) if vendor_codes else 10, 1)
+    grand_total = max(total_stores * row_total, 1)
+
+    for i, (store_id, store_name, api_key) in enumerate(stores):
+        store_offset = i * row_total
+
+        def _cb(
+            cur: int,
+            tot: int,
+            detail: str,
+            _offset=store_offset,
+            _name=store_name,
+            _si=i,
+        ) -> None:
+            if progress_cb:
+                safe_tot = max(int(tot or 0), 1)
+                safe_cur = max(0, min(int(cur or 0), safe_tot))
+                progress_cb(
+                    _offset + safe_cur,
+                    grand_total,
+                    f"Магазин {_si + 1}/{total_stores} · {_name}: {detail}",
+                )
+
+        if progress_cb:
+            progress_cb(store_offset, grand_total, f"Магазин {i + 1}/{total_stores}: {store_name}…")
+
+        manual = (manual_fills_by_store or {}).get(store_id)
+        try:
+            part = await fill_card_drafts_for_store(
+                api_key,
+                openai_key=openai_key,
+                vendor_codes=vendor_codes,
+                dry_run=dry_run,
+                manual_fills=manual,
+                progress_cb=_cb if progress_cb else None,
+            )
+            part["store_id"] = store_id
+            part["store_name"] = store_name
+            out_stores.append(part)
+        except HttpStatusError as e:
+            out_stores.append({
+                "store_id": store_id,
+                "store_name": store_name,
+                "error": str(e.body or e)[:400],
+                "rows": [],
+            })
+        except Exception as e:
+            log.exception("wb card drafts fill store %s: %s", store_id, e)
+            out_stores.append({
+                "store_id": store_id,
+                "store_name": store_name,
+                "error": str(e)[:400],
+                "rows": [],
+            })
+
+    return {"stores": out_stores, "dry_run": dry_run}

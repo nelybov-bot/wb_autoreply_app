@@ -15,7 +15,7 @@ import os
 import secrets
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Depends, Request, Response, Query
@@ -4549,6 +4549,29 @@ class WbCardDraftsScanBody(BaseModel):
     vendor_codes: list[str] = []
 
 
+class WbCardDraftFillChar(BaseModel):
+    charc_id: int
+    value: Any = ""
+    name: str = ""
+    unit_name: str = ""
+    charc_type: Any = None
+    confidence: str = ""
+    reason: str = ""
+
+
+class WbCardDraftFillRow(BaseModel):
+    store_id: int
+    vendor_code: str = ""
+    characteristics: list[WbCardDraftFillChar] = []
+
+
+class WbCardDraftsFillBody(BaseModel):
+    store_ids: list[int] = []
+    vendor_codes: list[str] = []
+    dry_run: bool = True
+    fills: list[WbCardDraftFillRow] = []
+
+
 class OzonCertificatesApplyBody(BaseModel):
     store_ids: list[int] = []
     text: str = ""
@@ -4674,6 +4697,57 @@ async def api_wb_card_drafts_scan(
             meta={
                 "store_ids": body.store_ids,
                 "vendor_codes_count": len(body.vendor_codes or []),
+            },
+        )
+    except Exception:
+        pass
+    return {"task_id": task_id, "status": "running"}
+
+
+@app.post("/api/wb/certificates/drafts-fill")
+async def api_wb_card_drafts_fill(
+    body: WbCardDraftsFillBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    """ИИ-подбор значений для пустых характеристик черновиков WB + опциональная отправка."""
+    if not body.store_ids:
+        raise HTTPException(400, "Выберите хотя бы один магазин WB")
+    if not body.fills and not (db.get_setting("openai_key") or "").strip():
+        raise HTTPException(400, "Не задан OpenAI ключ в настройках")
+    try:
+        vendor_codes = [str(v).strip() for v in (body.vendor_codes or []) if str(v).strip()]
+        manual = [
+            {
+                "store_id": int(f.store_id),
+                "vendor_code": f.vendor_code,
+                "characteristics": [c.model_dump() for c in f.characteristics],
+            }
+            for f in (body.fills or [])
+            if f.store_id and f.vendor_code
+        ]
+        task_id = await web_tasks.run_wb_card_drafts_fill(
+            db,
+            store_ids=body.store_ids,
+            vendor_codes=vendor_codes or None,
+            dry_run=bool(body.dry_run),
+            manual_fills=manual or None,
+        )
+    except StoreBusyError as e:
+        raise HTTPException(409, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="wb_card_drafts_fill",
+            item_type="wb_certificate",
+            result="started",
+            meta={
+                "store_ids": body.store_ids,
+                "vendor_codes_count": len(body.vendor_codes or []),
+                "dry_run": bool(body.dry_run),
+                "fills_count": len(body.fills or []),
             },
         )
     except Exception:

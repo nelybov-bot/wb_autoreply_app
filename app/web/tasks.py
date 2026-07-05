@@ -801,6 +801,131 @@ async def run_wb_card_drafts_scan(
     return task_id
 
 
+async def run_wb_card_drafts_fill(
+    db: Any,
+    *,
+    store_ids: list[int],
+    vendor_codes: Optional[list[str]] = None,
+    dry_run: bool = True,
+    manual_fills: Optional[list[dict]] = None,
+) -> str:
+    from app.core.net import HttpStatusError, UnauthorizedStoreError
+    from app.core.wb_card_drafts import fill_card_drafts_multi_store
+
+    sids = sorted({int(x) for x in store_ids if int(x) > 0})
+    if not sids:
+        raise ValueError("Выберите хотя бы один магазин WB")
+
+    openai_key = (db.get_setting("openai_key") or "").strip()
+    if not manual_fills and not openai_key:
+        raise ValueError("Не задан OpenAI ключ в настройках")
+
+    stores_payload: list[tuple[int, str, str]] = []
+    by_id = {s.id: s for s in db.list_stores()}
+    for sid in sids:
+        st = by_id.get(sid)
+        if not st or str(st.marketplace or "").lower() != "wb":
+            raise ValueError(f"Магазин {sid} не найден или не WB")
+        if not (st.api_key or "").strip():
+            raise ValueError(f"У магазина «{st.name}» нет API-ключа")
+        stores_payload.append((sid, st.name, st.api_key.strip()))
+
+    manual_by_store: dict[int, dict[str, list[dict]]] = {}
+    for item in manual_fills or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            sid = int(item.get("store_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        vc = str(item.get("vendor_code") or "").strip()
+        if not sid or not vc:
+            continue
+        chars = item.get("characteristics") or item.get("ai_fills") or []
+        if not isinstance(chars, list):
+            continue
+        manual_by_store.setdefault(sid, {})[vc] = chars
+
+    task_id = _make_id()
+    try:
+        await store_locks.acquire(
+            sids, "wb_card_drafts", task_id,
+            store_names=_store_names(db, sids),
+        )
+    except StoreBusyError:
+        await store_locks.release_all_for_owner(task_id)
+        raise
+
+    total_steps = max(len(sids) * 10, 1)
+    label = "ИИ черновики WB (просмотр)" if dry_run else "ИИ черновики WB (отправка)"
+    await _init_task(task_id, "wb_card_drafts", label, total_steps)
+    async with _tasks_lock:
+        _tasks[task_id]["store_ids"] = sids
+
+    def _progress(cur: int, tot: int, detail: str) -> None:
+        if _tasks.get(task_id, {}).get("status") != "running":
+            return
+        safe_tot = max(int(tot or 0), 1)
+        safe_cur = max(0, min(int(cur or 0), safe_tot))
+
+        async def _set() -> None:
+            async with _tasks_lock:
+                if task_id in _tasks:
+                    _tasks[task_id]["progress"] = [safe_cur, safe_tot]
+                    _tasks[task_id]["detail"] = detail
+
+        asyncio.create_task(_set())
+
+    async def _run() -> None:
+        try:
+            result = await fill_card_drafts_multi_store(
+                stores_payload,
+                openai_key=openai_key,
+                vendor_codes=vendor_codes,
+                dry_run=dry_run,
+                manual_fills_by_store=manual_by_store or None,
+                progress_cb=_progress,
+            )
+            sent = sum(int(s.get("sent") or 0) for s in result.get("stores") or [])
+            prepared = sum(int(s.get("prepared") or 0) for s in result.get("stores") or [])
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "done"
+                _tasks[task_id]["result"] = result
+                if dry_run:
+                    _tasks[task_id]["detail"] = f"Подобрано для {prepared} карточек в {len(sids)} магазинах"
+                else:
+                    _tasks[task_id]["detail"] = f"Отправлено {sent} обновлений в {len(sids)} магазинах"
+                _tasks[task_id]["progress"] = [total_steps, total_steps]
+            _mark_finished(task_id, "done")
+        except asyncio.CancelledError:
+            async with _tasks_lock:
+                if task_id in _tasks and _tasks[task_id].get("status") == "running":
+                    _tasks[task_id]["status"] = "cancelled"
+                    _tasks[task_id]["error"] = "Остановлено пользователем"
+            _mark_finished(task_id, "cancelled")
+        except UnauthorizedStoreError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+        except HttpStatusError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e.body or e)[:400]
+            _mark_finished(task_id, "error")
+        except Exception as e:
+            log.exception("wb_card_drafts_fill task %s failed: %s", task_id, e)
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+        finally:
+            await store_locks.release(sids, task_id)
+
+    _handles[task_id] = asyncio.create_task(_run())
+    return task_id
+
+
 async def run_ozon_certificates_apply(
     db: Any,
     *,

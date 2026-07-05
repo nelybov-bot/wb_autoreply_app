@@ -6492,6 +6492,7 @@
   }
 
   let complianceParsedRows = [];
+  let complianceWbDraftFills = [];
   let complianceMp = 'wb';
 
   function syncComplianceMpUI() {
@@ -6766,6 +6767,153 @@
     }
   }
 
+  function formatAiFillsSummary(fills) {
+    if (!Array.isArray(fills) || !fills.length) return '—';
+    return fills.map((f) => {
+      const name = (f.name || `id ${f.charc_id}`).trim();
+      const val = f.value != null && f.value !== '' ? String(f.value) : '(пусто)';
+      const conf = (f.confidence || '').trim();
+      return conf ? `${name}: ${val} [${conf}]` : `${name}: ${val}`;
+    }).join('<br>');
+  }
+
+  function buildComplianceWbFillPayload(result) {
+    const fills = [];
+    for (const st of (result?.stores || [])) {
+      const sid = Number(st.store_id) || 0;
+      if (!sid) continue;
+      for (const r of (st.rows || [])) {
+        const ai = (r.ai_fills || []).filter((f) => f.value != null && String(f.value).trim() !== '');
+        if (!ai.length) continue;
+        fills.push({
+          store_id: sid,
+          vendor_code: r.vendor_code,
+          characteristics: ai,
+        });
+      }
+    }
+    return fills;
+  }
+
+  function setComplianceWbDraftsApplyEnabled(enabled) {
+    const btn = document.getElementById('btn-compliance-wb-drafts-apply');
+    if (btn) btn.disabled = !enabled;
+  }
+
+  function renderComplianceWbDraftsFillResult(result) {
+    const box = document.getElementById('compliance-wb-drafts-fill-result');
+    if (!box) return;
+    if (!result || !result.stores) {
+      box.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+    const parts = [];
+    const dryRun = !!result.dry_run;
+    parts.push(`<p class="form-hint"><strong>${dryRun ? 'Просмотр ИИ' : 'Результат отправки'}</strong></p>`);
+    for (const st of (result.stores || [])) {
+      const title = escapeHtml(st.store_name || st.store_id || 'Магазин');
+      if (st.error) {
+        parts.push(`<h4 class="compliance-result-store">${title}</h4><p class="text-error">${escapeHtml(st.error)}</p>`);
+        continue;
+      }
+      const prepared = Number(st.prepared) || 0;
+      const sent = Number(st.sent) || 0;
+      parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
+      parts.push(`<p class="form-hint">${dryRun ? `Подобрано: ${prepared}` : `Отправлено: ${sent}, подготовлено: ${prepared}`}</p>`);
+      const rows = (st.rows || []).filter((r) => (r.ai_fills || []).length || r.status === 'error');
+      if (!rows.length) {
+        parts.push('<p class="form-hint">Нет строк для отображения.</p>');
+        continue;
+      }
+      parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Статус</th><th>Подобранные значения</th><th>Сообщение</th></tr></thead><tbody>');
+      for (const r of rows.slice(0, 150)) {
+        const fillsHtml = formatAiFillsSummary(r.ai_fills);
+        parts.push(`<tr><td>${escapeHtml(r.vendor_code)}</td><td>${r.nm_id || '—'}</td><td>${escapeHtml(r.status || '')}</td><td>${fillsHtml}</td><td>${escapeHtml(r.message || '')}</td></tr>`);
+      }
+      if (rows.length > 150) parts.push(`<tr><td colspan="5">…ещё ${rows.length - 150}</td></tr>`);
+      parts.push('</tbody></table>');
+    }
+    box.innerHTML = parts.join('');
+    box.hidden = !parts.length;
+  }
+
+  function complianceWbDraftsSetBusy(busy) {
+    const ids = [
+      'btn-compliance-wb-apply',
+      'btn-compliance-wb-preview',
+      'btn-compliance-wb-drafts',
+      'btn-compliance-wb-drafts-ai',
+    ];
+    ids.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = busy;
+    });
+    if (busy) {
+      setComplianceWbDraftsApplyEnabled(false);
+    } else if (complianceWbDraftFills.length) {
+      setComplianceWbDraftsApplyEnabled(true);
+    }
+  }
+
+  async function runComplianceWbDraftsFill(dryRun) {
+    const storeIds = getAutoMpStoreIds('compliance-wb-store-list');
+    const vendorCodes = getComplianceSelectedVendorCodes();
+    const wrap = document.getElementById('compliance-rows-wrap');
+    const tableVisible = wrap && !wrap.hidden && complianceParsedRows.length;
+    if (!storeIds.length) {
+      toast('Выберите хотя бы один магазин WB', 'error');
+      return;
+    }
+    if (!dryRun && !complianceWbDraftFills.length) {
+      toast('Сначала нажмите «Подобрать ИИ (просмотр)»', 'error');
+      return;
+    }
+    complianceWbDraftsSetBusy(true);
+    const storeCount = storeIds.length;
+    const filterHint = tableVisible && vendorCodes.length
+      ? `, фильтр: ${vendorCodes.length} арт.`
+      : '';
+    try {
+      const res = await api('/wb/certificates/drafts-fill', {
+        method: 'POST',
+        body: JSON.stringify({
+          store_ids: storeIds,
+          vendor_codes: tableVisible ? vendorCodes : [],
+          dry_run: !!dryRun,
+          fills: dryRun ? [] : complianceWbDraftFills,
+        }),
+      });
+      pollItemsTask(res.task_id, 'compliance-wb', {
+        label: dryRun
+          ? `ИИ черновики WB (${storeCount} магаз.${filterHint})…`
+          : `Отправка черновиков WB (${storeCount} магаз.)…`,
+        onFinish: () => complianceWbDraftsSetBusy(false),
+        onDone: (result) => {
+          renderComplianceWbDraftsFillResult(result);
+          if (dryRun) {
+            complianceWbDraftFills = buildComplianceWbFillPayload(result);
+            setComplianceWbDraftsApplyEnabled(complianceWbDraftFills.length > 0);
+            const n = complianceWbDraftFills.length;
+            toast(n
+              ? `ИИ подобрал значения для ${n} карточек — проверьте и нажмите «Отправить»`
+              : 'ИИ не смог подобрать значения');
+          } else {
+            const sent = (result?.stores || []).reduce((a, s) => a + (Number(s.sent) || 0), 0);
+            complianceWbDraftFills = [];
+            setComplianceWbDraftsApplyEnabled(false);
+            toast(sent
+              ? `WB: отправлено ${sent} обновлений характеристик`
+              : 'Отправка завершена — см. отчёт');
+          }
+        },
+      });
+    } catch (err) {
+      complianceWbDraftsSetBusy(false);
+      toast(err.message || 'Ошибка', 'error');
+    }
+  }
+
   async function runComplianceWbApply(dryRun) {
     const storeIds = getAutoMpStoreIds('compliance-wb-store-list');
     const text = (document.getElementById('compliance-text')?.value || '').trim();
@@ -7032,6 +7180,8 @@
     document.getElementById('btn-compliance-wb-apply')?.addEventListener('click', () => runComplianceWbApply(false));
     document.getElementById('btn-compliance-wb-preview')?.addEventListener('click', () => runComplianceWbApply(true));
     document.getElementById('btn-compliance-wb-drafts')?.addEventListener('click', () => { void runComplianceWbDraftsScan(); });
+    document.getElementById('btn-compliance-wb-drafts-ai')?.addEventListener('click', () => { void runComplianceWbDraftsFill(true); });
+    document.getElementById('btn-compliance-wb-drafts-apply')?.addEventListener('click', () => { void runComplianceWbDraftsFill(false); });
     document.getElementById('btn-compliance-ozon-fsa')?.addEventListener('click', () => runComplianceOzonApply({ fsaOnly: true }));
     document.getElementById('btn-compliance-ozon-apply')?.addEventListener('click', () => runComplianceOzonApply({ dryRun: false }));
     document.getElementById('btn-compliance-ozon-preview')?.addEventListener('click', () => runComplianceOzonApply({ dryRun: true }));

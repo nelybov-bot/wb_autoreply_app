@@ -697,9 +697,12 @@
             <button type="button" class="btn btn-primary" id="btn-compliance-wb-apply">Проверить и отправить на выбранные магазины WB</button>
             <button type="button" class="btn btn-secondary" id="btn-compliance-wb-preview">Только проверить (без отправки)</button>
             <button type="button" class="btn btn-secondary" id="btn-compliance-wb-drafts">Черновики WB — что дозаполнить</button>
+            <button type="button" class="btn btn-secondary" id="btn-compliance-wb-drafts-ai">Подобрать ИИ (просмотр)</button>
+            <button type="button" class="btn btn-primary" id="btn-compliance-wb-drafts-apply" disabled>Отправить подобранное на WB</button>
           </div>
           <div id="compliance-wb-result" class="compliance-result" hidden></div>
           <div id="compliance-wb-drafts-result" class="compliance-result" hidden></div>
+          <div id="compliance-wb-drafts-fill-result" class="compliance-result" hidden></div>
         </div>
 
         <div id="compliance-pane-ozon" class="compliance-mp-pane" hidden>
@@ -1731,7 +1734,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=89"></script>
+  <script src="/static/app.js?v=90"></script>
   <script src="/static/card_links_master.js?v=8"></script>
 </body>
 </html>

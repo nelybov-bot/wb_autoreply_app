@@ -232,6 +232,9 @@ Query-параметры каталога:
 | POST | `/api/wb/certificates/parse` | То же, что `/api/compliance/parse` (совместимость) |
 | POST | `/api/wb/certificates/apply` | Сопоставление + `cards/update`. Body: `{ store_ids, text, vendor_codes?: string[], dry_run?: bool }` → `{ task_id }` |
 | POST | `/api/wb/certificates/drafts-scan` | Черновики WB: ошибки + пустые обязательные поля. Body: `{ store_ids, vendor_codes?: string[] }` → `{ task_id }` |
+| POST | `/api/wb/certificates/drafts-fill` | ИИ-дозаполнение характеристик. Body: `{ store_ids, vendor_codes?, dry_run?, fills? }` → `{ task_id }` |
+
+`drafts-fill`: `dry_run: true` — только подбор ИИ; `dry_run: false` + `fills` — отправка ранее подобранных значений на WB.
 
 `vendor_codes` — если не пустой, обрабатываются только эти артикулы из таблицы. Несколько `store_ids` — последовательная проверка и отправка в каждый магазин.
 
