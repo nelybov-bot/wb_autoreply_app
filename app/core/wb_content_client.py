@@ -5,7 +5,7 @@ import json
 import logging
 import socket
 import asyncio
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 
@@ -16,6 +16,8 @@ log = logging.getLogger("wb.content")
 BASE = "https://content-api.wildberries.ru"
 _PAGE_LIMIT = 100
 _VENDOR_SEARCH_BATCH = 40
+_UPDATE_BATCH_SIZE = 100
+_UPDATE_BATCH_PAUSE_S = 6.5
 
 
 class WbContentClient:
@@ -127,6 +129,56 @@ class WbContentClient:
         if not cards:
             return {}
         return await self._request_mutate("POST", "/content/v2/cards/update", json_body=cards)
+
+    async def update_cards_batched(
+        self,
+        cards: List[dict],
+        *,
+        batch_size: int = _UPDATE_BATCH_SIZE,
+        pause_s: float = _UPDATE_BATCH_PAUSE_S,
+        progress_cb: Optional[Callable[[int, int, str], None]] = None,
+    ) -> Tuple[int, List[dict]]:
+        """cards/update пачками (WB: до 3000 карточек/запрос, лимит ~10 req/мин на update)."""
+        if not cards:
+            return 0, []
+        total = len(cards)
+        sent = 0
+        errors: List[dict] = []
+        bs = max(1, int(batch_size))
+        batches_n = (total + bs - 1) // bs
+        for bi in range(0, total, bs):
+            batch = cards[bi : bi + bs]
+            batch_no = bi // bs + 1
+            if progress_cb:
+                progress_cb(sent, total, f"Пачка {batch_no}/{batches_n}: {len(batch)} карточек…")
+            try:
+                await self.update_cards(batch)
+                sent += len(batch)
+            except HttpStatusError as e:
+                log.warning(
+                    "WB cards/update batch %s/%s failed (%s cards), retry one-by-one: %s",
+                    batch_no,
+                    batches_n,
+                    len(batch),
+                    (e.body or "")[:200],
+                )
+                for card in batch:
+                    try:
+                        await self.update_cards([card])
+                        sent += 1
+                    except HttpStatusError as e2:
+                        errors.append({
+                            "vendor_code": str(card.get("vendorCode") or ""),
+                            "nm_id": card.get("nmID"),
+                            "status": e2.status,
+                            "body": (e2.body or "")[:500],
+                        })
+                    await asyncio.sleep(0.35)
+            if bi + bs < total:
+                await asyncio.sleep(pause_s)
+        if progress_cb:
+            progress_cb(sent, total, f"Отправлено {sent} из {total}")
+        return sent, errors
 
     async def list_card_errors_page(
         self,

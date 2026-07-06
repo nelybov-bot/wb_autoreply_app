@@ -4587,7 +4587,14 @@ class PackagingDimsCompareBody(BaseModel):
     store_ids: list[int] = []
     text: str = ""
     vendor_codes: list[str] = []
-    fsa_only: bool = False
+
+
+class PackagingDimsApplyBody(BaseModel):
+    store_ids: list[int] = []
+    text: str = ""
+    vendor_codes: list[str] = []
+    dry_run: bool = False
+    only_mismatch: bool = True
 
 
 @app.get("/api/compliance/fsa-status")
@@ -4669,6 +4676,50 @@ async def api_packaging_dims_compare(
             meta={
                 "store_ids": body.store_ids,
                 "vendor_codes_count": len(body.vendor_codes or []),
+            },
+        )
+    except Exception:
+        pass
+    return {"task_id": task_id, "status": "running"}
+
+
+@app.post("/api/packaging-dims/apply")
+async def api_packaging_dims_apply(
+    body: PackagingDimsApplyBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    """Замена габаритов упаковки на WB по таблице fact_*."""
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(400, "Вставьте данные таблицы или загрузите файл")
+    if not body.store_ids:
+        raise HTTPException(400, "Выберите хотя бы один магазин WB")
+    try:
+        vendor_codes = [str(v).strip() for v in (body.vendor_codes or []) if str(v).strip()]
+        task_id = await web_tasks.run_packaging_dims_apply(
+            db,
+            store_ids=body.store_ids,
+            text=text,
+            vendor_codes=vendor_codes or None,
+            dry_run=bool(body.dry_run),
+            only_mismatch=bool(body.only_mismatch),
+        )
+    except StoreBusyError as e:
+        raise HTTPException(409, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="packaging_dims_apply",
+            item_type="packaging_dims",
+            result="started",
+            meta={
+                "store_ids": body.store_ids,
+                "vendor_codes_count": len(body.vendor_codes or []),
+                "dry_run": bool(body.dry_run),
+                "only_mismatch": bool(body.only_mismatch),
             },
         )
     except Exception:

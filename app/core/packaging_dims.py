@@ -1,6 +1,7 @@
 """Сравнение фактических габаритов упаковки с данными карточек WB."""
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import logging
@@ -422,3 +423,225 @@ async def compare_dims_multi_store(
             })
 
     return {"stores": out_stores}
+
+
+def _dim_num(v: float) -> float:
+    return round(float(v), 2)
+
+
+def build_dims_update_payload(card: dict, row: PackagingDimRow) -> Optional[dict]:
+    """cards/update: подставить fact_* в dimensions, остальное карточки сохранить."""
+    from .wb_certificates import build_card_char_patches_payload
+
+    payload = build_card_char_patches_payload(card, {}, vendor_code=row.vendor_code)
+    if not payload.get("sizes"):
+        return None
+    old_dims = card.get("dimensions") if isinstance(card.get("dimensions"), dict) else {}
+    dims: Dict[str, Any] = {
+        "length": _dim_num(row.fact_length),
+        "width": _dim_num(row.fact_width),
+        "height": _dim_num(row.fact_height),
+    }
+    if old_dims.get("weightBrutto") is not None:
+        dims["weightBrutto"] = old_dims["weightBrutto"]
+    if old_dims.get("isValid") is not None:
+        dims["isValid"] = old_dims["isValid"]
+    payload["dimensions"] = dims
+    return payload
+
+
+def _preview_dims_message(cmp: dict, row: PackagingDimRow) -> str:
+    new_s = f"{_dim_num(row.fact_length)}×{_dim_num(row.fact_width)}×{_dim_num(row.fact_height)}"
+    if cmp.get("wb_length") is not None:
+        old_s = f"{cmp.get('wb_length')}×{cmp.get('wb_width')}×{cmp.get('wb_height')}"
+        return f"Будет {new_s} см (сейчас {old_s})"
+    return f"Будет {new_s} см"
+
+
+async def apply_dims_for_store(
+    api_key: str,
+    *,
+    rows: List[PackagingDimRow],
+    dry_run: bool = False,
+    only_mismatch: bool = True,
+    progress_cb: Optional[ProgressCb] = None,
+) -> dict:
+    client = WbContentClient(api_key, timeout_s=600.0)
+    vendor_codes = list(dict.fromkeys(r.vendor_code for r in rows if r.vendor_code))
+    total = len(rows)
+
+    card_by_vendor, load_meta = await _load_wb_cards_for_compare(
+        client,
+        vendor_codes,
+        progress_cb=progress_cb,
+    )
+    load_steps = int(load_meta.get("pages_fetched") or 0)
+    compare_total = max(load_steps + total, total, 1)
+
+    results: List[dict] = []
+    updates: List[dict] = []
+    pending: List[dict] = []
+
+    for i, row in enumerate(rows, start=1):
+        key = _norm_vendor(row.vendor_code).casefold()
+        card = card_by_vendor.get(key)
+        cmp = _compare_row(row, card)
+
+        if cmp["status"] == "match" and only_mismatch:
+            cmp = {**cmp, "status": "skipped", "message": "Уже совпадает — не меняем"}
+            results.append(cmp)
+            if progress_cb:
+                progress_cb(load_steps + i, compare_total, f"Пропуск: {row.vendor_code}")
+            continue
+
+        if cmp["status"] in ("not_found", "no_dims"):
+            results.append(cmp)
+            if progress_cb:
+                progress_cb(load_steps + i, compare_total, f"{cmp['status']}: {row.vendor_code}")
+            continue
+
+        payload = build_dims_update_payload(card, row)
+        if not payload:
+            cmp = {**cmp, "status": "error", "message": "В карточке нет sizes (chrtID/skus) для обновления"}
+            results.append(cmp)
+            if progress_cb:
+                progress_cb(load_steps + i, compare_total, f"Нет sizes: {row.vendor_code}")
+            continue
+
+        row_out = {**cmp}
+        if dry_run:
+            row_out["status"] = "preview"
+            row_out["message"] = _preview_dims_message(cmp, row)
+        else:
+            row_out["status"] = "pending"
+            row_out["message"] = _preview_dims_message(cmp, row)
+
+        updates.append(payload)
+        pending.append(row_out)
+        results.append(row_out)
+        if progress_cb:
+            progress_cb(load_steps + i, compare_total, f"Подготовлено: {row.vendor_code}")
+
+    sent = 0
+    errors: List[dict] = []
+    if not dry_run and updates:
+        send_total = len(updates)
+
+        def _send_prog(cur: int, tot: int, detail: str) -> None:
+            if progress_cb:
+                progress_cb(compare_total + cur, compare_total + tot, detail)
+
+        sent, batch_errors = await client.update_cards_batched(
+            updates,
+            progress_cb=_send_prog,
+        )
+        err_by_vc = {
+            _norm_vendor(e.get("vendor_code") or "").casefold(): e
+            for e in batch_errors
+            if e.get("vendor_code")
+        }
+        for res in pending:
+            key = _norm_vendor(res.get("vendor_code") or "").casefold()
+            if key in err_by_vc:
+                e = err_by_vc[key]
+                msg = f"Ошибка WB {e.get('status')}"
+                body = str(e.get("body") or "").strip()
+                if body:
+                    msg = f"{msg}: {body[:200]}"
+                errors.append(e)
+                res["status"] = "error"
+                res["message"] = msg
+                log.warning("WB dims update %s nm=%s: %s", res.get("vendor_code"), res.get("nm_id"), msg)
+            else:
+                res["status"] = "ok"
+                res["message"] = "Отправлено на WB"
+
+    prepared = len(updates)
+    skipped = sum(1 for r in results if r["status"] == "skipped")
+    preview = sum(1 for r in results if r["status"] == "preview")
+    ok = sum(1 for r in results if r["status"] == "ok")
+    err_n = sum(1 for r in results if r["status"] == "error")
+
+    return {
+        "dry_run": dry_run,
+        "only_mismatch": only_mismatch,
+        "parsed": len(rows),
+        "cards_found": len(card_by_vendor),
+        "prepared": prepared,
+        "sent": sent,
+        "skipped": skipped,
+        "preview": preview,
+        "ok": ok,
+        "errors_count": err_n,
+        "load_mode": load_meta.get("load_mode"),
+        "catalog_truncated": bool(load_meta.get("truncated")),
+        "catalog_cards": load_meta.get("cards_loaded"),
+        "errors": errors,
+        "rows": results,
+    }
+
+
+async def apply_dims_multi_store(
+    stores: List[Tuple[int, str, str]],
+    *,
+    rows: List[PackagingDimRow],
+    dry_run: bool = False,
+    only_mismatch: bool = True,
+    progress_cb: Optional[ProgressCb] = None,
+) -> dict:
+    out_stores: List[dict] = []
+    total_stores = len(stores)
+
+    for i, (store_id, store_name, api_key) in enumerate(stores):
+        def _cb(
+            cur: int,
+            tot: int,
+            detail: str,
+            _name=store_name,
+            _si=i,
+        ) -> None:
+            if progress_cb:
+                safe_tot = max(int(tot or 0), 1)
+                safe_cur = max(0, min(int(cur or 0), safe_tot))
+                progress_cb(
+                    safe_cur,
+                    safe_tot,
+                    f"Магазин {_si + 1}/{total_stores} · {_name}: {detail}",
+                )
+
+        if progress_cb:
+            progress_cb(
+                0,
+                estimate_apply_steps(len(rows), 1, only_mismatch=only_mismatch),
+                f"Магазин {i + 1}/{total_stores}: {store_name}…",
+            )
+
+        try:
+            part = await apply_dims_for_store(
+                api_key,
+                rows=rows,
+                dry_run=dry_run,
+                only_mismatch=only_mismatch,
+                progress_cb=_cb if progress_cb else None,
+            )
+            part["store_id"] = store_id
+            part["store_name"] = store_name
+            out_stores.append(part)
+        except Exception as e:
+            log.exception("packaging_dims apply store %s failed: %s", store_id, e)
+            out_stores.append({
+                "store_id": store_id,
+                "store_name": store_name,
+                "error": str(e)[:400],
+                "rows": [],
+            })
+
+    return {"stores": out_stores, "dry_run": dry_run}
+
+
+def estimate_apply_steps(row_count: int, store_count: int = 1, *, only_mismatch: bool = True) -> int:
+    """Загрузка каталога + отправка пачками по 100."""
+    base = estimate_compare_steps(row_count, store_count)
+    n = max(int(row_count or 0), 0)
+    send_batches = max(1, (n + 99) // 100)
+    return max(base + send_batches, 1)

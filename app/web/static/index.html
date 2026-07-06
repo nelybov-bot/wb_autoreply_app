@@ -12,7 +12,7 @@
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
-  <link rel="stylesheet" href="/static/styles.css?v=39">
+  <link rel="stylesheet" href="/static/styles.css?v=40">
   <link rel="stylesheet" href="/static/fx-widgets.css?v=5">
 </head>
 <body>
@@ -743,7 +743,7 @@
         <div class="panel-actions"></div>
       </div>
       <div class="form-card form-card-wide">
-        <p class="form-hint">Вставьте таблицу из Google Sheets: фактические габариты упаковки. Программа загрузит габариты из карточек WB и покажет расхождения. Единицы — сантиметры, как в кабинете WB. <strong>От 15 артикулов</strong> каталог магазина выгружается одним проходом (до 15&nbsp;000 карточек, ~2–3&nbsp;мин), сравнение — мгновенно.</p>
+        <p class="form-hint">Вставьте таблицу из Google Sheets: фактические габариты упаковки. Программа загрузит габариты из карточек WB и покажет расхождения. Единицы — сантиметры, как в кабинете WB. <strong>От 15 артикулов</strong> каталог магазина выгружается одним проходом (до 15&nbsp;000 карточек, ~2–3&nbsp;мин). Замена на WB — <strong>пачками по 100</strong> карточек за запрос.</p>
         <div class="compliance-input-block">
           <div class="compliance-toolbar">
             <span class="toolbar-label">Таблица</span>
@@ -793,8 +793,14 @@
           <div id="packaging-dims-store-list" class="auto-store-list auto-store-list--compact"></div>
         </div>
         <div class="progress-container" id="progress-packaging-dims" hidden></div>
+        <label class="packaging-dims-only-mismatch">
+          <input type="checkbox" id="packaging-dims-only-mismatch" checked>
+          Заменять только где расхождение (совпадающие не трогать)
+        </label>
         <div class="compliance-actions">
           <button type="button" class="btn btn-primary" id="btn-packaging-dims-compare">Сравнить с WB</button>
+          <button type="button" class="btn btn-secondary" id="btn-packaging-dims-apply-preview">Проверить замену</button>
+          <button type="button" class="btn btn-primary" id="btn-packaging-dims-apply">Заменить габариты на WB</button>
           <button type="button" class="btn btn-secondary" id="btn-packaging-dims-copy" disabled title="Скопировать результат сравнения — вставьте в Google Таблицы">Скопировать для Google Таблиц</button>
         </div>
         <div id="packaging-dims-result" class="compliance-result" hidden></div>
@@ -1806,7 +1812,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=98"></script>
+  <script src="/static/app.js?v=99"></script>
   <script src="/static/card_links_master.js?v=8"></script>
 </body>
 </html>

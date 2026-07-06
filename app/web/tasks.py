@@ -1171,3 +1171,128 @@ async def run_packaging_dims_compare(
 
     _handles[task_id] = asyncio.create_task(_run())
     return task_id
+
+
+async def run_packaging_dims_apply(
+    db: Any,
+    *,
+    store_ids: list[int],
+    text: str = "",
+    vendor_codes: Optional[list[str]] = None,
+    dry_run: bool = False,
+    only_mismatch: bool = True,
+) -> str:
+    from app.core.net import HttpStatusError, UnauthorizedStoreError
+    from app.core.packaging_dims import (
+        apply_dims_multi_store,
+        estimate_apply_steps,
+        filter_dim_rows,
+        parse_packaging_dims_text,
+    )
+
+    rows, parse_warnings = parse_packaging_dims_text(text)
+    if not rows:
+        raise ValueError(parse_warnings[0] if parse_warnings else "Нет данных для обработки")
+
+    if vendor_codes:
+        rows, filter_warnings = filter_dim_rows(rows, vendor_codes)
+        parse_warnings = list(parse_warnings) + filter_warnings
+        if not rows:
+            raise ValueError(
+                filter_warnings[0] if filter_warnings else "Ни один из выбранных артикулов не найден в таблице"
+            )
+
+    sids = sorted({int(x) for x in store_ids if int(x) > 0})
+    if not sids:
+        raise ValueError("Выберите хотя бы один магазин WB")
+
+    stores_payload: list[tuple[int, str, str]] = []
+    by_id = {s.id: s for s in db.list_stores()}
+    for sid in sids:
+        st = by_id.get(sid)
+        if not st or str(st.marketplace or "").lower() != "wb":
+            raise ValueError(f"Магазин {sid} не найден или не WB")
+        if not (st.api_key or "").strip():
+            raise ValueError(f"У магазина «{st.name}» нет API-ключа")
+        stores_payload.append((sid, st.name, st.api_key.strip()))
+
+    task_id = _make_id()
+    try:
+        await store_locks.acquire(
+            sids, "packaging_dims", task_id,
+            store_names=_store_names(db, sids),
+        )
+    except StoreBusyError:
+        await store_locks.release_all_for_owner(task_id)
+        raise
+
+    label = "Проверка замены габаритов" if dry_run else "Замена габаритов WB"
+    total_steps = estimate_apply_steps(len(rows), len(sids), only_mismatch=only_mismatch)
+    await _init_task(task_id, "packaging_dims", label, total_steps)
+    async with _tasks_lock:
+        _tasks[task_id]["store_ids"] = sids
+        _tasks[task_id]["parse_warnings"] = parse_warnings
+
+    def _progress(cur: int, tot: int, detail: str) -> None:
+        if _tasks.get(task_id, {}).get("status") != "running":
+            return
+        safe_tot = max(int(tot or 0), 1)
+        safe_cur = max(0, min(int(cur or 0), safe_tot))
+
+        async def _set() -> None:
+            async with _tasks_lock:
+                if task_id in _tasks:
+                    _tasks[task_id]["progress"] = [safe_cur, safe_tot]
+                    _tasks[task_id]["detail"] = detail
+
+        asyncio.create_task(_set())
+
+    async def _run() -> None:
+        try:
+            result = await apply_dims_multi_store(
+                stores_payload,
+                rows=rows,
+                dry_run=dry_run,
+                only_mismatch=only_mismatch,
+                progress_cb=_progress,
+            )
+            if parse_warnings:
+                result["parse_warnings"] = parse_warnings
+            sent = sum(int(s.get("sent") or 0) for s in result.get("stores") or [])
+            prepared = sum(int(s.get("prepared") or 0) for s in result.get("stores") or [])
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "done"
+                _tasks[task_id]["result"] = result
+                if dry_run:
+                    _tasks[task_id]["detail"] = f"К замене: {prepared} карточек"
+                else:
+                    _tasks[task_id]["detail"] = f"Отправлено {sent} обновлений"
+                _tasks[task_id]["progress"] = [total_steps, total_steps]
+            _mark_finished(task_id, "done")
+        except asyncio.CancelledError:
+            async with _tasks_lock:
+                if task_id in _tasks and _tasks[task_id].get("status") == "running":
+                    _tasks[task_id]["status"] = "cancelled"
+                    _tasks[task_id]["error"] = "Остановлено пользователем"
+            _mark_finished(task_id, "cancelled")
+        except UnauthorizedStoreError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+        except HttpStatusError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e.body or e)[:400]
+            _mark_finished(task_id, "error")
+        except Exception as e:
+            log.exception("packaging_dims apply task %s failed: %s", task_id, e)
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+        finally:
+            await store_locks.release(sids, task_id)
+
+    _handles[task_id] = asyncio.create_task(_run())
+    return task_id

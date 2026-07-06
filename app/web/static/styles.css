@@ -5790,6 +5790,16 @@ body.compliance-show-ozon-cols .compliance-col-ozon {
   margin-top: 16px;
 }
 
+.packaging-dims-only-mismatch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+}
+
 .wb-certs-result,
 .compliance-result {
   margin-top: 20px;

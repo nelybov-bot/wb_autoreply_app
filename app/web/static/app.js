@@ -7356,6 +7356,32 @@
     return labels[status] || status;
   }
 
+  function packagingDimsApplyStatusLabel(status) {
+    const labels = {
+      preview: 'будет заменено',
+      ok: 'отправлено',
+      skipped: 'пропуск',
+      pending: 'в очереди',
+      error: 'ошибка',
+      not_found: 'не найден',
+      no_dims: 'нет габаритов WB',
+      mismatch: 'к замене',
+    };
+    return labels[status] || status;
+  }
+
+  function setPackagingDimsActionBusy(busy) {
+    [
+      'btn-packaging-dims-compare',
+      'btn-packaging-dims-apply-preview',
+      'btn-packaging-dims-apply',
+      'btn-packaging-dims-parse',
+    ].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = busy;
+    });
+  }
+
   function renderPackagingDimsRowsTable(rows) {
     packagingDimsParsedRows = Array.isArray(rows) ? rows : [];
     const hint = document.getElementById('packaging-dims-rows-hint');
@@ -7498,6 +7524,117 @@
     box.hidden = !parts.length;
   }
 
+  function renderPackagingDimsApplyResult(result) {
+    const box = document.getElementById('packaging-dims-result');
+    packagingDimsLastResult = null;
+    setPackagingDimsCopyEnabled(false);
+    if (!box) return;
+    if (!result || !result.stores) {
+      box.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+    const parts = [];
+    if (result.parse_warnings?.length) {
+      parts.push('<p class="form-hint">' + result.parse_warnings.map(escapeHtml).join('<br>') + '</p>');
+    }
+    if (result.dry_run) {
+      parts.push('<p class="form-hint"><strong>Режим проверки</strong> — на WB ничего не отправлено.</p>');
+    }
+    const stores = result.stores || [];
+    for (const st of stores) {
+      const title = escapeHtml(st.store_name || st.store_id || 'Магазин');
+      if (st.error) {
+        parts.push(`<h4 class="compliance-result-store">${title}</h4><p class="text-error">${escapeHtml(st.error)}</p>`);
+        continue;
+      }
+      parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
+      parts.push(`<p class="form-hint">Подготовлено: ${st.prepared || 0}, отправлено: ${st.sent || 0}, пропущено (уже совпадает): ${st.skipped || 0}, ошибок: ${st.errors_count || 0}</p>`);
+      const rows = (st.rows || []).filter((r) => r.status !== 'skipped');
+      if (!rows.length) {
+        parts.push('<p class="form-hint">Нет карточек для замены.</p>');
+        continue;
+      }
+      parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Было (WB)</th><th>Станет (факт)</th><th>Статус</th></tr></thead><tbody>');
+      for (const r of rows) {
+        const fact = `${packagingDimsFmtNum(r.fact_length)}×${packagingDimsFmtNum(r.fact_width)}×${packagingDimsFmtNum(r.fact_height)}`;
+        const wb = r.wb_length != null
+          ? `${packagingDimsFmtNum(r.wb_length)}×${packagingDimsFmtNum(r.wb_width)}×${packagingDimsFmtNum(r.wb_height)}`
+          : '—';
+        const statusCls = (r.status === 'ok' || r.status === 'preview') ? '' : 'text-error';
+        parts.push(`<tr><td>${escapeHtml(r.vendor_code)}</td><td>${r.nm_id || '—'}</td><td>${wb}</td><td>${fact}</td><td class="${statusCls}">${escapeHtml(r.message || packagingDimsApplyStatusLabel(r.status))}</td></tr>`);
+      }
+      parts.push('</tbody></table>');
+    }
+    box.innerHTML = parts.join('');
+    box.hidden = !parts.length;
+  }
+
+  async function runPackagingDimsApply(dryRun) {
+    const storeIds = getAutoMpStoreIds('packaging-dims-store-list');
+    const text = (document.getElementById('packaging-dims-text')?.value || '').trim();
+    const vendorCodes = getPackagingDimsSelectedVendorCodes();
+    const onlyMismatch = !!document.getElementById('packaging-dims-only-mismatch')?.checked;
+    const wrap = document.getElementById('packaging-dims-rows-wrap');
+    const tableVisible = wrap && !wrap.hidden && packagingDimsParsedRows.length;
+    if (!storeIds.length) {
+      toast('Выберите хотя бы один магазин WB', 'error');
+      return;
+    }
+    if (!text) {
+      toast('Вставьте таблицу или загрузите файл', 'error');
+      return;
+    }
+    if (tableVisible && !vendorCodes.length) {
+      toast('Отметьте хотя бы одну строку в таблице', 'error');
+      return;
+    }
+    if (!dryRun) {
+      const scope = tableVisible ? `${vendorCodes.length} выбранных` : 'всех из таблицы';
+      if (!confirm(`Заменить габариты на WB для ${scope} товаров?\n\nКарточки в кабинете будут изменены.`)) {
+        return;
+      }
+    }
+    setPackagingDimsActionBusy(true);
+    const storeCount = storeIds.length;
+    const itemCount = tableVisible ? vendorCodes.length : 'все из таблицы';
+    try {
+      const res = await api('/packaging-dims/apply', {
+        method: 'POST',
+        body: JSON.stringify({
+          store_ids: storeIds,
+          text,
+          vendor_codes: tableVisible ? vendorCodes : [],
+          dry_run: !!dryRun,
+          only_mismatch: onlyMismatch,
+        }),
+      });
+      pollItemsTask(res.task_id, 'packaging-dims', {
+        label: dryRun
+          ? `Проверка замены (${storeCount} магаз., ${itemCount} тов.)…`
+          : `Замена габаритов WB (${storeCount} магаз., ${itemCount} тов.)…`,
+        onFinish: () => setPackagingDimsActionBusy(false),
+        onDone: (result) => {
+          renderPackagingDimsApplyResult(result);
+          const sent = (result?.stores || []).reduce((a, s) => a + (Number(s.sent) || 0), 0);
+          const prepared = (result?.stores || []).reduce((a, s) => a + (Number(s.prepared) || 0), 0);
+          if (dryRun) {
+            toast(prepared
+              ? `К замене: ${prepared} карточек — проверьте и нажмите «Заменить»`
+              : 'Нет карточек для замены (все совпадают или не найдены)');
+          } else {
+            toast(sent
+              ? `WB: обновлено ${sent} карточек`
+              : `Отправка завершена — см. отчёт`);
+          }
+        },
+      });
+    } catch (err) {
+      setPackagingDimsActionBusy(false);
+      toast(err.message || 'Ошибка', 'error');
+    }
+  }
+
   async function runPackagingDimsCompare() {
     const storeIds = getAutoMpStoreIds('packaging-dims-store-list');
     const text = (document.getElementById('packaging-dims-text')?.value || '').trim();
@@ -7517,8 +7654,7 @@
       return;
     }
     const btn = document.getElementById('btn-packaging-dims-compare');
-    const setBusy = (busy) => { if (btn) btn.disabled = busy; };
-    setBusy(true);
+    setPackagingDimsActionBusy(true);
     const storeCount = storeIds.length;
     const itemCount = tableVisible ? vendorCodes.length : 'все из таблицы';
     try {
@@ -7532,7 +7668,7 @@
       });
       pollItemsTask(res.task_id, 'packaging-dims', {
         label: `Сравнение габаритов WB (${storeCount} магаз., ${itemCount} тов.)…`,
-        onFinish: () => setBusy(false),
+        onFinish: () => setPackagingDimsActionBusy(false),
         onDone: (result) => {
           renderPackagingDimsResult(result);
           const mismatched = (result?.stores || []).reduce((a, s) => a + (Number(s.mismatched) || 0), 0);
@@ -7543,7 +7679,7 @@
         },
       });
     } catch (err) {
-      setBusy(false);
+      setPackagingDimsActionBusy(false);
       toast(err.message || 'Ошибка', 'error');
     }
   }
@@ -7557,6 +7693,8 @@
     wirePackagingDimsPanel._done = true;
     document.getElementById('btn-packaging-dims-parse')?.addEventListener('click', () => parsePackagingDimsTable());
     document.getElementById('btn-packaging-dims-compare')?.addEventListener('click', () => runPackagingDimsCompare());
+    document.getElementById('btn-packaging-dims-apply-preview')?.addEventListener('click', () => runPackagingDimsApply(true));
+    document.getElementById('btn-packaging-dims-apply')?.addEventListener('click', () => runPackagingDimsApply(false));
     document.getElementById('btn-packaging-dims-copy')?.addEventListener('click', () => { void copyPackagingDimsResult(); });
     document.getElementById('btn-packaging-dims-rows-all')?.addEventListener('click', () => packagingDimsSetRowChecks(true));
     document.getElementById('btn-packaging-dims-rows-none')?.addEventListener('click', () => packagingDimsSetRowChecks(false));
