@@ -197,7 +197,8 @@ def _empty_char_value(existing: Any) -> Any:
 
 def _build_cert_patch_ids(row: CertInputRow, fmap: CertFieldMap) -> Tuple[Dict[int, Any], List[str]]:
     """Патч characteristics: правильные поля по типу документа + очистка «чужого» типа."""
-    doc_type = detect_doc_type(row.doc_number)
+    doc_number = str(row.doc_number or "").strip()
+    doc_type = detect_doc_type(doc_number)
     patches: Dict[int, Any] = {}
     mapped: List[str] = []
 
@@ -211,11 +212,31 @@ def _build_cert_patch_ids(row: CertInputRow, fmap: CertFieldMap) -> Tuple[Dict[i
             patches[cid] = ""
             mapped.append(f"очистка: {label}")
 
+    def _generic_ok_for_decl() -> bool:
+        name = (fmap.generic_number_name or "").casefold()
+        if not fmap.generic_number_id:
+            return False
+        if "декларац" in name and "сертификат" in name:
+            return True
+        return "декларац" in name or "сертификат" not in name
+
+    def _generic_ok_for_cert() -> bool:
+        name = (fmap.generic_number_name or "").casefold()
+        if not fmap.generic_number_id:
+            return False
+        if "декларац" in name and "сертификат" in name:
+            return True
+        return "сертификат" in name or "декларац" not in name
+
     if doc_type == "declaration":
         if fmap.decl_number_id:
-            _set(fmap.decl_number_id, row.doc_number, f"декларация номер ({fmap.decl_number_name or fmap.decl_number_id})")
-        elif fmap.generic_number_id:
-            _set(fmap.generic_number_id, row.doc_number, f"номер ({fmap.generic_number_name or fmap.generic_number_id})")
+            _set(fmap.decl_number_id, doc_number, f"декларация номер ({fmap.decl_number_name or fmap.decl_number_id})")
+        elif _generic_ok_for_decl():
+            _set(fmap.generic_number_id, doc_number, f"номер ({fmap.generic_number_name or fmap.generic_number_id})")
+        elif fmap.decl_number_id is None and fmap.generic_number_id and not _generic_ok_for_decl():
+            mapped.append(
+                f"⚠ нет поля декларации; «{fmap.generic_number_name}» похоже на сертификат — номер не записан"
+            )
         if fmap.decl_reg_date_id:
             _set(fmap.decl_reg_date_id, row.reg_date, "декларация дата рег.")
         elif fmap.generic_reg_date_id:
@@ -229,9 +250,9 @@ def _build_cert_patch_ids(row: CertInputRow, fmap: CertFieldMap) -> Tuple[Dict[i
         _clear(fmap.cert_valid_until_id, "срок сертификата")
     elif doc_type == "certificate":
         if fmap.cert_number_id:
-            _set(fmap.cert_number_id, row.doc_number, f"сертификат номер ({fmap.cert_number_name or fmap.cert_number_id})")
-        elif fmap.generic_number_id:
-            _set(fmap.generic_number_id, row.doc_number, f"номер ({fmap.generic_number_name or fmap.generic_number_id})")
+            _set(fmap.cert_number_id, doc_number, f"сертификат номер ({fmap.cert_number_name or fmap.cert_number_id})")
+        elif _generic_ok_for_cert():
+            _set(fmap.generic_number_id, doc_number, f"номер ({fmap.generic_number_name or fmap.generic_number_id})")
         if fmap.cert_reg_date_id:
             _set(fmap.cert_reg_date_id, row.reg_date, "сертификат дата рег.")
         elif fmap.generic_reg_date_id:
@@ -245,7 +266,7 @@ def _build_cert_patch_ids(row: CertInputRow, fmap: CertFieldMap) -> Tuple[Dict[i
         _clear(fmap.decl_valid_until_id, "срок декларации")
     else:
         cid = fmap.generic_number_id or fmap.decl_number_id or fmap.cert_number_id
-        _set(cid, row.doc_number, "номер (тип не определён)")
+        _set(cid, doc_number, "номер (тип не определён)")
         rid = fmap.generic_reg_date_id or fmap.decl_reg_date_id or fmap.cert_reg_date_id
         _set(rid, row.reg_date, "дата рег.")
         uid = fmap.generic_valid_until_id or fmap.decl_valid_until_id or fmap.cert_valid_until_id

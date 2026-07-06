@@ -77,6 +77,10 @@
       <i class="ti ti-certificate" aria-hidden="true"></i>
       <span class="si-label">Документы</span>
     </div>
+    <div class="si" data-tab="packaging-dims" title="Габариты упаковки WB" role="button" tabindex="0">
+      <i class="ti ti-ruler-measure" aria-hidden="true"></i>
+      <span class="si-label">Габариты</span>
+    </div>
 
     <div class="si" data-tab="auto" title="Автозапуск" role="button" tabindex="0">
       <i class="ti ti-player-play" aria-hidden="true"></i>
@@ -726,6 +730,74 @@
           </div>
           <div id="compliance-ozon-result" class="compliance-result" hidden></div>
         </div>
+      </div>
+    </section>
+
+    <!-- Габариты упаковки WB -->
+    <section id="panel-packaging-dims" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Габариты упаковки</div>
+        </div>
+        <div class="panel-actions"></div>
+      </div>
+      <div class="form-card form-card-wide">
+        <p class="form-hint">Вставьте таблицу из Google Sheets: фактические габариты упаковки. Программа загрузит габариты из карточек WB и покажет расхождения. Единицы — сантиметры, как в кабинете WB.</p>
+        <div class="compliance-input-block">
+          <div class="compliance-toolbar">
+            <span class="toolbar-label">Таблица</span>
+            <div class="compliance-toolbar-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-packaging-dims-parse">Разобрать таблицу</button>
+              <label class="btn btn-secondary btn-sm card-links-file-btn">
+                Загрузить файл
+                <input type="file" id="packaging-dims-file" accept=".csv,.txt,.tsv,text/plain" hidden>
+              </label>
+            </div>
+          </div>
+          <p class="form-hint">Колонки: <strong>sku</strong> (артикул продавца), <strong>fact_length</strong>, <strong>fact_width</strong>, <strong>fact_height</strong>. Можно копировать с заголовком из Sheets.</p>
+          <textarea id="packaging-dims-text" class="compliance-textarea" rows="10" placeholder="sku	fact_length	fact_width	fact_height&#10;528657	10.0	10.0	3.0&#10;528658	17.0	3.0	2.0"></textarea>
+        </div>
+        <div id="packaging-dims-rows-wrap" class="compliance-rows-wrap" hidden>
+          <div class="compliance-toolbar">
+            <span class="toolbar-label">Строки для сравнения</span>
+            <div class="compliance-toolbar-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-packaging-dims-rows-all">Выбрать все</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-packaging-dims-rows-none">Снять все</button>
+            </div>
+          </div>
+          <p class="form-hint" id="packaging-dims-rows-hint"></p>
+          <div class="table-wrap">
+            <table class="items-table compliance-rows-table" id="packaging-dims-rows-table">
+              <thead>
+                <tr>
+                  <th class="col-check"><input type="checkbox" id="packaging-dims-rows-check-all" title="Все"></th>
+                  <th>Артикул</th>
+                  <th>Длина (факт)</th>
+                  <th>Ширина (факт)</th>
+                  <th>Высота (факт)</th>
+                </tr>
+              </thead>
+              <tbody id="packaging-dims-rows-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="compliance-stores-block">
+          <div class="compliance-toolbar">
+            <span class="toolbar-label">Магазины WB</span>
+            <div class="compliance-toolbar-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-packaging-dims-stores-all">Все</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-packaging-dims-stores-none">Снять</button>
+            </div>
+          </div>
+          <div id="packaging-dims-store-list" class="auto-store-list auto-store-list--compact"></div>
+        </div>
+        <div class="progress-container" id="progress-packaging-dims" hidden></div>
+        <div class="compliance-actions">
+          <button type="button" class="btn btn-primary" id="btn-packaging-dims-compare">Сравнить с WB</button>
+          <button type="button" class="btn btn-secondary" id="btn-packaging-dims-copy" disabled title="Скопировать результат сравнения — вставьте в Google Таблицы">Скопировать для Google Таблиц</button>
+        </div>
+        <div id="packaging-dims-result" class="compliance-result" hidden></div>
       </div>
     </section>
 
@@ -1734,7 +1806,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=93"></script>
+  <script src="/static/app.js?v=97"></script>
   <script src="/static/card_links_master.js?v=8"></script>
 </body>
 </html>

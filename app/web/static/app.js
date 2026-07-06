@@ -640,6 +640,7 @@
     }
     if (tabId === 'card-links') loadCardLinksPanel();
     if (tabId === 'compliance') loadCompliancePanel();
+    if (tabId === 'packaging-dims') loadPackagingDimsPanel();
     if (tabId === 'auto') loadAutoSchedulePanel();
     if (tabId === 'agent') loadAgentPanel();
     if (tabId === 'settings') {
@@ -1426,6 +1427,7 @@
     }
     syncCardLinksStoreSelect();
     renderComplianceStoreLists();
+    renderPackagingDimsStoreLists();
   }
 
   function renderAutoStoreList(selectedIds) {
@@ -7239,6 +7241,345 @@
     syncComplianceMpUI();
   }
 
+  let packagingDimsParsedRows = [];
+  let packagingDimsLastResult = null;
+
+  function setPackagingDimsCopyEnabled(enabled) {
+    const btn = document.getElementById('btn-packaging-dims-copy');
+    if (btn) btn.disabled = !enabled;
+  }
+
+  function packagingDimsExportNum(v) {
+    if (v == null || v === '') return '';
+    const n = Number(v);
+    return Number.isFinite(n) ? String(n) : '';
+  }
+
+  function packagingDimsTsvCell(v) {
+    const s = String(v ?? '');
+    if (/[\t\n\r"]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  }
+
+  function buildPackagingDimsExportTsv(result) {
+    const stores = (result?.stores || []).filter((s) => !s.error && (s.rows || []).length);
+    if (!stores.length) return '';
+    const multiStore = stores.length > 1;
+    const headers = [
+      ...(multiStore ? ['Магазин'] : []),
+      'Артикул',
+      'nmID',
+      'Длина, факт (см)',
+      'Ширина, факт (см)',
+      'Высота, факт (см)',
+      'Длина на WB (см)',
+      'Ширина на WB (см)',
+      'Высота на WB (см)',
+      'Разница по длине',
+      'Разница по ширине',
+      'Разница по высоте',
+      'Статус',
+    ];
+    const lines = [headers.join('\t')];
+    for (const st of stores) {
+      const storeName = st.store_name || st.store_id || '';
+      for (const r of st.rows || []) {
+        const cells = [
+          ...(multiStore ? [storeName] : []),
+          r.vendor_code || '',
+          r.nm_id != null ? String(r.nm_id) : '',
+          packagingDimsExportNum(r.fact_length),
+          packagingDimsExportNum(r.fact_width),
+          packagingDimsExportNum(r.fact_height),
+          packagingDimsExportNum(r.wb_length),
+          packagingDimsExportNum(r.wb_width),
+          packagingDimsExportNum(r.wb_height),
+          packagingDimsExportNum(r.diff_length),
+          packagingDimsExportNum(r.diff_width),
+          packagingDimsExportNum(r.diff_height),
+          packagingDimsStatusLabel(r.status),
+        ];
+        lines.push(cells.map(packagingDimsTsvCell).join('\t'));
+      }
+    }
+    return lines.join('\n');
+  }
+
+  async function copyPackagingDimsResult() {
+    const tsv = buildPackagingDimsExportTsv(packagingDimsLastResult);
+    if (!tsv) {
+      toast('Нет данных для копирования — сначала выполните сравнение', 'error');
+      return;
+    }
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(tsv);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = tsv;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      const rowCount = tsv.split('\n').length - 1;
+      toast(`Скопировано ${rowCount} строк — вставьте в Google Таблицы (Ctrl+V)`);
+    } catch (err) {
+      toast(err.message || 'Не удалось скопировать', 'error');
+    }
+  }
+
+  function renderPackagingDimsStoreLists() {
+    const wb = storesForMarketplace('wb');
+    const prev = getAutoMpStoreIds('packaging-dims-store-list');
+    const selected = prev.length ? prev : wb.map(s => s.id);
+    renderAutoMpStoreList('packaging-dims-store-list', 'wb', selected);
+  }
+
+  function packagingDimsFmtNum(v) {
+    if (v == null || v === '') return '—';
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '—';
+    return Number.isInteger(n) ? String(n) : n.toFixed(1);
+  }
+
+  function packagingDimsStatusLabel(status) {
+    const labels = {
+      match: 'совпадает',
+      mismatch: 'расхождение',
+      not_found: 'не найден',
+      no_dims: 'нет габаритов WB',
+    };
+    return labels[status] || status;
+  }
+
+  function renderPackagingDimsRowsTable(rows) {
+    packagingDimsParsedRows = Array.isArray(rows) ? rows : [];
+    const hint = document.getElementById('packaging-dims-rows-hint');
+    if (hint) {
+      hint.textContent = packagingDimsParsedRows.length
+        ? `Разобрано ${packagingDimsParsedRows.length} строк — отметьте нужные или сравните все`
+        : '';
+    }
+    const wrap = document.getElementById('packaging-dims-rows-wrap');
+    const tbody = document.getElementById('packaging-dims-rows-tbody');
+    if (!wrap || !tbody) return;
+    if (!packagingDimsParsedRows.length) {
+      wrap.hidden = true;
+      tbody.innerHTML = '';
+      syncPackagingDimsRowsCheckAll();
+      return;
+    }
+    tbody.innerHTML = packagingDimsParsedRows.map((r, i) => `
+      <tr>
+        <td class="col-check"><input type="checkbox" class="packaging-dims-row-check" data-idx="${i}" checked></td>
+        <td>${escapeHtml(r.vendor_code || '')}</td>
+        <td>${packagingDimsFmtNum(r.fact_length)}</td>
+        <td>${packagingDimsFmtNum(r.fact_width)}</td>
+        <td>${packagingDimsFmtNum(r.fact_height)}</td>
+      </tr>
+    `).join('');
+    wrap.hidden = false;
+    syncPackagingDimsRowsCheckAll();
+  }
+
+  function syncPackagingDimsRowsCheckAll() {
+    const all = document.getElementById('packaging-dims-rows-check-all');
+    const checks = document.querySelectorAll('#packaging-dims-rows-tbody input.packaging-dims-row-check');
+    if (!all) return;
+    const total = checks.length;
+    const checked = Array.from(checks).filter((c) => c.checked).length;
+    all.checked = total > 0 && checked === total;
+    all.indeterminate = checked > 0 && checked < total;
+  }
+
+  function packagingDimsSetRowChecks(checked) {
+    document.querySelectorAll('#packaging-dims-rows-tbody input.packaging-dims-row-check').forEach((cb) => {
+      cb.checked = !!checked;
+    });
+    syncPackagingDimsRowsCheckAll();
+  }
+
+  function packagingDimsSetStoreChecks(checked) {
+    document.querySelectorAll('#packaging-dims-store-list input[type="checkbox"]').forEach((cb) => {
+      cb.checked = !!checked;
+    });
+  }
+
+  function getPackagingDimsSelectedVendorCodes() {
+    const wrap = document.getElementById('packaging-dims-rows-wrap');
+    const useTable = wrap && !wrap.hidden && packagingDimsParsedRows.length;
+    if (!useTable) return [];
+    const out = [];
+    document.querySelectorAll('#packaging-dims-rows-tbody input.packaging-dims-row-check:checked').forEach((cb) => {
+      const idx = Number(cb.getAttribute('data-idx'));
+      const row = packagingDimsParsedRows[idx];
+      if (row && row.vendor_code) out.push(String(row.vendor_code).trim());
+    });
+    return out;
+  }
+
+  async function parsePackagingDimsTable() {
+    const text = (document.getElementById('packaging-dims-text')?.value || '').trim();
+    if (!text) {
+      toast('Вставьте таблицу', 'error');
+      return;
+    }
+    const btn = document.getElementById('btn-packaging-dims-parse');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await api('/packaging-dims/parse', {
+        method: 'POST',
+        body: JSON.stringify({ text }),
+      });
+      if (res.warnings?.length) {
+        toast(res.warnings.slice(0, 2).join('; '), res.rows?.length ? 'success' : 'error');
+      }
+      renderPackagingDimsRowsTable(res.rows || []);
+      if (res.count) toast(`Разобрано строк: ${res.count}`);
+    } catch (err) {
+      toast(err.message || 'Ошибка разбора', 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function renderPackagingDimsResult(result) {
+    const box = document.getElementById('packaging-dims-result');
+    packagingDimsLastResult = result && result.stores ? result : null;
+    setPackagingDimsCopyEnabled(!!buildPackagingDimsExportTsv(packagingDimsLastResult));
+    if (!box) return;
+    if (!result || !result.stores) {
+      box.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+    const parts = [];
+    if (result.parse_warnings?.length) {
+      parts.push('<p class="form-hint">' + result.parse_warnings.map(escapeHtml).join('<br>') + '</p>');
+    }
+    const stores = result.stores || [];
+    if (stores.length > 1) {
+      const matched = stores.reduce((a, s) => a + (Number(s.matched) || 0), 0);
+      const mismatched = stores.reduce((a, s) => a + (Number(s.mismatched) || 0), 0);
+      parts.push(`<p class="form-hint"><strong>Итого по ${stores.length} магазинам:</strong> совпало ${matched}, расхождений ${mismatched}</p>`);
+    }
+    for (const st of stores) {
+      const title = escapeHtml(st.store_name || st.store_id || 'Магазин');
+      if (st.error) {
+        parts.push(`<h4 class="compliance-result-store">${title}</h4><p class="text-error">${escapeHtml(st.error)}</p>`);
+        continue;
+      }
+      parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
+      parts.push(`<p class="form-hint">Строк: ${st.parsed || 0}, найдено карточек: ${st.cards_found || 0}, совпало: ${st.matched || 0}, расхождений: ${st.mismatched || 0}, не найдено: ${st.not_found || 0}, без габаритов WB: ${st.no_dims || 0}</p>`);
+      const rows = st.rows || [];
+      if (!rows.length) continue;
+      parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Факт Д×Ш×В</th><th>WB Д×Ш×В</th><th>Δ</th><th>Статус</th></tr></thead><tbody>');
+      for (const r of rows) {
+        const fact = `${packagingDimsFmtNum(r.fact_length)}×${packagingDimsFmtNum(r.fact_width)}×${packagingDimsFmtNum(r.fact_height)}`;
+        const wb = r.wb_length != null
+          ? `${packagingDimsFmtNum(r.wb_length)}×${packagingDimsFmtNum(r.wb_width)}×${packagingDimsFmtNum(r.wb_height)}`
+          : '—';
+        const delta = r.status === 'mismatch'
+          ? `${packagingDimsFmtNum(r.diff_length)}/${packagingDimsFmtNum(r.diff_width)}/${packagingDimsFmtNum(r.diff_height)}`
+          : (r.message ? escapeHtml(r.message) : '—');
+        const statusCls = r.status === 'match' ? '' : 'text-error';
+        parts.push(`<tr><td>${escapeHtml(r.vendor_code)}</td><td>${r.nm_id || '—'}</td><td>${fact}</td><td>${wb}</td><td class="${statusCls}">${delta}</td><td class="${statusCls}">${escapeHtml(packagingDimsStatusLabel(r.status))}</td></tr>`);
+      }
+      parts.push('</tbody></table>');
+    }
+    box.innerHTML = parts.join('');
+    box.hidden = !parts.length;
+  }
+
+  async function runPackagingDimsCompare() {
+    const storeIds = getAutoMpStoreIds('packaging-dims-store-list');
+    const text = (document.getElementById('packaging-dims-text')?.value || '').trim();
+    const vendorCodes = getPackagingDimsSelectedVendorCodes();
+    const wrap = document.getElementById('packaging-dims-rows-wrap');
+    const tableVisible = wrap && !wrap.hidden && packagingDimsParsedRows.length;
+    if (!storeIds.length) {
+      toast('Выберите хотя бы один магазин WB', 'error');
+      return;
+    }
+    if (!text) {
+      toast('Вставьте таблицу или загрузите файл', 'error');
+      return;
+    }
+    if (tableVisible && !vendorCodes.length) {
+      toast('Отметьте хотя бы одну строку в таблице', 'error');
+      return;
+    }
+    const btn = document.getElementById('btn-packaging-dims-compare');
+    const setBusy = (busy) => { if (btn) btn.disabled = busy; };
+    setBusy(true);
+    const storeCount = storeIds.length;
+    const itemCount = tableVisible ? vendorCodes.length : 'все из таблицы';
+    try {
+      const res = await api('/packaging-dims/compare', {
+        method: 'POST',
+        body: JSON.stringify({
+          store_ids: storeIds,
+          text,
+          vendor_codes: tableVisible ? vendorCodes : [],
+        }),
+      });
+      pollItemsTask(res.task_id, 'packaging-dims', {
+        label: `Сравнение габаритов WB (${storeCount} магаз., ${itemCount} тов.)…`,
+        onFinish: () => setBusy(false),
+        onDone: (result) => {
+          renderPackagingDimsResult(result);
+          const mismatched = (result?.stores || []).reduce((a, s) => a + (Number(s.mismatched) || 0), 0);
+          const matched = (result?.stores || []).reduce((a, s) => a + (Number(s.matched) || 0), 0);
+          toast(mismatched
+            ? `Габариты: совпало ${matched}, расхождений ${mismatched} — см. отчёт`
+            : `Габариты: все ${matched} совпали с WB`);
+        },
+      });
+    } catch (err) {
+      setBusy(false);
+      toast(err.message || 'Ошибка', 'error');
+    }
+  }
+
+  function loadPackagingDimsPanel() {
+    renderPackagingDimsStoreLists();
+  }
+
+  function wirePackagingDimsPanel() {
+    if (wirePackagingDimsPanel._done) return;
+    wirePackagingDimsPanel._done = true;
+    document.getElementById('btn-packaging-dims-parse')?.addEventListener('click', () => parsePackagingDimsTable());
+    document.getElementById('btn-packaging-dims-compare')?.addEventListener('click', () => runPackagingDimsCompare());
+    document.getElementById('btn-packaging-dims-copy')?.addEventListener('click', () => { void copyPackagingDimsResult(); });
+    document.getElementById('btn-packaging-dims-rows-all')?.addEventListener('click', () => packagingDimsSetRowChecks(true));
+    document.getElementById('btn-packaging-dims-rows-none')?.addEventListener('click', () => packagingDimsSetRowChecks(false));
+    document.getElementById('btn-packaging-dims-stores-all')?.addEventListener('click', () => packagingDimsSetStoreChecks(true));
+    document.getElementById('btn-packaging-dims-stores-none')?.addEventListener('click', () => packagingDimsSetStoreChecks(false));
+    document.getElementById('packaging-dims-rows-check-all')?.addEventListener('change', (e) => {
+      packagingDimsSetRowChecks(!!e.target.checked);
+    });
+    document.getElementById('packaging-dims-rows-tbody')?.addEventListener('change', (e) => {
+      if (e.target?.classList?.contains('packaging-dims-row-check')) syncPackagingDimsRowsCheckAll();
+    });
+    document.getElementById('packaging-dims-file')?.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const ta = document.getElementById('packaging-dims-text');
+        if (ta) ta.value = text;
+        toast('Файл загружен — нажмите «Разобрать таблицу»');
+      } catch (err) {
+        toast(err.message || 'Не удалось прочитать файл', 'error');
+      }
+      e.target.value = '';
+    });
+  }
+
   function wireCardLinksPanel() {
     if (wireCardLinksPanel._done) return;
     wireCardLinksPanel._done = true;
@@ -9747,6 +10088,7 @@
     wireOzonActionsPanel();
     wireCardLinksPanel();
     wireCompliancePanel();
+    wirePackagingDimsPanel();
     wireAgentPanel();
     ensureStoresLoaded().then(() => {
       fillStoreSelects();

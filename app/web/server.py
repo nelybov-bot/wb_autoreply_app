@@ -4577,6 +4577,16 @@ class OzonCertificatesApplyBody(BaseModel):
     text: str = ""
     vendor_codes: list[str] = []
     dry_run: bool = False
+
+
+class PackagingDimsParseBody(BaseModel):
+    text: str = ""
+
+
+class PackagingDimsCompareBody(BaseModel):
+    store_ids: list[int] = []
+    text: str = ""
+    vendor_codes: list[str] = []
     fsa_only: bool = False
 
 
@@ -4605,6 +4615,65 @@ def api_compliance_parse(
         "warnings": warnings,
         "count": len(rows),
     }
+
+
+@app.post("/api/packaging-dims/parse")
+def api_packaging_dims_parse(
+    body: PackagingDimsParseBody,
+    _: UserRow = Depends(require_user),
+):
+    """Разбор таблицы фактических габаритов упаковки."""
+    from app.core.packaging_dims import dims_rows_to_api, parse_packaging_dims_text
+
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(400, "Вставьте данные таблицы")
+    rows, warnings = parse_packaging_dims_text(text)
+    return {
+        "rows": dims_rows_to_api(rows),
+        "warnings": warnings,
+        "count": len(rows),
+    }
+
+
+@app.post("/api/packaging-dims/compare")
+async def api_packaging_dims_compare(
+    body: PackagingDimsCompareBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    """Сравнение фактических габаритов с данными карточек WB."""
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(400, "Вставьте данные таблицы или загрузите файл")
+    if not body.store_ids:
+        raise HTTPException(400, "Выберите хотя бы один магазин WB")
+    try:
+        vendor_codes = [str(v).strip() for v in (body.vendor_codes or []) if str(v).strip()]
+        task_id = await web_tasks.run_packaging_dims_compare(
+            db,
+            store_ids=body.store_ids,
+            text=text,
+            vendor_codes=vendor_codes or None,
+        )
+    except StoreBusyError as e:
+        raise HTTPException(409, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="packaging_dims_compare",
+            item_type="packaging_dims",
+            result="started",
+            meta={
+                "store_ids": body.store_ids,
+                "vendor_codes_count": len(body.vendor_codes or []),
+            },
+        )
+    except Exception:
+        pass
+    return {"task_id": task_id, "status": "running"}
 
 
 @app.post("/api/wb/certificates/parse")

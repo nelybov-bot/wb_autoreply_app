@@ -17,6 +17,37 @@ _RE_CERTIFICATE = re.compile(
     re.I,
 )
 
+# Похожие кириллические буквы → латиница (в коде документа после RU Д-/С-)
+_HOMO_TO_LAT = {
+    "А": "A", "В": "B", "С": "C", "Е": "E", "Н": "H", "К": "K", "М": "M",
+    "О": "O", "Р": "P", "Т": "T", "Х": "X",
+    "а": "a", "в": "b", "с": "c", "е": "e", "н": "h", "к": "k", "м": "m",
+    "о": "o", "р": "p", "т": "t", "х": "x",
+}
+
+
+def _latinize_homoglyphs(text: str) -> str:
+    return "".join(_HOMO_TO_LAT.get(ch, ch) for ch in str(text or ""))
+
+
+def normalize_doc_number(num: str) -> str:
+    """Латиница в коде документа после RU Д-/С- (Excel часто подставляет РА вместо PA)."""
+    s = str(num or "").strip()
+    if not s:
+        return s
+    m = re.search(r"^(.*?RU\s*[ДСDCдс]\s*[-\u2013])(.*)$", s, re.I)
+    if m:
+        return m.group(1) + _latinize_homoglyphs(m.group(2))
+    m = re.search(r"^(RU\s*[ДСDCдс]\s*[-\u2013])(.*)$", s, re.I)
+    if m:
+        return m.group(1) + _latinize_homoglyphs(m.group(2))
+    return s
+
+
+def doc_number_was_normalized(num: str) -> bool:
+    raw = str(num or "").strip()
+    return bool(raw) and normalize_doc_number(raw) != raw
+
 
 @dataclass
 class CertInputRow:
@@ -122,6 +153,12 @@ def parse_certificates_text(text: str) -> Tuple[List[CertInputRow], List[str]]:
         if not doc:
             warnings.append(f"Строка {i}: пустой номер документа — пропуск")
             continue
+        if doc_number_was_normalized(doc):
+            norm = normalize_doc_number(doc)
+            warnings.append(
+                f"Строка {i} ({vendor}): в коде номера есть кириллица, похожая на латиницу "
+                f"(РА/PA и т.д.) — отправим как в таблице: «{doc}»"
+            )
         reg = _norm_date(parts[2]) if len(parts) > 2 else ""
         until = _norm_date(parts[3]) if len(parts) > 3 else ""
         rows.append(CertInputRow(vendor_code=vendor, doc_number=doc, reg_date=reg, valid_until=until))
