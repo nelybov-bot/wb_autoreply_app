@@ -797,6 +797,10 @@
           <input type="checkbox" id="packaging-dims-only-mismatch" checked>
           Заменять только где расхождение (совпадающие не трогать)
         </label>
+        <label class="packaging-dims-only-mismatch">
+          <input type="checkbox" id="packaging-dims-refresh-catalog">
+          Обновить каталог с WB (иначе с диска, 24 ч; сравнение и отправка используют один кэш)
+        </label>
         <div class="compliance-actions">
           <button type="button" class="btn btn-primary" id="btn-packaging-dims-compare">Сравнить с WB</button>
           <button type="button" class="btn btn-secondary" id="btn-packaging-dims-apply-preview">Проверить замену</button>
@@ -1812,7 +1816,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=99"></script>
+  <script src="/static/app.js?v=101"></script>
   <script src="/static/card_links_master.js?v=8"></script>
 </body>
 </html>

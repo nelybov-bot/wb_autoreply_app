@@ -1062,6 +1062,7 @@ async def run_packaging_dims_compare(
     store_ids: list[int],
     text: str = "",
     vendor_codes: Optional[list[str]] = None,
+    force_refresh: bool = False,
 ) -> str:
     from app.core.net import HttpStatusError, UnauthorizedStoreError
     from app.core.packaging_dims import (
@@ -1132,6 +1133,8 @@ async def run_packaging_dims_compare(
             result = await compare_dims_multi_store(
                 stores_payload,
                 rows=rows,
+                db=db,
+                force_refresh=force_refresh,
                 progress_cb=_progress,
             )
             if parse_warnings:
@@ -1181,6 +1184,7 @@ async def run_packaging_dims_apply(
     vendor_codes: Optional[list[str]] = None,
     dry_run: bool = False,
     only_mismatch: bool = True,
+    force_refresh: bool = False,
 ) -> str:
     from app.core.net import HttpStatusError, UnauthorizedStoreError
     from app.core.packaging_dims import (
@@ -1252,6 +1256,8 @@ async def run_packaging_dims_apply(
             result = await apply_dims_multi_store(
                 stores_payload,
                 rows=rows,
+                db=db,
+                force_refresh=force_refresh,
                 dry_run=dry_run,
                 only_mismatch=only_mismatch,
                 progress_cb=_progress,

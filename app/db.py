@@ -426,6 +426,36 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_clm_items_store_bundle "
                 "ON card_links_master_items(store_id, bundle_id)"
             )
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS packaging_dims_cards (
+                    store_id INTEGER NOT NULL,
+                    vendor_code TEXT NOT NULL,
+                    nm_id INTEGER NOT NULL DEFAULT 0,
+                    card_json TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (store_id, vendor_code)
+                )
+            """)
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS packaging_dims_catalog_meta (
+                    store_id INTEGER PRIMARY KEY,
+                    cards_count INTEGER NOT NULL DEFAULT 0,
+                    load_mode TEXT NOT NULL DEFAULT '',
+                    catalog_at TEXT NOT NULL DEFAULT '',
+                    truncated INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_packaging_dims_cards_store "
+                "ON packaging_dims_cards(store_id)"
+            )
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS packaging_dims_charcs (
+                    subject_id INTEGER PRIMARY KEY,
+                    charcs_json TEXT NOT NULL DEFAULT '[]',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                )
+            """)
             for col, ddl in (
                 ("alert_category", "TEXT NOT NULL DEFAULT ''"),
                 ("product_skus", "TEXT NOT NULL DEFAULT ''"),
@@ -2390,3 +2420,208 @@ class Database:
                 "singles": int(solo["n"]) if solo else 0,
                 "bundles": int(bundles["n"]) if bundles else 0,
             }
+
+    # ---------- Packaging dims WB catalog cache ----------
+    def packaging_dims_cache_meta(self, store_id: int) -> dict:
+        with _DB_LOCK:
+            row = self._conn.execute(
+                """SELECT store_id, cards_count, load_mode, catalog_at, truncated
+                   FROM packaging_dims_catalog_meta WHERE store_id=?""",
+                (int(store_id),),
+            ).fetchone()
+            if not row:
+                return {}
+            return {
+                "store_id": int(row["store_id"]),
+                "cards_count": int(row["cards_count"] or 0),
+                "load_mode": str(row["load_mode"] or ""),
+                "catalog_at": str(row["catalog_at"] or ""),
+                "truncated": bool(int(row["truncated"] or 0)),
+            }
+
+    def packaging_dims_cache_is_fresh(self, store_id: int, ttl_s: int = 86400) -> bool:
+        meta = self.packaging_dims_cache_meta(store_id)
+        at = str(meta.get("catalog_at") or "").strip()
+        if not at:
+            return False
+        try:
+            from datetime import datetime, timezone
+
+            if at.endswith("Z"):
+                at = at[:-1] + "+00:00"
+            dt = datetime.fromisoformat(at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - dt).total_seconds()
+            return age < max(int(ttl_s), 60)
+        except Exception:
+            return False
+
+    def packaging_dims_cache_load(
+        self,
+        store_id: int,
+        vendor_codes: Optional[list[str]] = None,
+    ) -> list[dict]:
+        sid = int(store_id)
+        codes = [str(v).strip() for v in (vendor_codes or []) if str(v).strip()]
+        with _DB_LOCK:
+            if codes:
+                placeholders = ",".join("?" for _ in codes)
+                cur = self._conn.execute(
+                    f"""SELECT card_json FROM packaging_dims_cards
+                        WHERE store_id=? AND vendor_code IN ({placeholders})""",
+                    (sid, *codes),
+                )
+            else:
+                cur = self._conn.execute(
+                    "SELECT card_json FROM packaging_dims_cards WHERE store_id=?",
+                    (sid,),
+                )
+            out: list[dict] = []
+            for row in cur.fetchall():
+                try:
+                    card = json.loads(row["card_json"] or "{}")
+                except Exception:
+                    continue
+                if isinstance(card, dict) and card:
+                    out.append(card)
+            return out
+
+    def packaging_dims_cache_upsert(self, store_id: int, cards: list[dict]) -> None:
+        sid = int(store_id)
+        ts = utc_now_iso()
+        with _DB_LOCK:
+            for card in cards:
+                if not isinstance(card, dict):
+                    continue
+                vc = str(card.get("vendorCode") or card.get("supplierVendorCode") or "").strip()
+                if not vc:
+                    continue
+                try:
+                    nm = int(card.get("nmID") or card.get("nmId") or 0)
+                except (TypeError, ValueError):
+                    nm = 0
+                self._conn.execute(
+                    """INSERT INTO packaging_dims_cards(store_id, vendor_code, nm_id, card_json, updated_at)
+                       VALUES (?,?,?,?,?)
+                       ON CONFLICT(store_id, vendor_code) DO UPDATE SET
+                         nm_id=excluded.nm_id,
+                         card_json=excluded.card_json,
+                         updated_at=excluded.updated_at""",
+                    (sid, vc, nm, json.dumps(card, ensure_ascii=False, default=str), ts),
+                )
+            self._conn.commit()
+
+    def packaging_dims_cache_replace(
+        self,
+        store_id: int,
+        cards: list[dict],
+        *,
+        load_mode: str,
+        truncated: bool = False,
+    ) -> None:
+        sid = int(store_id)
+        ts = utc_now_iso()
+        with _DB_LOCK:
+            self._conn.execute("DELETE FROM packaging_dims_cards WHERE store_id=?", (sid,))
+            for card in cards:
+                if not isinstance(card, dict):
+                    continue
+                vc = str(card.get("vendorCode") or card.get("supplierVendorCode") or "").strip()
+                if not vc:
+                    continue
+                try:
+                    nm = int(card.get("nmID") or card.get("nmId") or 0)
+                except (TypeError, ValueError):
+                    nm = 0
+                self._conn.execute(
+                    """INSERT INTO packaging_dims_cards(store_id, vendor_code, nm_id, card_json, updated_at)
+                       VALUES (?,?,?,?,?)""",
+                    (sid, vc, nm, json.dumps(card, ensure_ascii=False, default=str), ts),
+                )
+            self._conn.execute(
+                """INSERT INTO packaging_dims_catalog_meta(store_id, cards_count, load_mode, catalog_at, truncated)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(store_id) DO UPDATE SET
+                     cards_count=excluded.cards_count,
+                     load_mode=excluded.load_mode,
+                     catalog_at=excluded.catalog_at,
+                     truncated=excluded.truncated""",
+                (sid, len(cards), str(load_mode or ""), ts, 1 if truncated else 0),
+            )
+            self._conn.commit()
+
+    def packaging_dims_cache_touch_meta(
+        self,
+        store_id: int,
+        *,
+        load_mode: str,
+        cards_count: int,
+        truncated: bool = False,
+    ) -> None:
+        sid = int(store_id)
+        ts = utc_now_iso()
+        with _DB_LOCK:
+            self._conn.execute(
+                """INSERT INTO packaging_dims_catalog_meta(store_id, cards_count, load_mode, catalog_at, truncated)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(store_id) DO UPDATE SET
+                     cards_count=excluded.cards_count,
+                     load_mode=excluded.load_mode,
+                     catalog_at=excluded.catalog_at,
+                     truncated=excluded.truncated""",
+                (sid, int(cards_count), str(load_mode or ""), ts, 1 if truncated else 0),
+            )
+            self._conn.commit()
+
+    def packaging_dims_cache_clear(self, store_id: int) -> None:
+        sid = int(store_id)
+        with _DB_LOCK:
+            self._conn.execute("DELETE FROM packaging_dims_cards WHERE store_id=?", (sid,))
+            self._conn.execute("DELETE FROM packaging_dims_catalog_meta WHERE store_id=?", (sid,))
+            self._conn.commit()
+
+    def packaging_dims_charcs_get(self, subject_id: int, ttl_s: int = 604800) -> Optional[list[dict]]:
+        sid = int(subject_id)
+        with _DB_LOCK:
+            row = self._conn.execute(
+                "SELECT charcs_json, updated_at FROM packaging_dims_charcs WHERE subject_id=?",
+                (sid,),
+            ).fetchone()
+            if not row:
+                return None
+            at = str(row["updated_at"] or "").strip()
+            if not at:
+                return None
+            try:
+                from datetime import datetime, timezone
+
+                if at.endswith("Z"):
+                    at = at[:-1] + "+00:00"
+                dt = datetime.fromisoformat(at)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                age = (datetime.now(timezone.utc) - dt).total_seconds()
+                if age >= max(int(ttl_s), 60):
+                    return None
+            except Exception:
+                return None
+            try:
+                data = json.loads(row["charcs_json"] or "[]")
+            except Exception:
+                return None
+            return data if isinstance(data, list) else None
+
+    def packaging_dims_charcs_put(self, subject_id: int, charcs: list[dict]) -> None:
+        sid = int(subject_id)
+        ts = utc_now_iso()
+        with _DB_LOCK:
+            self._conn.execute(
+                """INSERT INTO packaging_dims_charcs(subject_id, charcs_json, updated_at)
+                   VALUES (?,?,?)
+                   ON CONFLICT(subject_id) DO UPDATE SET
+                     charcs_json=excluded.charcs_json,
+                     updated_at=excluded.updated_at""",
+                (sid, json.dumps(charcs, ensure_ascii=False, default=str), ts),
+            )
+            self._conn.commit()

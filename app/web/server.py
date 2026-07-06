@@ -4587,6 +4587,7 @@ class PackagingDimsCompareBody(BaseModel):
     store_ids: list[int] = []
     text: str = ""
     vendor_codes: list[str] = []
+    refresh_catalog: bool = False
 
 
 class PackagingDimsApplyBody(BaseModel):
@@ -4595,6 +4596,7 @@ class PackagingDimsApplyBody(BaseModel):
     vendor_codes: list[str] = []
     dry_run: bool = False
     only_mismatch: bool = True
+    refresh_catalog: bool = False
 
 
 @app.get("/api/compliance/fsa-status")
@@ -4662,6 +4664,7 @@ async def api_packaging_dims_compare(
             store_ids=body.store_ids,
             text=text,
             vendor_codes=vendor_codes or None,
+            force_refresh=bool(body.refresh_catalog),
         )
     except StoreBusyError as e:
         raise HTTPException(409, str(e)) from e
@@ -4704,6 +4707,7 @@ async def api_packaging_dims_apply(
             vendor_codes=vendor_codes or None,
             dry_run=bool(body.dry_run),
             only_mismatch=bool(body.only_mismatch),
+            force_refresh=bool(body.refresh_catalog),
         )
     except StoreBusyError as e:
         raise HTTPException(409, str(e)) from e

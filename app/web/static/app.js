@@ -7283,7 +7283,7 @@
     const lines = [headers.join('\t')];
     for (const st of stores) {
       const storeName = st.store_name || st.store_id || '';
-      for (const r of st.rows || []) {
+      for (const r of (st.rows || []).filter((x) => x.status !== 'match')) {
         const cells = [
           ...(multiStore ? [storeName] : []),
           r.vendor_code || '',
@@ -7344,6 +7344,20 @@
     const n = Number(v);
     if (!Number.isFinite(n)) return '—';
     return Number.isInteger(n) ? String(n) : n.toFixed(1);
+  }
+
+  function packagingDimsCatalogHint(st) {
+    if (st.cache_hit === true) {
+      const at = st.catalog_cached_at ? ` (${String(st.catalog_cached_at).slice(0, 16).replace('T', ' ')})` : '';
+      return `Из кэша на диске${at}. `;
+    }
+    if (st.cache_hit === 'partial') {
+      return 'Частично из кэша, новые артикулы догружены с WB. ';
+    }
+    if (st.load_mode === 'full_catalog') {
+      return `Загружен каталог: ${st.catalog_cards || st.cards_found || 0} карточек${st.catalog_truncated ? ' (обрезано)' : ''}. `;
+    }
+    return '';
   }
 
   function packagingDimsStatusLabel(status) {
@@ -7491,8 +7505,9 @@
     if (stores.length > 1) {
       const matched = stores.reduce((a, s) => a + (Number(s.matched) || 0), 0);
       const mismatched = stores.reduce((a, s) => a + (Number(s.mismatched) || 0), 0);
-      parts.push(`<p class="form-hint"><strong>Итого по ${stores.length} магазинам:</strong> совпало ${matched}, расхождений ${mismatched}</p>`);
+      parts.push(`<p class="form-hint"><strong>Итого по ${stores.length} магазинам:</strong> совпало ${matched} (скрыто), расхождений ${mismatched}</p>`);
     }
+    parts.push('<p class="form-hint">В таблице только расхождения и проблемы — совпадающие товары не показываются.</p>');
     for (const st of stores) {
       const title = escapeHtml(st.store_name || st.store_id || 'Магазин');
       if (st.error) {
@@ -7500,12 +7515,14 @@
         continue;
       }
       parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
-      const loadHint = st.load_mode === 'full_catalog'
-        ? `Загружен каталог: ${st.catalog_cards || st.cards_found || 0} карточек${st.catalog_truncated ? ' (обрезано по лимиту страниц)' : ''}. `
-        : '';
-      parts.push(`<p class="form-hint">${loadHint}Строк: ${st.parsed || 0}, в индексе артикулов: ${st.cards_found || 0}, совпало: ${st.matched || 0}, расхождений: ${st.mismatched || 0}, не найдено: ${st.not_found || 0}, без габаритов WB: ${st.no_dims || 0}</p>`);
-      const rows = st.rows || [];
-      if (!rows.length) continue;
+      const loadHint = packagingDimsCatalogHint(st);
+      const skippedNote = (st.matched || 0) > 0 ? `, совпало ${st.matched} (скрыто)` : '';
+      parts.push(`<p class="form-hint">${loadHint}Строк в таблице: ${st.parsed || 0}${skippedNote}, расхождений: ${st.mismatched || 0}, не найдено: ${st.not_found || 0}, без габаритов WB: ${st.no_dims || 0}</p>`);
+      const rows = (st.rows || []).filter((r) => r.status !== 'match');
+      if (!rows.length) {
+        parts.push('<p class="form-hint">Расхождений нет — все габариты совпадают.</p>');
+        continue;
+      }
       parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Факт Д×Ш×В</th><th>WB Д×Ш×В</th><th>Δ</th><th>Статус</th></tr></thead><tbody>');
       for (const r of rows) {
         const fact = `${packagingDimsFmtNum(r.fact_length)}×${packagingDimsFmtNum(r.fact_width)}×${packagingDimsFmtNum(r.fact_height)}`;
@@ -7542,6 +7559,7 @@
       parts.push('<p class="form-hint"><strong>Режим проверки</strong> — на WB ничего не отправлено.</p>');
     }
     const stores = result.stores || [];
+    parts.push('<p class="form-hint">В таблице только товары к замене и ошибки — совпадающие скрыты.</p>');
     for (const st of stores) {
       const title = escapeHtml(st.store_name || st.store_id || 'Магазин');
       if (st.error) {
@@ -7549,10 +7567,12 @@
         continue;
       }
       parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
-      parts.push(`<p class="form-hint">Подготовлено: ${st.prepared || 0}, отправлено: ${st.sent || 0}, пропущено (уже совпадает): ${st.skipped || 0}, ошибок: ${st.errors_count || 0}</p>`);
-      const rows = (st.rows || []).filter((r) => r.status !== 'skipped');
+      const loadHint = packagingDimsCatalogHint(st);
+      const skippedNote = (st.skipped || 0) > 0 ? `, пропущено совпадающих: ${st.skipped}` : '';
+      parts.push(`<p class="form-hint">${loadHint}К замене: ${st.prepared || 0}, отправлено: ${st.sent || 0}${skippedNote}, ошибок: ${st.errors_count || 0}</p>`);
+      const rows = st.rows || [];
       if (!rows.length) {
-        parts.push('<p class="form-hint">Нет карточек для замены.</p>');
+        parts.push('<p class="form-hint">Нет расхождений — заменять нечего.</p>');
         continue;
       }
       parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Было (WB)</th><th>Станет (факт)</th><th>Статус</th></tr></thead><tbody>');
@@ -7575,6 +7595,7 @@
     const text = (document.getElementById('packaging-dims-text')?.value || '').trim();
     const vendorCodes = getPackagingDimsSelectedVendorCodes();
     const onlyMismatch = !!document.getElementById('packaging-dims-only-mismatch')?.checked;
+    const refreshCatalog = !!document.getElementById('packaging-dims-refresh-catalog')?.checked;
     const wrap = document.getElementById('packaging-dims-rows-wrap');
     const tableVisible = wrap && !wrap.hidden && packagingDimsParsedRows.length;
     if (!storeIds.length) {
@@ -7607,6 +7628,7 @@
           vendor_codes: tableVisible ? vendorCodes : [],
           dry_run: !!dryRun,
           only_mismatch: onlyMismatch,
+          refresh_catalog: refreshCatalog,
         }),
       });
       pollItemsTask(res.task_id, 'packaging-dims', {
@@ -7654,6 +7676,7 @@
       return;
     }
     const btn = document.getElementById('btn-packaging-dims-compare');
+    const refreshCatalog = !!document.getElementById('packaging-dims-refresh-catalog')?.checked;
     setPackagingDimsActionBusy(true);
     const storeCount = storeIds.length;
     const itemCount = tableVisible ? vendorCodes.length : 'все из таблицы';
@@ -7664,6 +7687,7 @@
           store_ids: storeIds,
           text,
           vendor_codes: tableVisible ? vendorCodes : [],
+          refresh_catalog: refreshCatalog,
         }),
       });
       pollItemsTask(res.task_id, 'packaging-dims', {
