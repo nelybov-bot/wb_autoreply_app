@@ -15,6 +15,20 @@ log = logging.getLogger("packaging_dims")
 ProgressCb = Callable[[int, int, str], None]
 
 _DIM_TOLERANCE_CM = 0.05
+# От этого порога — один проход по всему каталогу WB (до 15k карточек), не запрос на каждый артикул.
+_FULL_CATALOG_THRESHOLD = 15
+_CATALOG_MAX_PAGES = 150
+
+
+def estimate_compare_steps(row_count: int, store_count: int = 1) -> int:
+    """Оценка шагов прогресса: загрузка каталога + сравнение строк."""
+    n = max(int(row_count or 0), 0)
+    stores = max(int(store_count or 0), 1)
+    if n >= _FULL_CATALOG_THRESHOLD:
+        per_store = _CATALOG_MAX_PAGES + n
+    else:
+        per_store = max((n + 39) // 40, 1) + n
+    return max(per_store * stores, 1)
 
 _RE_HEADER = re.compile(
     r"sku|артикул|vendor|offer|fact[_\s-]?length|fact[_\s-]?width|fact[_\s-]?height|длина|ширина|высота",
@@ -257,36 +271,88 @@ def _compare_row(row: PackagingDimRow, card: Optional[dict]) -> dict:
     }
 
 
+def _index_cards_by_vendor(cards: List[dict]) -> Dict[str, dict]:
+    card_by_vendor: Dict[str, dict] = {}
+    for card in cards:
+        vc = _norm_vendor(card.get("vendorCode") or card.get("supplierVendorCode") or "").casefold()
+        if vc and vc not in card_by_vendor:
+            card_by_vendor[vc] = card
+    return card_by_vendor
+
+
+async def _load_wb_cards_for_compare(
+    client: WbContentClient,
+    vendor_codes: List[str],
+    *,
+    progress_cb: Optional[ProgressCb] = None,
+) -> Tuple[Dict[str, dict], dict]:
+    """Загрузка карточек: полный каталог (большие списки) или пачками по артикулам."""
+    codes = list(dict.fromkeys(v for v in vendor_codes if v))
+    meta: dict = {}
+    use_full_catalog = len(codes) >= _FULL_CATALOG_THRESHOLD
+
+    if use_full_catalog:
+        if progress_cb:
+            progress_cb(0, _CATALOG_MAX_PAGES, "Загрузка каталога WB…")
+
+        def _catalog_prog(cur: int, tot: int, detail: str) -> None:
+            if progress_cb:
+                progress_cb(cur, tot, detail)
+
+        cards = await client.list_cards_all(
+            max_pages=_CATALOG_MAX_PAGES,
+            meta_out=meta,
+            progress_cb=_catalog_prog,
+        )
+        meta["load_mode"] = "full_catalog"
+    else:
+        chunks = max(1, (len(codes) + 39) // 40)
+
+        def _batch_prog(cur: int, tot: int, detail: str) -> None:
+            if progress_cb:
+                progress_cb(cur, tot, detail)
+
+        cards = await client.list_cards_all(
+            vendor_codes=codes,
+            max_pages=max(5, chunks),
+            meta_out=meta,
+            progress_cb=_batch_prog,
+        )
+        meta["load_mode"] = "vendor_batches"
+
+    meta["cards_loaded"] = len(cards)
+    return _index_cards_by_vendor(cards), meta
+
+
 async def compare_dims_for_store(
     api_key: str,
     *,
     rows: List[PackagingDimRow],
     progress_cb: Optional[ProgressCb] = None,
 ) -> dict:
-    client = WbContentClient(api_key, timeout_s=120.0)
+    client = WbContentClient(api_key, timeout_s=600.0)
     vendor_codes = list(dict.fromkeys(r.vendor_code for r in rows if r.vendor_code))
+    total = len(rows)
 
-    if progress_cb:
-        progress_cb(0, max(len(rows), 1), "Загрузка карточек WB…")
-
-    cards = await client.list_cards_all(
-        vendor_codes=vendor_codes,
-        max_pages=max(10, len(vendor_codes) // 50 + 5),
+    card_by_vendor, load_meta = await _load_wb_cards_for_compare(
+        client,
+        vendor_codes,
+        progress_cb=progress_cb,
     )
-    card_by_vendor: Dict[str, dict] = {}
-    for card in cards:
-        vc = _norm_vendor(card.get("vendorCode") or card.get("supplierVendorCode") or "").casefold()
-        if vc and vc not in card_by_vendor:
-            card_by_vendor[vc] = card
+    load_steps = int(load_meta.get("pages_fetched") or 0)
+    compare_total = max(load_steps + total, total, 1)
 
     results: List[dict] = []
-    total = len(rows)
     for i, row in enumerate(rows, start=1):
         key = _norm_vendor(row.vendor_code).casefold()
         card = card_by_vendor.get(key)
         results.append(_compare_row(row, card))
         if progress_cb:
-            progress_cb(i, total, f"Сравнение: {row.vendor_code}")
+            progress_cb(
+                load_steps + i,
+                compare_total,
+                f"Сравнение {i}/{total}: {row.vendor_code}",
+            )
 
     matched = sum(1 for r in results if r["status"] == "match")
     mismatched = sum(1 for r in results if r["status"] == "mismatch")
@@ -300,6 +366,9 @@ async def compare_dims_for_store(
         "mismatched": mismatched,
         "not_found": not_found,
         "no_dims": no_dims,
+        "load_mode": load_meta.get("load_mode"),
+        "catalog_truncated": bool(load_meta.get("truncated")),
+        "catalog_cards": load_meta.get("cards_loaded"),
         "rows": results,
     }
 
@@ -313,17 +382,12 @@ async def compare_dims_multi_store(
     """stores: (store_id, store_name, api_key)."""
     out_stores: List[dict] = []
     total_stores = len(stores)
-    row_total = max(len(rows), 1)
-    grand_total = max(total_stores * row_total, 1)
 
     for i, (store_id, store_name, api_key) in enumerate(stores):
-        store_offset = i * row_total
-
         def _cb(
             cur: int,
             tot: int,
             detail: str,
-            _offset=store_offset,
             _name=store_name,
             _si=i,
         ) -> None:
@@ -331,15 +395,15 @@ async def compare_dims_multi_store(
                 safe_tot = max(int(tot or 0), 1)
                 safe_cur = max(0, min(int(cur or 0), safe_tot))
                 progress_cb(
-                    _offset + safe_cur,
-                    grand_total,
+                    safe_cur,
+                    safe_tot,
                     f"Магазин {_si + 1}/{total_stores} · {_name}: {detail}",
                 )
 
         if progress_cb:
             progress_cb(
-                store_offset,
-                grand_total,
+                0,
+                estimate_compare_steps(len(rows), 1),
                 f"Магазин {i + 1}/{total_stores}: {store_name}…",
             )
 

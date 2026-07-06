@@ -1066,6 +1066,7 @@ async def run_packaging_dims_compare(
     from app.core.net import HttpStatusError, UnauthorizedStoreError
     from app.core.packaging_dims import (
         compare_dims_multi_store,
+        estimate_compare_steps,
         filter_dim_rows,
         parse_packaging_dims_text,
     )
@@ -1106,7 +1107,7 @@ async def run_packaging_dims_compare(
         await store_locks.release_all_for_owner(task_id)
         raise
 
-    total_steps = max(len(rows) * len(sids), 1)
+    total_steps = estimate_compare_steps(len(rows), len(sids))
     await _init_task(task_id, "packaging_dims", "Габариты WB", total_steps)
     async with _tasks_lock:
         _tasks[task_id]["store_ids"] = sids

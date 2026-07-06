@@ -5,7 +5,7 @@ import json
 import logging
 import socket
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import aiohttp
 
@@ -15,6 +15,7 @@ log = logging.getLogger("wb.content")
 
 BASE = "https://content-api.wildberries.ru"
 _PAGE_LIMIT = 100
+_VENDOR_SEARCH_BATCH = 40
 
 
 class WbContentClient:
@@ -271,18 +272,22 @@ class WbContentClient:
         text_search: Optional[str] = None,
         vendor_codes: Optional[List[str]] = None,
         meta_out: Optional[dict] = None,
+        progress_cb: Optional[Callable[[int, int, str], None]] = None,
     ) -> List[dict]:
         """Пагинация cards/list. meta_out: pages_fetched, max_pages, truncated, last_batch_size."""
         max_p = max(1, int(max_pages))
         if vendor_codes:
             out: List[dict] = []
             seen: set[int] = set()
-            allowed = {str(v).strip().casefold() for v in vendor_codes if str(v).strip()}
-            for vc in vendor_codes:
-                v = (vc or "").strip()
-                if not v:
-                    continue
-                page = await self.list_cards(limit=100, text_search=v)
+            codes = [str(v).strip() for v in vendor_codes if str(v).strip()]
+            allowed = {v.casefold() for v in codes}
+            chunks = [
+                codes[i : i + _VENDOR_SEARCH_BATCH]
+                for i in range(0, len(codes), _VENDOR_SEARCH_BATCH)
+            ]
+            total_chunks = max(len(chunks), 1)
+            for ci, chunk in enumerate(chunks):
+                page = await self.list_cards(limit=100, vendor_codes=chunk)
                 for card in page.get("cards") or []:
                     if not isinstance(card, dict):
                         continue
@@ -293,10 +298,16 @@ class WbContentClient:
                     if nid and nid not in seen:
                         seen.add(nid)
                         out.append(card)
+                if progress_cb:
+                    progress_cb(
+                        ci + 1,
+                        total_chunks,
+                        f"Артикулы: пачка {ci + 1}/{total_chunks}",
+                    )
             if meta_out is not None:
                 meta_out.update(
                     {
-                        "pages_fetched": len(vendor_codes),
+                        "pages_fetched": len(chunks),
                         "max_pages": max_p,
                         "truncated": False,
                         "last_batch_size": len(out),
@@ -359,6 +370,12 @@ class WbContentClient:
                     if last_page_exc is not None and pages_fetched > 0:
                         break
                     pages_fetched += 1
+                    if progress_cb:
+                        progress_cb(
+                            pages_fetched,
+                            max_p,
+                            f"Каталог WB: страница {pages_fetched}, карточек {len(rows)}",
+                        )
                     batch = page.get("cards") or []
                     if not isinstance(batch, list) or not batch:
                         break

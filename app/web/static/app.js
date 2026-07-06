@@ -7474,7 +7474,10 @@
         continue;
       }
       parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
-      parts.push(`<p class="form-hint">Строк: ${st.parsed || 0}, найдено карточек: ${st.cards_found || 0}, совпало: ${st.matched || 0}, расхождений: ${st.mismatched || 0}, не найдено: ${st.not_found || 0}, без габаритов WB: ${st.no_dims || 0}</p>`);
+      const loadHint = st.load_mode === 'full_catalog'
+        ? `Загружен каталог: ${st.catalog_cards || st.cards_found || 0} карточек${st.catalog_truncated ? ' (обрезано по лимиту страниц)' : ''}. `
+        : '';
+      parts.push(`<p class="form-hint">${loadHint}Строк: ${st.parsed || 0}, в индексе артикулов: ${st.cards_found || 0}, совпало: ${st.matched || 0}, расхождений: ${st.mismatched || 0}, не найдено: ${st.not_found || 0}, без габаритов WB: ${st.no_dims || 0}</p>`);
       const rows = st.rows || [];
       if (!rows.length) continue;
       parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Факт Д×Ш×В</th><th>WB Д×Ш×В</th><th>Δ</th><th>Статус</th></tr></thead><tbody>');
