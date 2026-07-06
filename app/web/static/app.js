@@ -7522,7 +7522,7 @@
       const loadHint = packagingDimsCatalogHint(st);
       const skippedNote = (st.matched || 0) > 0 ? `, совпало ${st.matched} (скрыто)` : '';
       const notFoundNote = (st.not_found || 0) > 0 ? `, <span class="text-error">не в каталоге: ${st.not_found}</span>` : '';
-      parts.push(`<p class="form-hint">${loadHint}Расхождений: ${st.mismatched || 0}${skippedNote}${notFoundNote}${(st.no_dims || 0) ? `, без габаритов WB: ${st.no_dims}` : ''}</p>`);
+      parts.push(`<p class="form-hint">${loadHint}В таблице найдено в каталоге: ${st.cards_found ?? '—'} из ${st.parsed || 0}, расхождений: ${st.mismatched || 0}${skippedNote}${notFoundNote}${(st.no_dims || 0) ? `, без габаритов WB: ${st.no_dims}` : ''}${st.catalog_truncated ? ', каталог обрезан (>15k)' : ''}</p>`);
       parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Факт Д×Ш×В</th><th>WB Д×Ш×В</th><th>Δ</th><th>Статус</th></tr></thead><tbody>');
       for (const r of rows) {
         const fact = `${packagingDimsFmtNum(r.fact_length)}×${packagingDimsFmtNum(r.fact_width)}×${packagingDimsFmtNum(r.fact_height)}`;
@@ -7541,7 +7541,10 @@
     if (!hasTables && stores.some((st) => !st.error)) {
       const notFound = stores.reduce((a, s) => a + (Number(s.not_found) || 0), 0);
       if (notFound > 0) {
-        parts.push(`<p class="form-hint text-error">Расхождений нет — ${notFound} артикулов не найдено в каталоге магазина. Проверьте артикулы или включите «Обновить каталог с WB».</p>`);
+        const catalogNote = stores.some((s) => s.catalog_truncated)
+          ? ' Каталог обрезан (в магазине >15 000 карточек) — часть артикулов могла не попасть.'
+          : '';
+        parts.push(`<p class="form-hint text-error">В каталоге магазина не найдено ${notFound} артикулов из таблицы — проверьте колонку sku (vendorCode или nmID) и выбранный магазин.${catalogNote}</p>`);
       } else {
         parts.push('<p class="form-hint">Расхождений нет.</p>');
       }

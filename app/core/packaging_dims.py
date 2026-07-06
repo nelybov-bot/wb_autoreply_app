@@ -18,27 +18,42 @@ log = logging.getLogger("packaging_dims")
 ProgressCb = Callable[[int, int, str], None]
 
 _DIM_TOLERANCE_CM = 0.05
-# Полный каталог WB — только для очень больших списков артикулов (иначе пачки по 40).
-_FULL_CATALOG_THRESHOLD = 2000
+# Всегда полный каталог WB — textSearch по списку артикулов ненадёжен.
 _CATALOG_MAX_PAGES = 150
 _CACHE_TTL_S = 86400
+# Если из кэша не нашлось больше этого доли — перегружаем каталог с WB.
+_CACHE_MISS_RELOAD_RATIO = 0.05
 
 
-def estimate_compare_steps(row_count: int, store_count: int = 1) -> int:
-    """Оценка шагов прогресса: загрузка каталога + сравнение строк."""
-    n = max(int(row_count or 0), 0)
+def estimate_compare_steps(
+    row_count: int,
+    store_count: int = 1,
+    *,
+    force_refresh: bool = False,
+) -> int:
+    """Оценка шагов прогресса. С кэшем на диске — ~2 шага на магазин."""
     stores = max(int(store_count or 0), 1)
-    if n >= _FULL_CATALOG_THRESHOLD:
-        per_store = _CATALOG_MAX_PAGES + n
-    else:
-        per_store = max((n + 39) // 40, 1) + n
+    if not force_refresh:
+        return max(stores * 2, 1)
+    n = max(int(row_count or 0), 0)
+    per_store = _CATALOG_MAX_PAGES + max(n // 500, 1)
     return max(per_store * stores, 1)
 
 
-def estimate_apply_steps(row_count: int, store_count: int = 1, *, only_mismatch: bool = True) -> int:
-    """Загрузка (из кэша ≈ 1 шаг) + подготовка + отправка пачками."""
-    n = max(int(row_count or 0), 0)
+def estimate_apply_steps(
+    row_count: int,
+    store_count: int = 1,
+    *,
+    only_mismatch: bool = True,
+    force_refresh: bool = False,
+) -> int:
+    """С кэшем — проверка быстрая; отправка на WB — пачками по 100."""
     stores = max(int(store_count or 0), 1)
+    if not force_refresh:
+        n = max(int(row_count or 0), 0)
+        per_store = 2 + max(1, (n + 99) // 100)
+        return max(per_store * stores, 1)
+    n = max(int(row_count or 0), 0)
     per_store = 1 + n + max(1, (n + 99) // 100)
     return max(per_store * stores, 1)
 
@@ -54,7 +69,7 @@ def _dims_rows_for_display(rows: List[dict], *, apply: bool = False) -> List[dic
 
 
 def _progress_load_steps(load_meta: dict) -> int:
-    if load_meta.get("cache_hit"):
+    if load_meta.get("cache_hit") in (True, "partial"):
         return 0
     return int(load_meta.get("pages_fetched") or 0)
 
@@ -102,7 +117,41 @@ class PackagingDimRow:
 
 
 def _norm_vendor(v: str) -> str:
-    return str(v or "").strip()
+    """Артикул из таблицы: trim, Excel 528657007.0 → 528657007."""
+    s = str(v or "").strip()
+    if not s:
+        return ""
+    if re.fullmatch(r"\d+\.0+", s):
+        return s.split(".", 1)[0]
+    try:
+        if re.fullmatch(r"[\d.eE+\-]+", s) and ("e" in s.lower() or "." in s):
+            f = float(s)
+            if abs(f - round(f)) < 1e-9:
+                return str(int(round(f)))
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return s
+
+
+def _vendor_lookup_keys(vendor_code: str) -> List[str]:
+    """Ключи для поиска карточки: как есть, без ведущих нулей."""
+    raw = _norm_vendor(vendor_code)
+    if not raw:
+        return []
+    keys = [raw.casefold()]
+    folded = raw.casefold()
+    if folded.isdigit():
+        stripped = folded.lstrip("0") or "0"
+        if stripped not in keys:
+            keys.append(stripped)
+    return keys
+
+
+def _safe_nm_id(card: dict) -> int:
+    try:
+        return int(card.get("nmID") or card.get("nmId") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _parse_float(val: str) -> Optional[float]:
@@ -197,6 +246,9 @@ def parse_packaging_dims_text(text: str) -> Tuple[List[PackagingDimRow], List[st
         if fl is None or fw is None or fh is None:
             warnings.append(f"Строка {line_no} ({sku}): не удалось разобрать габариты — пропущена")
             continue
+        if fl <= 0 or fw <= 0 or fh <= 0:
+            warnings.append(f"Строка {line_no} ({sku}): габариты должны быть > 0 — пропущена")
+            continue
 
         key = sku.casefold()
         if key in seen:
@@ -239,15 +291,36 @@ def dims_rows_to_api(rows: List[PackagingDimRow]) -> List[dict]:
 
 def _extract_wb_dims(card: dict) -> Optional[Dict[str, float]]:
     dims = card.get("dimensions")
-    if not isinstance(dims, dict):
-        return None
-    out: Dict[str, float] = {}
-    for key in ("length", "width", "height"):
-        val = _parse_float(dims.get(key))
+    if isinstance(dims, dict):
+        out: Dict[str, float] = {}
+        for key in ("length", "width", "height"):
+            val = _parse_float(dims.get(key))
+            if val is None:
+                out = {}
+                break
+            out[key] = val
+        if len(out) == 3:
+            return out
+
+    from .wb_certificates import _charc_name, _is_packaging_dimension_char
+
+    char_dims: Dict[str, float] = {}
+    for ch in card.get("characteristics") or []:
+        if not isinstance(ch, dict) or not _is_packaging_dimension_char(ch):
+            continue
+        name = _charc_name(ch).casefold()
+        val = _parse_float(ch.get("value"))
         if val is None:
-            return None
-        out[key] = val
-    return out
+            continue
+        if "длина" in name or name == "length":
+            char_dims["length"] = val
+        elif "ширина" in name or name == "width":
+            char_dims["width"] = val
+        elif "высота" in name or name == "height":
+            char_dims["height"] = val
+    if len(char_dims) == 3:
+        return char_dims
+    return None
 
 
 def _dims_equal(a: float, b: float, tol: float = _DIM_TOLERANCE_CM) -> bool:
@@ -273,7 +346,7 @@ def _compare_row(row: PackagingDimRow, card: Optional[dict]) -> dict:
             "diff_height": None,
         }
 
-    nm = int(card.get("nmID") or card.get("nmId") or 0)
+    nm = _safe_nm_id(card)
     title = str(card.get("title") or "")[:120]
     wb_dims = _extract_wb_dims(card)
     if not wb_dims:
@@ -336,36 +409,39 @@ def _index_cards_by_vendor(cards: List[dict]) -> Dict[str, dict]:
             card_by_vendor[vc] = card
     return card_by_vendor
 
-
-def _build_card_index(cards: List[dict]) -> Tuple[Dict[str, dict], Dict[str, dict]]:
-    """Индекс по vendorCode (casefold) и по nmID (строка)."""
+def _build_card_index(cards: List[dict]) -> Tuple[Dict[str, dict], Dict[str, dict], Dict[str, dict]]:
+    """Индекс: vendorCode, nmID, баркод (skus)."""
     by_vendor = _index_cards_by_vendor(cards)
     by_nm_id: Dict[str, dict] = {}
+    by_barcode: Dict[str, dict] = {}
     for card in cards:
-        try:
-            nm = int(card.get("nmID") or card.get("nmId") or 0)
-        except (TypeError, ValueError):
-            nm = 0
+        nm = _safe_nm_id(card)
         if nm > 0:
             by_nm_id[str(nm)] = card
-    return by_vendor, by_nm_id
+        for size in card.get("sizes") or []:
+            if not isinstance(size, dict):
+                continue
+            for sku in size.get("skus") or []:
+                code = _norm_vendor(str(sku or ""))
+                if code:
+                    by_barcode[code.casefold()] = card
+    return by_vendor, by_nm_id, by_barcode
 
 
 def _lookup_card(
     by_vendor: Dict[str, dict],
     by_nm_id: Dict[str, dict],
+    by_barcode: Dict[str, dict],
     vendor_code: str,
 ) -> Optional[dict]:
-    key = _norm_vendor(vendor_code).casefold()
-    if key in by_vendor:
-        return by_vendor[key]
-    if key.isdigit():
-        return by_nm_id.get(key)
+    for key in _vendor_lookup_keys(vendor_code):
+        if key in by_vendor:
+            return by_vendor[key]
+        if key in by_barcode:
+            return by_barcode[key]
+        if key.isdigit() and key in by_nm_id:
+            return by_nm_id[key]
     return None
-
-
-def _cards_from_index(by_vendor: Dict[str, dict]) -> List[dict]:
-    return list(by_vendor.values())
 
 
 def _card_for_cache(card: dict) -> dict:
@@ -404,46 +480,28 @@ def _save_cards_to_cache(
         )
 
 
-async def _fetch_cards_from_wb(
+async def _fetch_full_catalog_from_wb(
     client: WbContentClient,
-    vendor_codes: List[str],
     *,
     progress_cb: Optional[ProgressCb] = None,
 ) -> Tuple[List[dict], dict]:
-    codes = list(dict.fromkeys(v for v in vendor_codes if v))
-    meta: dict = {}
-    use_full_catalog = len(codes) >= _FULL_CATALOG_THRESHOLD
+    """Полный каталог магазина — единственный надёжный способ сопоставить артикулы."""
+    meta: dict = {"load_mode": "full_catalog"}
+    if progress_cb:
+        progress_cb(0, _CATALOG_MAX_PAGES, "Загрузка каталога WB…")
 
-    if use_full_catalog:
+    def _catalog_prog(cur: int, tot: int, detail: str) -> None:
         if progress_cb:
-            progress_cb(0, _CATALOG_MAX_PAGES, "Загрузка каталога WB…")
+            progress_cb(cur, tot, detail)
 
-        def _catalog_prog(cur: int, tot: int, detail: str) -> None:
-            if progress_cb:
-                progress_cb(cur, tot, detail)
-
-        cards = await client.list_cards_all(
-            max_pages=_CATALOG_MAX_PAGES,
-            meta_out=meta,
-            progress_cb=_catalog_prog,
-        )
-        meta["load_mode"] = "full_catalog"
-    else:
-        chunks = max(1, (len(codes) + 39) // 40)
-
-        def _batch_prog(cur: int, tot: int, detail: str) -> None:
-            if progress_cb:
-                progress_cb(cur, tot, detail)
-
-        cards = await client.list_cards_all(
-            vendor_codes=codes,
-            max_pages=max(5, chunks),
-            meta_out=meta,
-            progress_cb=_batch_prog,
-        )
-        meta["load_mode"] = "vendor_batches"
-
+    cards = await client.list_cards_all(
+        max_pages=_CATALOG_MAX_PAGES,
+        meta_out=meta,
+        progress_cb=_catalog_prog,
+    )
+    meta["load_mode"] = "full_catalog"
     meta["cards_loaded"] = len(cards)
+    meta["catalog_loaded"] = True
     return cards, meta
 
 
@@ -456,92 +514,78 @@ async def _load_wb_cards_for_compare(
     force_refresh: bool = False,
     cache_ttl_s: int = _CACHE_TTL_S,
     progress_cb: Optional[ProgressCb] = None,
-) -> Tuple[Dict[str, dict], Dict[str, dict], dict]:
-    """Загрузка карточек: кэш SQLite → WB API (пачками или полный каталог)."""
-    codes = list(dict.fromkeys(v for v in vendor_codes if v))
-    use_full_catalog = len(codes) >= _FULL_CATALOG_THRESHOLD
-    meta: dict = {"load_mode": "full_catalog" if use_full_catalog else "vendor_batches"}
+) -> Tuple[Dict[str, dict], Dict[str, dict], Dict[str, dict], dict]:
+    """Загрузка карточек: кэш SQLite (весь каталог) → при промахе полный каталог WB."""
+    codes = list(dict.fromkeys(_norm_vendor(v) for v in vendor_codes if _norm_vendor(v)))
+    meta: dict = {"load_mode": "full_catalog"}
+
+    def _missing_codes(
+        by_vendor: Dict[str, dict],
+        by_nm_id: Dict[str, dict],
+        by_barcode: Dict[str, dict],
+    ) -> List[str]:
+        return [c for c in codes if _lookup_card(by_vendor, by_nm_id, by_barcode, c) is None]
 
     if db and store_id and not force_refresh and db.packaging_dims_cache_is_fresh(store_id, cache_ttl_s):
         cached_meta = db.packaging_dims_cache_meta(store_id)
         cards_count = int(cached_meta.get("cards_count") or 0)
-        load_mode = str(cached_meta.get("load_mode") or "")
-        # Полный кэш каталога — всегда грузим разом, не фильтруем IN по артикулам.
-        use_full_cache = load_mode == "full_catalog" or cards_count >= len(codes)
-        if use_full_cache and cards_count > 0:
+        if cards_count > 0:
             cards = db.packaging_dims_cache_load(store_id)
-            if cards:
-                by_vendor, by_nm_id = _build_card_index(cards)
-                meta.update(cached_meta)
-                meta["cache_hit"] = True
-                meta["pages_fetched"] = 0
-                meta["cards_loaded"] = len(cards)
-                if progress_cb:
-                    progress_cb(1, 1, f"Каталог из кэша ({len(cards)} карточек)")
-                return by_vendor, by_nm_id, meta
-        if not use_full_catalog:
-            cards = db.packaging_dims_cache_load(store_id, vendor_codes=codes)
-            by_vendor, by_nm_id = _build_card_index(cards)
-            missing = [
-                c for c in codes
-                if _lookup_card(by_vendor, by_nm_id, c) is None
-            ]
-            if not missing:
-                meta.update(cached_meta)
-                meta["cache_hit"] = True
-                meta["pages_fetched"] = 0
-                meta["cards_loaded"] = len(cards)
-                if progress_cb:
-                    progress_cb(1, 1, f"Артикулы из кэша ({len(cards)})")
-                return by_vendor, by_nm_id, meta
-            if progress_cb:
-                progress_cb(0, len(missing), f"Догрузка {len(missing)} артикулов с WB…")
-            fetched, fetch_meta = await _fetch_cards_from_wb(
-                client,
-                missing,
-                progress_cb=progress_cb,
-            )
-            _save_cards_to_cache(
-                db,
-                store_id,
-                fetched,
-                load_mode="vendor_batches",
-                truncated=bool(fetch_meta.get("truncated")),
-                replace_all=False,
-            )
-            for card in fetched:
-                vc = _norm_vendor(card.get("vendorCode") or card.get("supplierVendorCode") or "").casefold()
-                if vc:
-                    by_vendor[vc] = card
-                try:
-                    nm = int(card.get("nmID") or card.get("nmId") or 0)
-                except (TypeError, ValueError):
-                    nm = 0
-                if nm > 0:
-                    by_nm_id[str(nm)] = card
+            by_vendor, by_nm_id, by_barcode = _build_card_index(cards)
+            missing = _missing_codes(by_vendor, by_nm_id, by_barcode)
             meta.update(cached_meta)
-            meta["cache_hit"] = "partial"
-            meta["cards_loaded"] = len(by_vendor)
-            meta["fetched_missing"] = len(missing)
-            return by_vendor, by_nm_id, meta
+            meta["pages_fetched"] = 0
+            meta["cards_loaded"] = len(cards)
+            if progress_cb:
+                progress_cb(1, 1, f"Каталог из кэша ({len(cards)} карточек)")
+            need_reload = (
+                bool(missing)
+                and (
+                    cached_meta.get("load_mode") != "full_catalog"
+                    or bool(cached_meta.get("truncated"))
+                    or len(missing) > max(3, int(len(codes) * _CACHE_MISS_RELOAD_RATIO))
+                )
+            )
+            if not missing:
+                meta["cache_hit"] = True
+                return by_vendor, by_nm_id, by_barcode, meta
+            if not need_reload:
+                meta["cache_hit"] = "partial"
+                meta["not_found_in_cache"] = len(missing)
+                return by_vendor, by_nm_id, by_barcode, meta
+            log.info(
+                "packaging_dims store %s: %s/%s not in cache, reloading full catalog",
+                store_id,
+                len(missing),
+                len(codes),
+            )
 
     if force_refresh and db and store_id:
         db.packaging_dims_cache_clear(store_id)
 
-    cards, meta = await _fetch_cards_from_wb(client, codes, progress_cb=progress_cb)
+    cards, meta = await _fetch_full_catalog_from_wb(client, progress_cb=progress_cb)
     if db and store_id:
         _save_cards_to_cache(
             db,
             store_id,
             cards,
-            load_mode=str(meta.get("load_mode") or ""),
+            load_mode="full_catalog",
             truncated=bool(meta.get("truncated")),
-            replace_all=use_full_catalog,
+            replace_all=True,
         )
         meta.update(db.packaging_dims_cache_meta(store_id))
     meta["cache_hit"] = False
-    by_vendor, by_nm_id = _build_card_index(cards)
-    return by_vendor, by_nm_id, meta
+    by_vendor, by_nm_id, by_barcode = _build_card_index(cards)
+    missing = _missing_codes(by_vendor, by_nm_id, by_barcode)
+    if missing:
+        meta["not_found_after_catalog"] = len(missing)
+        log.warning(
+            "packaging_dims store %s: %s articles not in WB catalog (of %s in table)",
+            store_id,
+            len(missing),
+            len(codes),
+        )
+    return by_vendor, by_nm_id, by_barcode, meta
 
 
 async def compare_dims_for_store(
@@ -557,7 +601,7 @@ async def compare_dims_for_store(
     vendor_codes = list(dict.fromkeys(r.vendor_code for r in rows if r.vendor_code))
     total = len(rows)
 
-    card_by_vendor, card_by_nm_id, load_meta = await _load_wb_cards_for_compare(
+    card_by_vendor, card_by_nm_id, card_by_barcode, load_meta = await _load_wb_cards_for_compare(
         client,
         vendor_codes,
         store_id=store_id,
@@ -566,19 +610,22 @@ async def compare_dims_for_store(
         progress_cb=progress_cb,
     )
     load_steps = _progress_load_steps(load_meta)
-    from_cache = bool(load_meta.get("cache_hit"))
+    from_cache = (
+        load_meta.get("cache_hit") in (True, "partial")
+        or bool(load_meta.get("catalog_loaded"))
+    )
 
     results: List[dict] = []
     if from_cache:
         for row in rows:
-            card = _lookup_card(card_by_vendor, card_by_nm_id, row.vendor_code)
+            card = _lookup_card(card_by_vendor, card_by_nm_id, card_by_barcode, row.vendor_code)
             results.append(_compare_row(row, card))
         if progress_cb:
             progress_cb(1, 1, f"Сравнено {total} артикулов из кэша")
     else:
         compare_total = max(load_steps + total, total, 1)
         for i, row in enumerate(rows, start=1):
-            card = _lookup_card(card_by_vendor, card_by_nm_id, row.vendor_code)
+            card = _lookup_card(card_by_vendor, card_by_nm_id, card_by_barcode, row.vendor_code)
             results.append(_compare_row(row, card))
             if progress_cb:
                 progress_cb(
@@ -591,17 +638,18 @@ async def compare_dims_for_store(
     mismatched = sum(1 for r in results if r["status"] == "mismatch")
     not_found = sum(1 for r in results if r["status"] == "not_found")
     no_dims = sum(1 for r in results if r["status"] == "no_dims")
+    table_found = len(rows) - not_found
 
     return {
         "parsed": len(rows),
-        "cards_found": len(card_by_vendor),
+        "cards_found": table_found,
+        "catalog_cards": load_meta.get("cards_loaded"),
         "matched": matched,
         "mismatched": mismatched,
         "not_found": not_found,
         "no_dims": no_dims,
         "load_mode": load_meta.get("load_mode"),
         "catalog_truncated": bool(load_meta.get("truncated")),
-        "catalog_cards": load_meta.get("cards_loaded"),
         "cache_hit": load_meta.get("cache_hit"),
         "catalog_cached_at": load_meta.get("catalog_at"),
         "rows": _dims_rows_for_display(results, apply=False),
@@ -640,7 +688,7 @@ async def compare_dims_multi_store(
         if progress_cb:
             progress_cb(
                 0,
-                estimate_compare_steps(len(rows), 1),
+                2,
                 f"Магазин {i + 1}/{total_stores}: {store_name}…",
             )
 
@@ -768,7 +816,7 @@ async def apply_dims_for_store(
     vendor_codes = list(dict.fromkeys(r.vendor_code for r in rows if r.vendor_code))
     total = len(rows)
 
-    card_by_vendor, card_by_nm_id, load_meta = await _load_wb_cards_for_compare(
+    card_by_vendor, card_by_nm_id, card_by_barcode, load_meta = await _load_wb_cards_for_compare(
         client,
         vendor_codes,
         store_id=store_id,
@@ -777,13 +825,16 @@ async def apply_dims_for_store(
         progress_cb=progress_cb,
     )
     load_steps = _progress_load_steps(load_meta)
-    from_cache = bool(load_meta.get("cache_hit"))
+    from_cache = (
+        load_meta.get("cache_hit") in (True, "partial")
+        or bool(load_meta.get("catalog_loaded"))
+    )
     work_total = 1 if from_cache else max(load_steps + total, total, 1)
 
     skipped = 0
     work_items: List[Tuple[PackagingDimRow, dict, Optional[dict]]] = []
     for i, row in enumerate(rows, start=1):
-        card = _lookup_card(card_by_vendor, card_by_nm_id, row.vendor_code)
+        card = _lookup_card(card_by_vendor, card_by_nm_id, card_by_barcode, row.vendor_code)
         cmp = _compare_row(row, card)
         if cmp["status"] == "match" and only_mismatch:
             skipped += 1
@@ -894,7 +945,7 @@ async def apply_dims_for_store(
         "dry_run": dry_run,
         "only_mismatch": only_mismatch,
         "parsed": len(rows),
-        "cards_found": len(card_by_vendor),
+        "cards_found": len(rows) - sum(1 for r in results if r["status"] == "not_found"),
         "prepared": prepared,
         "sent": sent,
         "skipped": skipped,
@@ -944,7 +995,7 @@ async def apply_dims_multi_store(
         if progress_cb:
             progress_cb(
                 0,
-                estimate_apply_steps(len(rows), 1, only_mismatch=only_mismatch),
+                2,
                 f"Магазин {i + 1}/{total_stores}: {store_name}…",
             )
 
