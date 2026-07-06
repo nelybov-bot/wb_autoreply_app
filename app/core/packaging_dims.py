@@ -43,8 +43,8 @@ def estimate_apply_steps(row_count: int, store_count: int = 1, *, only_mismatch:
     return max(per_store * stores, 1)
 
 
-_COMPARE_DISPLAY_STATUSES = frozenset({"mismatch", "not_found", "no_dims"})
-_APPLY_DISPLAY_STATUSES = frozenset({"mismatch", "preview", "pending", "ok", "error", "not_found", "no_dims"})
+_COMPARE_DISPLAY_STATUSES = frozenset({"mismatch", "no_dims"})
+_APPLY_DISPLAY_STATUSES = frozenset({"mismatch", "preview", "pending", "ok", "error", "no_dims"})
 
 
 def _dims_rows_for_display(rows: List[dict], *, apply: bool = False) -> List[dict]:

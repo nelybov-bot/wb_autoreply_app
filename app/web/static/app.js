@@ -7283,7 +7283,7 @@
     const lines = [headers.join('\t')];
     for (const st of stores) {
       const storeName = st.store_name || st.store_id || '';
-      for (const r of (st.rows || []).filter((x) => x.status !== 'match')) {
+      for (const r of (st.rows || []).filter((x) => x.status !== 'match' && x.status !== 'not_found')) {
         const cells = [
           ...(multiStore ? [storeName] : []),
           r.vendor_code || '',
@@ -7505,24 +7505,22 @@
     if (stores.length > 1) {
       const matched = stores.reduce((a, s) => a + (Number(s.matched) || 0), 0);
       const mismatched = stores.reduce((a, s) => a + (Number(s.mismatched) || 0), 0);
-      parts.push(`<p class="form-hint"><strong>Итого по ${stores.length} магазинам:</strong> совпало ${matched} (скрыто), расхождений ${mismatched}</p>`);
+      parts.push(`<p class="form-hint"><strong>Итого по ${stores.length} магазинам:</strong> расхождений ${mismatched}${matched ? `, совпало ${matched} (скрыто)` : ''}</p>`);
     }
-    parts.push('<p class="form-hint">В таблице только расхождения и проблемы — совпадающие товары не показываются.</p>');
+    parts.push('<p class="form-hint">В таблице только расхождения — совпадающие и не найденные в каталоге не показываются.</p>');
+    let hasTables = false;
     for (const st of stores) {
       const title = escapeHtml(st.store_name || st.store_id || 'Магазин');
       if (st.error) {
         parts.push(`<h4 class="compliance-result-store">${title}</h4><p class="text-error">${escapeHtml(st.error)}</p>`);
         continue;
       }
+      const rows = (st.rows || []).filter((r) => r.status !== 'match' && r.status !== 'not_found');
+      if (!rows.length) continue;
       parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
       const loadHint = packagingDimsCatalogHint(st);
       const skippedNote = (st.matched || 0) > 0 ? `, совпало ${st.matched} (скрыто)` : '';
-      parts.push(`<p class="form-hint">${loadHint}Строк в таблице: ${st.parsed || 0}${skippedNote}, расхождений: ${st.mismatched || 0}, не найдено: ${st.not_found || 0}, без габаритов WB: ${st.no_dims || 0}</p>`);
-      const rows = (st.rows || []).filter((r) => r.status !== 'match');
-      if (!rows.length) {
-        parts.push('<p class="form-hint">Расхождений нет — все габариты совпадают.</p>');
-        continue;
-      }
+      parts.push(`<p class="form-hint">${loadHint}Расхождений: ${st.mismatched || 0}${skippedNote}${(st.no_dims || 0) ? `, без габаритов WB: ${st.no_dims}` : ''}</p>`);
       parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Факт Д×Ш×В</th><th>WB Д×Ш×В</th><th>Δ</th><th>Статус</th></tr></thead><tbody>');
       for (const r of rows) {
         const fact = `${packagingDimsFmtNum(r.fact_length)}×${packagingDimsFmtNum(r.fact_width)}×${packagingDimsFmtNum(r.fact_height)}`;
@@ -7536,6 +7534,10 @@
         parts.push(`<tr><td>${escapeHtml(r.vendor_code)}</td><td>${r.nm_id || '—'}</td><td>${fact}</td><td>${wb}</td><td class="${statusCls}">${delta}</td><td class="${statusCls}">${escapeHtml(packagingDimsStatusLabel(r.status))}</td></tr>`);
       }
       parts.push('</tbody></table>');
+      hasTables = true;
+    }
+    if (!hasTables && stores.some((st) => !st.error)) {
+      parts.push('<p class="form-hint">Расхождений нет.</p>');
     }
     box.innerHTML = parts.join('');
     box.hidden = !parts.length;
@@ -7560,21 +7562,20 @@
     }
     const stores = result.stores || [];
     parts.push('<p class="form-hint">В таблице только товары к замене и ошибки — совпадающие скрыты.</p>');
+    let hasTables = false;
     for (const st of stores) {
       const title = escapeHtml(st.store_name || st.store_id || 'Магазин');
       if (st.error) {
         parts.push(`<h4 class="compliance-result-store">${title}</h4><p class="text-error">${escapeHtml(st.error)}</p>`);
         continue;
       }
+      const rows = st.rows || [];
+      if (!rows.length) continue;
+      hasTables = true;
       parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
       const loadHint = packagingDimsCatalogHint(st);
       const skippedNote = (st.skipped || 0) > 0 ? `, пропущено совпадающих: ${st.skipped}` : '';
       parts.push(`<p class="form-hint">${loadHint}К замене: ${st.prepared || 0}, отправлено: ${st.sent || 0}${skippedNote}, ошибок: ${st.errors_count || 0}</p>`);
-      const rows = st.rows || [];
-      if (!rows.length) {
-        parts.push('<p class="form-hint">Нет расхождений — заменять нечего.</p>');
-        continue;
-      }
       parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Было (WB)</th><th>Станет (факт)</th><th>Статус</th></tr></thead><tbody>');
       for (const r of rows) {
         const fact = `${packagingDimsFmtNum(r.fact_length)}×${packagingDimsFmtNum(r.fact_width)}×${packagingDimsFmtNum(r.fact_height)}`;
@@ -7585,6 +7586,9 @@
         parts.push(`<tr><td>${escapeHtml(r.vendor_code)}</td><td>${r.nm_id || '—'}</td><td>${wb}</td><td>${fact}</td><td class="${statusCls}">${escapeHtml(r.message || packagingDimsApplyStatusLabel(r.status))}</td></tr>`);
       }
       parts.push('</tbody></table>');
+    }
+    if (!hasTables && stores.some((st) => !st.error)) {
+      parts.push('<p class="form-hint">Нет товаров к замене.</p>');
     }
     box.innerHTML = parts.join('');
     box.hidden = !parts.length;
