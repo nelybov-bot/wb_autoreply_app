@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-07-06 — Fix: WB 400 Invalid request format при замене габаритов
+
+- `sanitize_wb_card_update_payload` — без `isValid` в dimensions, только `{id, value}` в characteristics, `kizMarked` всегда bool
+- Габариты в см — целые числа где возможно; `weightBrutto` обязателен (из карточки WB)
+- Сообщения об ошибках WB через `_format_wb_error`
+
 ## 2026-07-06 — Габариты упаковки WB: сравнение с карточками
 
 - Таблица `sku`, `fact_length`, `fact_width`, `fact_height` (копирование из Google Sheets)

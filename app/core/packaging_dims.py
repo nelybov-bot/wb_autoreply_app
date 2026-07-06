@@ -9,6 +9,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from .net import HttpStatusError
+from .wb_certificates import _format_wb_error
 from .wb_content_client import WbContentClient
 
 log = logging.getLogger("packaging_dims")
@@ -429,25 +431,41 @@ def _dim_num(v: float) -> float:
     return round(float(v), 2)
 
 
+def _card_has_weight_brutto(card: dict) -> bool:
+    dims = card.get("dimensions")
+    if not isinstance(dims, dict):
+        return False
+    try:
+        return float(dims.get("weightBrutto") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def build_dims_update_payload(card: dict, row: PackagingDimRow) -> Optional[dict]:
     """cards/update: подставить fact_* в dimensions, остальное карточки сохранить."""
-    from .wb_certificates import build_card_char_patches_payload
+    from .wb_certificates import (
+        _dim_wb_value,
+        build_card_char_patches_payload,
+        sanitize_wb_card_update_payload,
+    )
 
     payload = build_card_char_patches_payload(card, {}, vendor_code=row.vendor_code)
     if not payload.get("sizes"):
         return None
     old_dims = card.get("dimensions") if isinstance(card.get("dimensions"), dict) else {}
-    dims: Dict[str, Any] = {
-        "length": _dim_num(row.fact_length),
-        "width": _dim_num(row.fact_width),
-        "height": _dim_num(row.fact_height),
+    try:
+        wb = float(old_dims.get("weightBrutto") or 0)
+    except (TypeError, ValueError):
+        wb = 0
+    if wb <= 0:
+        return None
+    payload["dimensions"] = {
+        "length": _dim_wb_value(row.fact_length),
+        "width": _dim_wb_value(row.fact_width),
+        "height": _dim_wb_value(row.fact_height),
+        "weightBrutto": _dim_wb_value(wb),
     }
-    if old_dims.get("weightBrutto") is not None:
-        dims["weightBrutto"] = old_dims["weightBrutto"]
-    if old_dims.get("isValid") is not None:
-        dims["isValid"] = old_dims["isValid"]
-    payload["dimensions"] = dims
-    return payload
+    return sanitize_wb_card_update_payload(payload)
 
 
 def _preview_dims_message(cmp: dict, row: PackagingDimRow) -> str:
@@ -502,10 +520,14 @@ async def apply_dims_for_store(
 
         payload = build_dims_update_payload(card, row)
         if not payload:
-            cmp = {**cmp, "status": "error", "message": "В карточке нет sizes (chrtID/skus) для обновления"}
+            if not _card_has_weight_brutto(card):
+                msg = "Нет веса упаковки (weightBrutto) в карточке WB"
+            else:
+                msg = "В карточке нет sizes (chrtID/skus) для обновления"
+            cmp = {**cmp, "status": "error", "message": msg}
             results.append(cmp)
             if progress_cb:
-                progress_cb(load_steps + i, compare_total, f"Нет sizes: {row.vendor_code}")
+                progress_cb(load_steps + i, compare_total, f"{msg}: {row.vendor_code}")
             continue
 
         row_out = {**cmp}
@@ -544,10 +566,12 @@ async def apply_dims_for_store(
             key = _norm_vendor(res.get("vendor_code") or "").casefold()
             if key in err_by_vc:
                 e = err_by_vc[key]
-                msg = f"Ошибка WB {e.get('status')}"
-                body = str(e.get("body") or "").strip()
-                if body:
-                    msg = f"{msg}: {body[:200]}"
+                msg = _format_wb_error(
+                    HttpStatusError(
+                        status=int(e.get("status") or 0),
+                        body=str(e.get("body") or ""),
+                    )
+                )
                 errors.append(e)
                 res["status"] = "error"
                 res["message"] = msg

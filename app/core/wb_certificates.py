@@ -289,6 +289,44 @@ def _char_value(val: str, existing: Any) -> Any:
     return val
 
 
+def _dim_wb_value(v: Any) -> int | float:
+    n = round(float(v), 2)
+    if n == int(n):
+        return int(n)
+    return n
+
+
+def sanitize_wb_card_update_payload(payload: dict) -> dict:
+    """Привести тело cards/update к формату WB: без isValid, только id/value в characteristics."""
+    out: Dict[str, Any] = {
+        "nmID": int(payload.get("nmID") or payload.get("nmId") or 0),
+        "vendorCode": str(payload.get("vendorCode") or ""),
+        "brand": str(payload.get("brand") or ""),
+        "title": str(payload.get("title") or ""),
+        "description": str(payload.get("description") or ""),
+        "kizMarked": bool(payload.get("kizMarked", False)),
+    }
+    dims = payload.get("dimensions")
+    if isinstance(dims, dict) and dims:
+        clean_dims: Dict[str, Any] = {}
+        for key in ("length", "width", "height", "weightBrutto"):
+            if dims.get(key) is not None:
+                clean_dims[key] = _dim_wb_value(dims[key])
+        if clean_dims:
+            out["dimensions"] = clean_dims
+    chars_out: List[dict] = []
+    for ch in payload.get("characteristics") or []:
+        if not isinstance(ch, dict):
+            continue
+        cid = _charc_id(ch)
+        if not cid:
+            continue
+        chars_out.append({"id": cid, "value": ch.get("value")})
+    out["characteristics"] = chars_out
+    out["sizes"] = _normalize_sizes({"sizes": payload.get("sizes") or []})
+    return out
+
+
 def _format_wb_error(e: HttpStatusError) -> str:
     body = (e.body or "").strip()
     if not body:
@@ -354,14 +392,13 @@ def build_card_update_payload(
         "title": str(card.get("title") or ""),
         "description": str(card.get("description") or ""),
     }
-    if card.get("kizMarked") is not None:
-        payload["kizMarked"] = bool(card.get("kizMarked"))
+    payload["kizMarked"] = bool(card.get("kizMarked", False))
 
     dims = card.get("dimensions")
     if isinstance(dims, dict) and dims:
         payload["dimensions"] = {
             k: dims[k]
-            for k in ("length", "width", "height", "weightBrutto", "isValid")
+            for k in ("length", "width", "height", "weightBrutto")
             if dims.get(k) is not None
         }
 
@@ -394,7 +431,7 @@ def build_card_update_payload(
 
     payload["characteristics"] = chars_out
     payload["sizes"] = _normalize_sizes(card)
-    return payload
+    return sanitize_wb_card_update_payload(payload)
 
 
 def build_card_char_patches_payload(
@@ -418,14 +455,13 @@ def build_card_char_patches_payload(
         "title": str(card.get("title") or ""),
         "description": str(card.get("description") or ""),
     }
-    if card.get("kizMarked") is not None:
-        payload["kizMarked"] = bool(card.get("kizMarked"))
+    payload["kizMarked"] = bool(card.get("kizMarked", False))
 
     dims = card.get("dimensions")
     if isinstance(dims, dict) and dims:
         payload["dimensions"] = {
             k: dims[k]
-            for k in ("length", "width", "height", "weightBrutto", "isValid")
+            for k in ("length", "width", "height", "weightBrutto")
             if dims.get(k) is not None
         }
 
@@ -449,7 +485,7 @@ def build_card_char_patches_payload(
 
     payload["characteristics"] = chars_out
     payload["sizes"] = _normalize_sizes(card)
-    return payload
+    return sanitize_wb_card_update_payload(payload)
 
 
 async def _load_field_maps(
