@@ -2465,19 +2465,46 @@ class Database:
         sid = int(store_id)
         codes = [str(v).strip() for v in (vendor_codes or []) if str(v).strip()]
         with _DB_LOCK:
-            if codes:
-                placeholders = ",".join("?" for _ in codes)
-                cur = self._conn.execute(
-                    f"""SELECT card_json FROM packaging_dims_cards
-                        WHERE store_id=? AND vendor_code IN ({placeholders})""",
-                    (sid, *codes),
-                )
-            else:
+            if not codes:
                 cur = self._conn.execute(
                     "SELECT card_json FROM packaging_dims_cards WHERE store_id=?",
                     (sid,),
                 )
-            out: list[dict] = []
+            else:
+                out: list[dict] = []
+                seen_nm: set[int] = set()
+                chunk_size = 400
+                for i in range(0, len(codes), chunk_size):
+                    chunk = codes[i : i + chunk_size]
+                    placeholders = ",".join("?" for _ in chunk)
+                    nm_ids = [int(c) for c in chunk if c.isdigit()]
+                    params: list = [sid, *chunk]
+                    sql = (
+                        f"""SELECT card_json, nm_id FROM packaging_dims_cards
+                            WHERE store_id=? AND vendor_code IN ({placeholders})"""
+                    )
+                    if nm_ids:
+                        nm_ph = ",".join("?" for _ in nm_ids)
+                        sql += f" OR nm_id IN ({nm_ph})"
+                        params.extend(nm_ids)
+                    cur = self._conn.execute(sql, params)
+                    for row in cur.fetchall():
+                        try:
+                            nm = int(row["nm_id"] or 0)
+                        except (TypeError, ValueError):
+                            nm = 0
+                        if nm and nm in seen_nm:
+                            continue
+                        if nm:
+                            seen_nm.add(nm)
+                        try:
+                            card = json.loads(row["card_json"] or "{}")
+                        except Exception:
+                            continue
+                        if isinstance(card, dict) and card:
+                            out.append(card)
+                return out
+            out = []
             for row in cur.fetchall():
                 try:
                     card = json.loads(row["card_json"] or "{}")

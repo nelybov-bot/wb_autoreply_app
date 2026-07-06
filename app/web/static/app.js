@@ -7505,7 +7505,8 @@
     if (stores.length > 1) {
       const matched = stores.reduce((a, s) => a + (Number(s.matched) || 0), 0);
       const mismatched = stores.reduce((a, s) => a + (Number(s.mismatched) || 0), 0);
-      parts.push(`<p class="form-hint"><strong>Итого по ${stores.length} магазинам:</strong> расхождений ${mismatched}${matched ? `, совпало ${matched} (скрыто)` : ''}</p>`);
+      const notFound = stores.reduce((a, s) => a + (Number(s.not_found) || 0), 0);
+      parts.push(`<p class="form-hint"><strong>Итого по ${stores.length} магазинам:</strong> расхождений ${mismatched}${matched ? `, совпало ${matched} (скрыто)` : ''}${notFound ? `, <span class="text-error">не в каталоге: ${notFound}</span>` : ''}</p>`);
     }
     parts.push('<p class="form-hint">В таблице только расхождения — совпадающие и не найденные в каталоге не показываются.</p>');
     let hasTables = false;
@@ -7520,7 +7521,8 @@
       parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
       const loadHint = packagingDimsCatalogHint(st);
       const skippedNote = (st.matched || 0) > 0 ? `, совпало ${st.matched} (скрыто)` : '';
-      parts.push(`<p class="form-hint">${loadHint}Расхождений: ${st.mismatched || 0}${skippedNote}${(st.no_dims || 0) ? `, без габаритов WB: ${st.no_dims}` : ''}</p>`);
+      const notFoundNote = (st.not_found || 0) > 0 ? `, <span class="text-error">не в каталоге: ${st.not_found}</span>` : '';
+      parts.push(`<p class="form-hint">${loadHint}Расхождений: ${st.mismatched || 0}${skippedNote}${notFoundNote}${(st.no_dims || 0) ? `, без габаритов WB: ${st.no_dims}` : ''}</p>`);
       parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Факт Д×Ш×В</th><th>WB Д×Ш×В</th><th>Δ</th><th>Статус</th></tr></thead><tbody>');
       for (const r of rows) {
         const fact = `${packagingDimsFmtNum(r.fact_length)}×${packagingDimsFmtNum(r.fact_width)}×${packagingDimsFmtNum(r.fact_height)}`;
@@ -7537,7 +7539,12 @@
       hasTables = true;
     }
     if (!hasTables && stores.some((st) => !st.error)) {
-      parts.push('<p class="form-hint">Расхождений нет.</p>');
+      const notFound = stores.reduce((a, s) => a + (Number(s.not_found) || 0), 0);
+      if (notFound > 0) {
+        parts.push(`<p class="form-hint text-error">Расхождений нет — ${notFound} артикулов не найдено в каталоге магазина. Проверьте артикулы или включите «Обновить каталог с WB».</p>`);
+      } else {
+        parts.push('<p class="form-hint">Расхождений нет.</p>');
+      }
     }
     box.innerHTML = parts.join('');
     box.hidden = !parts.length;

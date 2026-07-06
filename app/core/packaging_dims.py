@@ -337,6 +337,37 @@ def _index_cards_by_vendor(cards: List[dict]) -> Dict[str, dict]:
     return card_by_vendor
 
 
+def _build_card_index(cards: List[dict]) -> Tuple[Dict[str, dict], Dict[str, dict]]:
+    """Индекс по vendorCode (casefold) и по nmID (строка)."""
+    by_vendor = _index_cards_by_vendor(cards)
+    by_nm_id: Dict[str, dict] = {}
+    for card in cards:
+        try:
+            nm = int(card.get("nmID") or card.get("nmId") or 0)
+        except (TypeError, ValueError):
+            nm = 0
+        if nm > 0:
+            by_nm_id[str(nm)] = card
+    return by_vendor, by_nm_id
+
+
+def _lookup_card(
+    by_vendor: Dict[str, dict],
+    by_nm_id: Dict[str, dict],
+    vendor_code: str,
+) -> Optional[dict]:
+    key = _norm_vendor(vendor_code).casefold()
+    if key in by_vendor:
+        return by_vendor[key]
+    if key.isdigit():
+        return by_nm_id.get(key)
+    return None
+
+
+def _cards_from_index(by_vendor: Dict[str, dict]) -> List[dict]:
+    return list(by_vendor.values())
+
+
 def _card_for_cache(card: dict) -> dict:
     keys = (
         "nmID", "nmId", "vendorCode", "supplierVendorCode",
@@ -425,7 +456,7 @@ async def _load_wb_cards_for_compare(
     force_refresh: bool = False,
     cache_ttl_s: int = _CACHE_TTL_S,
     progress_cb: Optional[ProgressCb] = None,
-) -> Tuple[Dict[str, dict], dict]:
+) -> Tuple[Dict[str, dict], Dict[str, dict], dict]:
     """Загрузка карточек: кэш SQLite → WB API (пачками или полный каталог)."""
     codes = list(dict.fromkeys(v for v in vendor_codes if v))
     use_full_catalog = len(codes) >= _FULL_CATALOG_THRESHOLD
@@ -433,22 +464,27 @@ async def _load_wb_cards_for_compare(
 
     if db and store_id and not force_refresh and db.packaging_dims_cache_is_fresh(store_id, cache_ttl_s):
         cached_meta = db.packaging_dims_cache_meta(store_id)
-        if use_full_catalog and cached_meta.get("load_mode") == "full_catalog":
+        cards_count = int(cached_meta.get("cards_count") or 0)
+        load_mode = str(cached_meta.get("load_mode") or "")
+        # Полный кэш каталога — всегда грузим разом, не фильтруем IN по артикулам.
+        use_full_cache = load_mode == "full_catalog" or cards_count >= len(codes)
+        if use_full_cache and cards_count > 0:
             cards = db.packaging_dims_cache_load(store_id)
             if cards:
+                by_vendor, by_nm_id = _build_card_index(cards)
                 meta.update(cached_meta)
                 meta["cache_hit"] = True
                 meta["pages_fetched"] = 0
                 meta["cards_loaded"] = len(cards)
                 if progress_cb:
                     progress_cb(1, 1, f"Каталог из кэша ({len(cards)} карточек)")
-                return _index_cards_by_vendor(cards), meta
+                return by_vendor, by_nm_id, meta
         if not use_full_catalog:
             cards = db.packaging_dims_cache_load(store_id, vendor_codes=codes)
-            indexed = _index_cards_by_vendor(cards)
+            by_vendor, by_nm_id = _build_card_index(cards)
             missing = [
                 c for c in codes
-                if _norm_vendor(c).casefold() not in indexed
+                if _lookup_card(by_vendor, by_nm_id, c) is None
             ]
             if not missing:
                 meta.update(cached_meta)
@@ -457,7 +493,7 @@ async def _load_wb_cards_for_compare(
                 meta["cards_loaded"] = len(cards)
                 if progress_cb:
                     progress_cb(1, 1, f"Артикулы из кэша ({len(cards)})")
-                return indexed, meta
+                return by_vendor, by_nm_id, meta
             if progress_cb:
                 progress_cb(0, len(missing), f"Догрузка {len(missing)} артикулов с WB…")
             fetched, fetch_meta = await _fetch_cards_from_wb(
@@ -476,13 +512,18 @@ async def _load_wb_cards_for_compare(
             for card in fetched:
                 vc = _norm_vendor(card.get("vendorCode") or card.get("supplierVendorCode") or "").casefold()
                 if vc:
-                    indexed[vc] = card
-            merged = list(indexed.values())
+                    by_vendor[vc] = card
+                try:
+                    nm = int(card.get("nmID") or card.get("nmId") or 0)
+                except (TypeError, ValueError):
+                    nm = 0
+                if nm > 0:
+                    by_nm_id[str(nm)] = card
             meta.update(cached_meta)
             meta["cache_hit"] = "partial"
-            meta["cards_loaded"] = len(merged)
+            meta["cards_loaded"] = len(by_vendor)
             meta["fetched_missing"] = len(missing)
-            return indexed, meta
+            return by_vendor, by_nm_id, meta
 
     if force_refresh and db and store_id:
         db.packaging_dims_cache_clear(store_id)
@@ -499,7 +540,8 @@ async def _load_wb_cards_for_compare(
         )
         meta.update(db.packaging_dims_cache_meta(store_id))
     meta["cache_hit"] = False
-    return _index_cards_by_vendor(cards), meta
+    by_vendor, by_nm_id = _build_card_index(cards)
+    return by_vendor, by_nm_id, meta
 
 
 async def compare_dims_for_store(
@@ -515,7 +557,7 @@ async def compare_dims_for_store(
     vendor_codes = list(dict.fromkeys(r.vendor_code for r in rows if r.vendor_code))
     total = len(rows)
 
-    card_by_vendor, load_meta = await _load_wb_cards_for_compare(
+    card_by_vendor, card_by_nm_id, load_meta = await _load_wb_cards_for_compare(
         client,
         vendor_codes,
         store_id=store_id,
@@ -524,19 +566,26 @@ async def compare_dims_for_store(
         progress_cb=progress_cb,
     )
     load_steps = _progress_load_steps(load_meta)
-    compare_total = max(load_steps + total, total, 1)
+    from_cache = bool(load_meta.get("cache_hit"))
 
     results: List[dict] = []
-    for i, row in enumerate(rows, start=1):
-        key = _norm_vendor(row.vendor_code).casefold()
-        card = card_by_vendor.get(key)
-        results.append(_compare_row(row, card))
+    if from_cache:
+        for row in rows:
+            card = _lookup_card(card_by_vendor, card_by_nm_id, row.vendor_code)
+            results.append(_compare_row(row, card))
         if progress_cb:
-            progress_cb(
-                load_steps + i,
-                compare_total,
-                f"Сравнение {i}/{total}: {row.vendor_code}",
-            )
+            progress_cb(1, 1, f"Сравнено {total} артикулов из кэша")
+    else:
+        compare_total = max(load_steps + total, total, 1)
+        for i, row in enumerate(rows, start=1):
+            card = _lookup_card(card_by_vendor, card_by_nm_id, row.vendor_code)
+            results.append(_compare_row(row, card))
+            if progress_cb:
+                progress_cb(
+                    load_steps + i,
+                    compare_total,
+                    f"Сравнение {i}/{total}: {row.vendor_code}",
+                )
 
     matched = sum(1 for r in results if r["status"] == "match")
     mismatched = sum(1 for r in results if r["status"] == "mismatch")
@@ -719,7 +768,7 @@ async def apply_dims_for_store(
     vendor_codes = list(dict.fromkeys(r.vendor_code for r in rows if r.vendor_code))
     total = len(rows)
 
-    card_by_vendor, load_meta = await _load_wb_cards_for_compare(
+    card_by_vendor, card_by_nm_id, load_meta = await _load_wb_cards_for_compare(
         client,
         vendor_codes,
         store_id=store_id,
@@ -728,22 +777,24 @@ async def apply_dims_for_store(
         progress_cb=progress_cb,
     )
     load_steps = _progress_load_steps(load_meta)
-    work_total = max(load_steps + total, total, 1)
+    from_cache = bool(load_meta.get("cache_hit"))
+    work_total = 1 if from_cache else max(load_steps + total, total, 1)
 
     skipped = 0
     work_items: List[Tuple[PackagingDimRow, dict, Optional[dict]]] = []
     for i, row in enumerate(rows, start=1):
-        key = _norm_vendor(row.vendor_code).casefold()
-        card = card_by_vendor.get(key)
+        card = _lookup_card(card_by_vendor, card_by_nm_id, row.vendor_code)
         cmp = _compare_row(row, card)
         if cmp["status"] == "match" and only_mismatch:
             skipped += 1
-            if progress_cb:
+            if progress_cb and not from_cache:
                 progress_cb(load_steps + i, work_total, f"Совпадает — пропуск: {row.vendor_code}")
             continue
         work_items.append((row, cmp, card))
-        if progress_cb:
+        if progress_cb and not from_cache:
             progress_cb(load_steps + i, work_total, f"Проверка {i}/{total}: {row.vendor_code}")
+    if progress_cb and from_cache:
+        progress_cb(1, 1, f"Проверено {total} артикулов из кэша")
 
     subject_ids: Set[int] = set()
     for _row, cmp, card in work_items:
