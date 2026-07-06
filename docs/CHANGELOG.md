@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-07-06 — Fix v2: WB 400 при замене габаритов (дубли в characteristics)
+
+- Габариты не дублируются в `characteristics[]` (Длина/Ширина/Высота + `existNamedField`)
+- Пустой `wbSize` не отправляется в `sizes`
+- Загрузка схемы категории для `existNamedField` перед apply
+- См (Д×Ш×В) округляются до целых при отправке; вес — с точкой
+
 ## 2026-07-06 — Fix: WB 400 Invalid request format при замене габаритов
 
 - `sanitize_wb_card_update_payload` — без `isValid` в dimensions, только `{id, value}` в characteristics, `kizMarked` всегда bool

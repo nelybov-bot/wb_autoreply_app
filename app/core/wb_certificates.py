@@ -296,13 +296,59 @@ def _dim_wb_value(v: Any) -> int | float:
     return n
 
 
-def sanitize_wb_card_update_payload(payload: dict) -> dict:
+def _dim_cm_value(v: Any) -> int:
+    """Габариты упаковки в см — WB принимает целые числа."""
+    import math
+
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        n = 0.0
+    if n <= 0:
+        return 1
+    return max(1, int(math.floor(n + 0.5)))
+
+
+def collect_named_field_char_ids(charcs: List[dict]) -> Set[int]:
+    """ID характеристик с existNamedField — их нельзя дублировать в characteristics[]."""
+    out: Set[int] = set()
+    for ch in charcs:
+        if not isinstance(ch, dict) or not ch.get("existNamedField"):
+            continue
+        cid = _charc_id(ch)
+        if cid:
+            out.add(cid)
+    return out
+
+
+def _is_packaging_dimension_char(ch: dict) -> bool:
+    """Габариты упаковки — только в dimensions, не в characteristics[]."""
+    name = _charc_name(ch).casefold()
+    if name in (
+        "height", "length", "width", "weight", "weightbrutto",
+        "длина", "ширина", "высота", "вес",
+    ):
+        return True
+    if any(
+        k in name
+        for k in ("длина упаков", "ширина упаков", "высота упаков", "вес упаков", "вес брутто")
+    ):
+        return True
+    return False
+
+
+def sanitize_wb_card_update_payload(
+    payload: dict,
+    *,
+    strip_char_ids: Optional[Set[int]] = None,
+) -> dict:
     """Привести тело cards/update к формату WB: без isValid, только id/value в characteristics."""
+    has_dims = isinstance(payload.get("dimensions"), dict) and bool(payload.get("dimensions"))
     out: Dict[str, Any] = {
         "nmID": int(payload.get("nmID") or payload.get("nmId") or 0),
         "vendorCode": str(payload.get("vendorCode") or ""),
         "brand": str(payload.get("brand") or ""),
-        "title": str(payload.get("title") or ""),
+        "title": str(payload.get("title") or "")[:60],
         "description": str(payload.get("description") or ""),
         "kizMarked": bool(payload.get("kizMarked", False)),
     }
@@ -310,18 +356,30 @@ def sanitize_wb_card_update_payload(payload: dict) -> dict:
     if isinstance(dims, dict) and dims:
         clean_dims: Dict[str, Any] = {}
         for key in ("length", "width", "height", "weightBrutto"):
-            if dims.get(key) is not None:
+            if dims.get(key) is None:
+                clean_dims = {}
+                break
+            if key == "weightBrutto":
                 clean_dims[key] = _dim_wb_value(dims[key])
+            else:
+                clean_dims[key] = _dim_cm_value(dims[key])
         if clean_dims:
             out["dimensions"] = clean_dims
     chars_out: List[dict] = []
+    seen_char_ids: Set[int] = set()
     for ch in payload.get("characteristics") or []:
         if not isinstance(ch, dict):
             continue
         cid = _charc_id(ch)
-        if not cid:
+        if not cid or cid in seen_char_ids:
             continue
-        chars_out.append({"id": cid, "value": ch.get("value")})
+        if strip_char_ids and cid in strip_char_ids:
+            continue
+        val = ch.get("value")
+        if val is None:
+            val = ""
+        chars_out.append({"id": cid, "value": val})
+        seen_char_ids.add(cid)
     out["characteristics"] = chars_out
     out["sizes"] = _normalize_sizes({"sizes": payload.get("sizes") or []})
     return out
@@ -364,8 +422,9 @@ def _normalize_sizes(card: dict) -> List[dict]:
                 pass
         if sz.get("techSize") is not None:
             item["techSize"] = str(sz["techSize"])
-        if sz.get("wbSize") is not None:
-            item["wbSize"] = str(sz["wbSize"])
+        wb_size = str(sz.get("wbSize") or "").strip()
+        if wb_size:
+            item["wbSize"] = wb_size
         skus = [str(x).strip() for x in (sz.get("skus") or []) if str(x).strip()]
         if skus:
             item["skus"] = skus
@@ -401,6 +460,7 @@ def build_card_update_payload(
             for k in ("length", "width", "height", "weightBrutto")
             if dims.get(k) is not None
         }
+    has_dims = isinstance(payload.get("dimensions"), dict) and bool(payload.get("dimensions"))
 
     patch_ids = dict(patch_ids or {})
     chars_out: List[dict] = []
@@ -410,6 +470,8 @@ def build_card_update_payload(
             continue
         cid = _charc_id(ch)
         if not cid:
+            continue
+        if has_dims and _is_packaging_dimension_char(ch):
             continue
         val = ch.get("value")
         if cid in patch_ids:
@@ -439,6 +501,7 @@ def build_card_char_patches_payload(
     patches: Dict[int, Any],
     *,
     vendor_code: str = "",
+    strip_char_ids: Optional[Set[int]] = None,
 ) -> dict:
     """cards/update с подстановкой произвольных characteristics по id."""
     nm = int(card.get("nmID") or card.get("nmId") or 0)
@@ -464,6 +527,7 @@ def build_card_char_patches_payload(
             for k in ("length", "width", "height", "weightBrutto")
             if dims.get(k) is not None
         }
+    has_dims = isinstance(payload.get("dimensions"), dict) and bool(payload.get("dimensions"))
 
     chars_out: List[dict] = []
     seen: Set[int] = set()
@@ -472,6 +536,10 @@ def build_card_char_patches_payload(
             continue
         cid = _charc_id(ch)
         if not cid:
+            continue
+        if has_dims and _is_packaging_dimension_char(ch):
+            continue
+        if strip_char_ids and cid in strip_char_ids:
             continue
         val = ch.get("value")
         if cid in patches and patches[cid] is not None and _value_nonempty(patches[cid]):

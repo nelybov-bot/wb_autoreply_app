@@ -441,15 +441,45 @@ def _card_has_weight_brutto(card: dict) -> bool:
         return False
 
 
-def build_dims_update_payload(card: dict, row: PackagingDimRow) -> Optional[dict]:
+def _dims_need_cm_rounding(row: PackagingDimRow) -> bool:
+    from .wb_certificates import _dim_cm_value
+
+    for v in (row.fact_length, row.fact_width, row.fact_height):
+        if abs(_dim_cm_value(v) - float(v)) > 0.001:
+            return True
+    return False
+
+
+def _wb_cm_dims(row: PackagingDimRow) -> Tuple[int, int, int]:
+    from .wb_certificates import _dim_cm_value
+
+    return (
+        _dim_cm_value(row.fact_length),
+        _dim_cm_value(row.fact_width),
+        _dim_cm_value(row.fact_height),
+    )
+
+
+def build_dims_update_payload(
+    card: dict,
+    row: PackagingDimRow,
+    *,
+    strip_char_ids: Optional[Set[int]] = None,
+) -> Optional[dict]:
     """cards/update: подставить fact_* в dimensions, остальное карточки сохранить."""
     from .wb_certificates import (
+        _dim_cm_value,
         _dim_wb_value,
         build_card_char_patches_payload,
         sanitize_wb_card_update_payload,
     )
 
-    payload = build_card_char_patches_payload(card, {}, vendor_code=row.vendor_code)
+    payload = build_card_char_patches_payload(
+        card,
+        {},
+        vendor_code=row.vendor_code,
+        strip_char_ids=strip_char_ids,
+    )
     if not payload.get("sizes"):
         return None
     old_dims = card.get("dimensions") if isinstance(card.get("dimensions"), dict) else {}
@@ -460,20 +490,26 @@ def build_dims_update_payload(card: dict, row: PackagingDimRow) -> Optional[dict
     if wb <= 0:
         return None
     payload["dimensions"] = {
-        "length": _dim_wb_value(row.fact_length),
-        "width": _dim_wb_value(row.fact_width),
-        "height": _dim_wb_value(row.fact_height),
+        "length": _dim_cm_value(row.fact_length),
+        "width": _dim_cm_value(row.fact_width),
+        "height": _dim_cm_value(row.fact_height),
         "weightBrutto": _dim_wb_value(wb),
     }
-    return sanitize_wb_card_update_payload(payload)
+    return sanitize_wb_card_update_payload(payload, strip_char_ids=strip_char_ids)
 
 
 def _preview_dims_message(cmp: dict, row: PackagingDimRow) -> str:
-    new_s = f"{_dim_num(row.fact_length)}×{_dim_num(row.fact_width)}×{_dim_num(row.fact_height)}"
+    l, w, h = _wb_cm_dims(row)
+    wb_s = f"{l}×{w}×{h}"
+    fact_s = f"{_dim_num(row.fact_length)}×{_dim_num(row.fact_width)}×{_dim_num(row.fact_height)}"
     if cmp.get("wb_length") is not None:
         old_s = f"{cmp.get('wb_length')}×{cmp.get('wb_width')}×{cmp.get('wb_height')}"
-        return f"Будет {new_s} см (сейчас {old_s})"
-    return f"Будет {new_s} см"
+        msg = f"Будет {wb_s} см (сейчас {old_s})"
+    else:
+        msg = f"Будет {wb_s} см"
+    if _dims_need_cm_rounding(row):
+        msg += f" — в таблице {fact_s}, WB: только целые см"
+    return msg
 
 
 async def apply_dims_for_store(
@@ -495,6 +531,24 @@ async def apply_dims_for_store(
     )
     load_steps = int(load_meta.get("pages_fetched") or 0)
     compare_total = max(load_steps + total, total, 1)
+
+    named_field_ids: Set[int] = set()
+    charcs_cache: Dict[int, List[dict]] = {}
+    from .wb_certificates import collect_named_field_char_ids
+
+    for card in card_by_vendor.values():
+        try:
+            sid = int(card.get("subjectID") or card.get("subjectId") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        if not sid or sid in charcs_cache:
+            continue
+        try:
+            charcs_cache[sid] = await client.get_subject_charcs(sid)
+        except Exception as e:
+            log.warning("packaging_dims charcs subject %s: %s", sid, e)
+            charcs_cache[sid] = []
+        named_field_ids |= collect_named_field_char_ids(charcs_cache[sid])
 
     results: List[dict] = []
     updates: List[dict] = []
@@ -518,7 +572,11 @@ async def apply_dims_for_store(
                 progress_cb(load_steps + i, compare_total, f"{cmp['status']}: {row.vendor_code}")
             continue
 
-        payload = build_dims_update_payload(card, row)
+        payload = build_dims_update_payload(
+            card,
+            row,
+            strip_char_ids=named_field_ids or None,
+        )
         if not payload:
             if not _card_has_weight_brutto(card):
                 msg = "Нет веса упаковки (weightBrutto) в карточке WB"
@@ -575,7 +633,12 @@ async def apply_dims_for_store(
                 errors.append(e)
                 res["status"] = "error"
                 res["message"] = msg
-                log.warning("WB dims update %s nm=%s: %s", res.get("vendor_code"), res.get("nm_id"), msg)
+                log.warning(
+                    "WB dims update %s nm=%s: %s",
+                    res.get("vendor_code"),
+                    res.get("nm_id"),
+                    msg,
+                )
             else:
                 res["status"] = "ok"
                 res["message"] = "Отправлено на WB"
