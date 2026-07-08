@@ -244,9 +244,10 @@ Query-параметры каталога:
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| POST | `/api/ozon/certificates/apply` | ФСА → PDF → Ozon create/bind. Body: `{ store_ids?, text, vendor_codes?, dry_run?, fsa_only? }` → `{ task_id }` |
+| POST | `/api/ozon/certificates/apply` | PDF → Ozon create/bind. Body: `{ store_ids?, text, vendor_codes?, dry_run?, fsa_only?, pdf_source? }` → `{ task_id }` |
 
-`fsa_only: true` — только реестр ФСА (магазины не нужны). `dry_run: true` — без загрузки на Ozon. Артикул = **offer_id**.
+`pdf_source`: `fsa` (pub.fsa.gov.ru) | `mirror` (декларации-соответствия.рус).  
+`fsa_only: true` — только проверка PDF (магазины не нужны). `dry_run: true` — без загрузки на Ozon.
 
 ---
 

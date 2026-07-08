@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .compliance_docs import CertInputRow, detect_doc_type, doc_type_label
+from .compliance_mirror import lookup_mirror_batch
 from .fsa_registry import FsaLookupResult, _norm_number, lookup_fsa_batch
 from .net import HttpStatusError
 from .ozon_client import OzonClient
@@ -386,7 +387,7 @@ async def apply_ozon_certificates_for_store(
 
         if not fsa or fsa.error or not fsa.found:
             res.status = _fsa_row_status(fsa)
-            res.message = (fsa.message if fsa else "") or "Не найдено в ФСА"
+            res.message = (fsa.message if fsa else "") or "Документ не найден"
             if fsa:
                 res.error_kind = fsa.error_kind or ""
             results.append(res)
@@ -397,7 +398,7 @@ async def apply_ozon_certificates_for_store(
 
         if not fsa.pdf_bytes:
             res.status = "no_pdf"
-            res.message = "PDF не получен из реестра"
+            res.message = "PDF не получен"
             results.append(res)
             continue
 
@@ -515,23 +516,35 @@ async def apply_ozon_certificates_multi_store(
     rows: List[CertInputRow],
     dry_run: bool = False,
     fsa_only: bool = False,
+    pdf_source: str = "fsa",
     progress_cb: Optional[ProgressCb] = None,
 ) -> dict:
-    """stores: (store_id, store_name, client_id, api_key)."""
+    """stores: (store_id, store_name, client_id, api_key). pdf_source: fsa | mirror."""
     fsa_items = [(r.doc_number, detect_doc_type(r.doc_number)) for r in rows]
-    unique_docs = max(len({ _norm_number(r.doc_number) for r in rows if _norm_number(r.doc_number) }), 1)
+    unique_docs = max(len({_norm_number(r.doc_number) for r in rows if _norm_number(r.doc_number)}), 1)
+    source = str(pdf_source or "fsa").strip().casefold()
+    if source not in ("fsa", "mirror"):
+        source = "fsa"
+    source_label = "ФСА" if source == "fsa" else "зеркало"
 
     total_steps = unique_docs + (0 if fsa_only else len(stores) * max(len(rows), 1))
 
-    def _fsa_progress(cur: int, tot: int, detail: str) -> None:
+    def _lookup_progress(cur: int, tot: int, detail: str) -> None:
         if progress_cb:
-            progress_cb(cur, total_steps, f"ФСА {cur}/{tot}: {detail}")
+            progress_cb(cur, total_steps, f"{source_label} {cur}/{tot}: {detail}")
 
-    fsa_by_number = await lookup_fsa_batch(
-        fsa_items,
-        fetch_pdf=not fsa_only,
-        progress_cb=_fsa_progress,
-    )
+    if source == "mirror":
+        fsa_by_number = await lookup_mirror_batch(
+            fsa_items,
+            fetch_pdf=not fsa_only,
+            progress_cb=_lookup_progress,
+        )
+    else:
+        fsa_by_number = await lookup_fsa_batch(
+            fsa_items,
+            fetch_pdf=not fsa_only,
+            progress_cb=_lookup_progress,
+        )
 
     if fsa_only:
         row_results = []
@@ -545,17 +558,18 @@ async def apply_ozon_certificates_multi_store(
                 "fsa_found": bool(fsa and fsa.found),
                 "error_kind": (fsa.error_kind if fsa else "") or "",
                 "pdf_source": (fsa.pdf_source if fsa else "") or "",
-                "message": (fsa.message if fsa else "Не найдено в ФСА"),
+                "message": (fsa.message if fsa else f"Не найдено ({source_label})"),
                 "product_names": (fsa.record.product_names[:5] if fsa and fsa.record else []),
                 "view_url": (fsa.record.view_url if fsa and fsa.record else ""),
             })
         return {
             "fsa_only": True,
+            "pdf_source": source,
             "fsa_checked": len(fsa_by_number),
             "fsa": fsa_results_to_api(fsa_by_number),
             "stores": [{
                 "store_id": 0,
-                "store_name": "ФСА",
+                "store_name": source_label,
                 "parsed": len(rows),
                 "prepared": sum(1 for r in row_results if r["fsa_found"]),
                 "rows": row_results,
@@ -594,6 +608,7 @@ async def apply_ozon_certificates_multi_store(
             })
 
     return {
+        "pdf_source": source,
         "fsa_checked": len(fsa_by_number),
         "fsa": fsa_results_to_api(fsa_by_number),
         "stores": out_stores,

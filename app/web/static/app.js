@@ -7036,6 +7036,7 @@
       let pdfLabel = '—';
       if (hit.pdf_source === 'registry_file' || hit.pdf_source === 'registry_print') pdfLabel = 'Из реестра';
       else if (hit.pdf_source === 'generated') pdfLabel = 'Сформирован (не скан)';
+      else if (hit.pdf_source === 'mirror_site') pdfLabel = 'Зеркало (выписка)';
       else if (hit.status === 'no_pdf') pdfLabel = 'Нет';
       return {
         ...row,
@@ -7060,7 +7061,8 @@
       parts.push('<p class="form-hint">' + result.parse_warnings.map(escapeHtml).join('<br>') + '</p>');
     }
     if (result.fsa_checked != null) {
-      parts.push(`<p class="form-hint">Проверено в ФСА уникальных номеров: <strong>${result.fsa_checked}</strong></p>`);
+      const src = result.pdf_source === 'mirror' ? 'зеркале' : 'ФСА';
+      parts.push(`<p class="form-hint">Источник: <strong>${escapeHtml(src)}</strong>. Проверено уникальных номеров: <strong>${result.fsa_checked}</strong></p>`);
     }
     const allRows = (result.stores || []).flatMap((st) => st.rows || []);
     const networkErrors = allRows.filter((r) => r.status === 'fsa_error' && ['network', 'config', 'proxy'].includes(r.error_kind));
@@ -7094,7 +7096,19 @@
     box.hidden = !parts.length;
   }
 
-  async function runComplianceOzonApply({ dryRun = false, fsaOnly = false } = {}) {
+  function getComplianceOzonPdfSource() {
+    const sel = document.getElementById('compliance-ozon-pdf-source');
+    const v = sel ? String(sel.value || 'fsa').trim() : 'fsa';
+    return v === 'mirror' ? 'mirror' : 'fsa';
+  }
+
+  function setComplianceOzonPdfSource(source) {
+    const sel = document.getElementById('compliance-ozon-pdf-source');
+    if (sel) sel.value = source === 'mirror' ? 'mirror' : 'fsa';
+  }
+
+  async function runComplianceOzonApply({ dryRun = false, fsaOnly = false, pdfSource = null } = {}) {
+    const source = pdfSource || getComplianceOzonPdfSource();
     const storeIds = fsaOnly ? [] : getAutoMpStoreIds('compliance-ozon-store-list');
     const text = (document.getElementById('compliance-text')?.value || '').trim();
     const vendorCodes = getComplianceSelectedVendorCodes();
@@ -7112,22 +7126,29 @@
       toast('Отметьте хотя бы одну строку в таблице', 'error');
       return;
     }
-    const fsaBtn = document.getElementById('btn-compliance-ozon-fsa');
-    const applyBtn = document.getElementById('btn-compliance-ozon-apply');
+    const checkFsaBtn = document.getElementById('btn-compliance-ozon-check-fsa');
+    const checkMirrorBtn = document.getElementById('btn-compliance-ozon-check-mirror');
+    const applyFsaBtn = document.getElementById('btn-compliance-ozon-apply-fsa');
+    const applyMirrorBtn = document.getElementById('btn-compliance-ozon-apply-mirror');
     const previewBtn = document.getElementById('btn-compliance-ozon-preview');
+    const sourceSel = document.getElementById('compliance-ozon-pdf-source');
     const setBusy = (busy) => {
-      if (fsaBtn) fsaBtn.disabled = busy;
-      if (applyBtn) applyBtn.disabled = busy;
+      if (checkFsaBtn) checkFsaBtn.disabled = busy;
+      if (checkMirrorBtn) checkMirrorBtn.disabled = busy;
+      if (applyFsaBtn) applyFsaBtn.disabled = busy;
+      if (applyMirrorBtn) applyMirrorBtn.disabled = busy;
       if (previewBtn) previewBtn.disabled = busy;
+      if (sourceSel) sourceSel.disabled = busy;
     };
     setBusy(true);
     const storeCount = storeIds.length || 0;
     const itemCount = tableVisible ? vendorCodes.length : 'все из таблицы';
+    const sourceLabel = source === 'mirror' ? 'зеркало' : 'ФСА';
     const label = fsaOnly
-      ? `Проверка ФСА (${itemCount} строк)…`
+      ? `Проверка PDF (${sourceLabel}, ${itemCount} строк)…`
       : (dryRun
-        ? `Проверка Ozon (${storeCount} магаз., ${itemCount} тов.)…`
-        : `Загрузка на Ozon (${storeCount} магаз., ${itemCount} тов.)…`);
+        ? `Проверка Ozon / ${sourceLabel} (${storeCount} магаз., ${itemCount} тов.)…`
+        : `Загрузка на Ozon / ${sourceLabel} (${storeCount} магаз., ${itemCount} тов.)…`);
     try {
       const res = await api('/ozon/certificates/apply', {
         method: 'POST',
@@ -7137,6 +7158,7 @@
           vendor_codes: tableVisible ? vendorCodes : [],
           dry_run: !!dryRun,
           fsa_only: !!fsaOnly,
+          pdf_source: source,
         }),
       });
       pollItemsTask(res.task_id, 'compliance-ozon', {
@@ -7147,7 +7169,7 @@
           mergeComplianceOzonRowResults(result?.stores);
           if (fsaOnly) {
             const found = (result?.stores || []).reduce((a, s) => a + (s.rows || []).filter(r => r.fsa_found).length, 0);
-            toast(`ФСА: найдено ${found} из ${(result?.stores?.[0]?.rows || []).length || itemCount}`);
+            toast(`${sourceLabel}: найдено ${found} из ${(result?.stores?.[0]?.rows || []).length || itemCount}`);
           } else if (dryRun) {
             toast('Проверка Ozon завершена — см. отчёт');
           } else {
@@ -7209,8 +7231,22 @@
     document.getElementById('btn-compliance-wb-drafts')?.addEventListener('click', () => { void runComplianceWbDraftsScan(); });
     document.getElementById('btn-compliance-wb-drafts-ai')?.addEventListener('click', () => { void runComplianceWbDraftsFill(true); });
     document.getElementById('btn-compliance-wb-drafts-apply')?.addEventListener('click', () => { void runComplianceWbDraftsFill(false); });
-    document.getElementById('btn-compliance-ozon-fsa')?.addEventListener('click', () => runComplianceOzonApply({ fsaOnly: true }));
-    document.getElementById('btn-compliance-ozon-apply')?.addEventListener('click', () => runComplianceOzonApply({ dryRun: false }));
+    document.getElementById('btn-compliance-ozon-check-fsa')?.addEventListener('click', () => {
+      setComplianceOzonPdfSource('fsa');
+      runComplianceOzonApply({ fsaOnly: true, pdfSource: 'fsa' });
+    });
+    document.getElementById('btn-compliance-ozon-check-mirror')?.addEventListener('click', () => {
+      setComplianceOzonPdfSource('mirror');
+      runComplianceOzonApply({ fsaOnly: true, pdfSource: 'mirror' });
+    });
+    document.getElementById('btn-compliance-ozon-apply-fsa')?.addEventListener('click', () => {
+      setComplianceOzonPdfSource('fsa');
+      runComplianceOzonApply({ dryRun: false, pdfSource: 'fsa' });
+    });
+    document.getElementById('btn-compliance-ozon-apply-mirror')?.addEventListener('click', () => {
+      setComplianceOzonPdfSource('mirror');
+      runComplianceOzonApply({ dryRun: false, pdfSource: 'mirror' });
+    });
     document.getElementById('btn-compliance-ozon-preview')?.addEventListener('click', () => runComplianceOzonApply({ dryRun: true }));
     document.getElementById('btn-compliance-ozon-stores-all')?.addEventListener('click', () => complianceSetOzonStoreChecks(true));
     document.getElementById('btn-compliance-ozon-stores-none')?.addEventListener('click', () => complianceSetOzonStoreChecks(false));

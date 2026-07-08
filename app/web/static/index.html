@@ -710,7 +710,7 @@
         </div>
 
         <div id="compliance-pane-ozon" class="compliance-mp-pane" hidden>
-          <p class="form-hint compliance-mp-hint">Ozon: поиск документа в реестре ФСА (интернет), PDF и привязка к товару по <strong>offer_id</strong> из таблицы. Реестр <strong>pub.fsa.gov.ru</strong> доступен из сети РФ — с облачного сервера (Render) нужен <code>FSA_PROXY_URL</code> (см. deploy/fsa-proxy).</p>
+          <p class="form-hint compliance-mp-hint">Ozon: PDF выписки и привязка к товару по <strong>offer_id</strong>. Источник PDF: <strong>ФСА</strong> (pub.fsa.gov.ru, с Render нужен <code>FSA_PROXY_URL</code>) или <strong>зеркало</strong> декларации-соответствия.рус.</p>
           <div id="compliance-fsa-status" class="compliance-fsa-status" hidden></div>
           <div class="compliance-stores-block">
             <div class="compliance-toolbar">
@@ -723,9 +723,18 @@
             <div id="compliance-ozon-store-list" class="auto-store-list auto-store-list--compact"></div>
           </div>
           <div class="progress-container" id="progress-compliance-ozon" hidden></div>
+          <div class="compliance-toolbar" style="margin-bottom:10px;">
+            <span class="toolbar-label">Источник PDF</span>
+            <select id="compliance-ozon-pdf-source" class="form-select" style="max-width:420px;">
+              <option value="fsa" selected>ФСА — pub.fsa.gov.ru</option>
+              <option value="mirror">Зеркало — декларации-соответствия.рус</option>
+            </select>
+          </div>
           <div class="compliance-actions">
-            <button type="button" class="btn btn-secondary" id="btn-compliance-ozon-fsa">Проверить в ФСА</button>
-            <button type="button" class="btn btn-primary" id="btn-compliance-ozon-apply">Загрузить на выбранные магазины Ozon</button>
+            <button type="button" class="btn btn-secondary" id="btn-compliance-ozon-check-fsa">Проверить PDF (ФСА)</button>
+            <button type="button" class="btn btn-secondary" id="btn-compliance-ozon-check-mirror">Проверить PDF (зеркало)</button>
+            <button type="button" class="btn btn-primary" id="btn-compliance-ozon-apply-fsa">Загрузить на Ozon (ФСА)</button>
+            <button type="button" class="btn btn-primary" id="btn-compliance-ozon-apply-mirror">Загрузить на Ozon (зеркало)</button>
             <button type="button" class="btn btn-secondary" id="btn-compliance-ozon-preview">Только проверить (без загрузки)</button>
           </div>
           <div id="compliance-ozon-result" class="compliance-result" hidden></div>
@@ -1816,7 +1825,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=104"></script>
+  <script src="/static/app.js?v=105"></script>
   <script src="/static/card_links_master.js?v=8"></script>
 </body>
 </html>

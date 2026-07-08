@@ -4577,6 +4577,8 @@ class OzonCertificatesApplyBody(BaseModel):
     text: str = ""
     vendor_codes: list[str] = []
     dry_run: bool = False
+    fsa_only: bool = False
+    pdf_source: str = "fsa"  # fsa | mirror
 
 
 class PackagingDimsParseBody(BaseModel):
@@ -4900,6 +4902,7 @@ async def api_ozon_certificates_apply(
             vendor_codes=vendor_codes or None,
             dry_run=bool(body.dry_run),
             fsa_only=bool(body.fsa_only),
+            pdf_source=str(body.pdf_source or "fsa"),
         )
     except StoreBusyError as e:
         raise HTTPException(409, str(e)) from e
@@ -4916,6 +4919,7 @@ async def api_ozon_certificates_apply(
                 "vendor_codes_count": len(body.vendor_codes or []),
                 "dry_run": bool(body.dry_run),
                 "fsa_only": bool(body.fsa_only),
+                "pdf_source": str(body.pdf_source or "fsa"),
             },
         )
     except Exception:

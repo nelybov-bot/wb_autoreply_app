@@ -934,6 +934,7 @@ async def run_ozon_certificates_apply(
     vendor_codes: Optional[list[str]] = None,
     dry_run: bool = False,
     fsa_only: bool = False,
+    pdf_source: str = "fsa",
 ) -> str:
     from app.core.compliance_docs import filter_cert_rows, parse_certificates_text
     from app.core.net import HttpStatusError, UnauthorizedStoreError
@@ -982,7 +983,16 @@ async def run_ozon_certificates_apply(
             await store_locks.release_all_for_owner(task_id)
             raise
 
-    label = "ФСА" if fsa_only else ("Проверка Ozon" if dry_run else "Документы Ozon")
+    source_key = str(pdf_source or "fsa").strip().casefold()
+    if source_key not in ("fsa", "mirror"):
+        source_key = "fsa"
+    source_short = "ФСА" if source_key == "fsa" else "зеркало"
+
+    label = (
+        source_short
+        if fsa_only
+        else ("Проверка Ozon" if dry_run else "Документы Ozon")
+    )
     await _init_task(task_id, "ozon_certificates", label, total_steps)
     async with _tasks_lock:
         _tasks[task_id]["store_ids"] = sids
@@ -1009,6 +1019,7 @@ async def run_ozon_certificates_apply(
                 rows=rows,
                 dry_run=dry_run,
                 fsa_only=fsa_only,
+                pdf_source=source_key,
                 progress_cb=_progress,
             )
             if parse_warnings:
