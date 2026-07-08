@@ -139,6 +139,22 @@ def _proxy_host_label(proxy_url: Optional[str]) -> str:
     return parsed.label if parsed else ""
 
 
+def http_proxy_kwargs() -> Dict[str, Any]:
+    """Прокси для российских реестров и зеркал (FSA_PROXY_URL / HTTP_PROXY)."""
+    parsed = _parse_proxy_url(_fsa_proxy_url())
+    if not parsed:
+        return {}
+    kw: Dict[str, Any] = {"proxy": parsed.url}
+    if parsed.auth:
+        kw["proxy_auth"] = parsed.auth
+    return kw
+
+
+def http_proxy_label() -> str:
+    parsed = _parse_proxy_url(_fsa_proxy_url())
+    return parsed.label if parsed else ""
+
+
 async def check_fsa_access() -> Dict[str, Any]:
     """Проверка конфигурации и доступности pub.fsa.gov.ru (для UI/диагностики)."""
     proxy = _fsa_proxy_url()
@@ -176,6 +192,12 @@ async def check_fsa_access() -> Dict[str, Any]:
             f"Связь с pub.fsa.gov.ru установлена"
             + (f" через прокси {parsed.label}" if parsed else "")
         )
+        out["mirror_reachable"] = await _check_mirror_ping(parsed)
+        if out["mirror_reachable"] is False and not parsed:
+            out["message"] += (
+                ". Зеркало декларации-соответствия.рус с зарубежного сервера без прокси может не открываться — "
+                "задайте FSA_PROXY_URL или запускайте приложение локально (run_web.py)."
+            )
         return out
     except Exception as e:
         kind, msg = _fsa_user_error(e, proxy_label=parsed.label if parsed else "")
@@ -194,6 +216,29 @@ async def _ping_proxy(parsed: _ParsedProxy) -> None:
             await resp.read()
             if resp.status >= 500:
                 raise ConnectionError(f"HTTP {resp.status}")
+
+
+async def _check_mirror_ping(parsed: Optional[_ParsedProxy]) -> Optional[bool]:
+    """Проверка зеркала декларации-соответствия.рус (тот же прокси, что и ФСА)."""
+    mirror_base = "https://декларации-соответствия.рус"
+    timeout = aiohttp.ClientTimeout(connect=12, total=25)
+    kw: Dict[str, Any] = {}
+    if parsed:
+        kw["proxy"] = parsed.url
+        if parsed.auth:
+            kw["proxy_auth"] = parsed.auth
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as s:
+            async with s.get(
+                f"{mirror_base}/",
+                headers={"User-Agent": USER_AGENT},
+                allow_redirects=True,
+                **kw,
+            ) as resp:
+                await resp.read()
+                return resp.status < 500
+    except Exception:
+        return False
 
 
 def _is_network_error(exc: BaseException) -> bool:

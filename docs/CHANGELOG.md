@@ -47,6 +47,12 @@
 - Perf: от 15 артикулов — полная выгрузка каталога WB (до 15k карточек); малые списки — пачками по 40 артикулов
 - Замена габаритов на WB: `POST /api/packaging-dims/apply`, dry_run + only_mismatch; отправка **пачками по 100** (`cards/update`)
 
+## 2026-07-08 — Ozon зеркало: тот же FSA_PROXY_URL
+
+- `compliance_mirror.py` — запросы через `FSA_PROXY_URL` / `HTTP_PROXY`
+- Диагностика `mirror_reachable` в `/api/compliance/fsa-status`
+- UI: подсказка про локальный `run.command` vs прокси на Render
+
 ## 2026-07-08 — Ozon: выбор источника PDF (ФСА / зеркало)
 
 - `compliance_mirror.py` — PDF с декларации-соответствия.рус

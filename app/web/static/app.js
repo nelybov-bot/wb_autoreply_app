@@ -7194,6 +7194,15 @@
         el.innerHTML = '';
         return;
       }
+      if (st.mirror_reachable === false && getComplianceOzonPdfSource() === 'mirror') {
+        el.hidden = false;
+        el.className = 'form-hint compliance-fsa-status text-error';
+        el.innerHTML = escapeHtml(
+          'Зеркало с сервера недоступно. Варианты: 1) FSA_PROXY_URL в Render (прокси в РФ); '
+          + '2) запуск локально — run.command на вашем Mac (ваш интернет в РФ).'
+        );
+        return;
+      }
       el.hidden = false;
       el.className = 'form-hint compliance-fsa-status text-error';
       let msg = st.message || 'Реестр ФСА недоступен с этого сервера.';

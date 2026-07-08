@@ -10,7 +10,15 @@ from urllib.parse import urljoin, unquote
 import aiohttp
 
 from .compliance_docs import detect_doc_type
-from .fsa_registry import FsaLookupResult, _norm_number
+from .fsa_registry import (
+    FsaLookupResult,
+    _norm_number,
+    fsa_hosted_on_render,
+    fsa_proxy_configured,
+    fsa_render_needs_proxy,
+    http_proxy_kwargs,
+    http_proxy_label,
+)
 from .net import USER_AGENT, HttpStatusError
 from .pdf_registry import is_probably_pdf
 
@@ -140,11 +148,28 @@ def _parse_dates_from_html(html: str) -> Tuple[str, str]:
 class ComplianceMirrorClient:
     def __init__(self, *, timeout_s: float = 45.0) -> None:
         self._timeout = aiohttp.ClientTimeout(total=timeout_s)
+        self._proxy_kw = http_proxy_kwargs()
+        self._proxy_label = http_proxy_label()
+
+    def _network_hint(self) -> str:
+        if fsa_render_needs_proxy():
+            return (
+                "На Render зеркало недоступно без FSA_PROXY_URL (HTTP-прокси в РФ). "
+                "Или запустите приложение локально: python3 run_web.py"
+            )
+        if fsa_hosted_on_render() and not fsa_proxy_configured():
+            return "Задайте FSA_PROXY_URL в Render Environment (прокси в РФ)."
+        return ""
 
     async def _get_text(self, url: str) -> str:
         headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"}
         async with aiohttp.ClientSession(timeout=self._timeout) as session:
-            async with session.get(url, headers=headers, allow_redirects=True) as resp:
+            async with session.get(
+                url,
+                headers=headers,
+                allow_redirects=True,
+                **self._proxy_kw,
+            ) as resp:
                 if resp.status >= 400:
                     raise HttpStatusError(resp.status, await resp.text())
                 return await resp.text()
@@ -157,7 +182,12 @@ class ComplianceMirrorClient:
         if referer:
             headers["Referer"] = referer
         async with aiohttp.ClientSession(timeout=self._timeout) as session:
-            async with session.get(url, headers=headers, allow_redirects=True) as resp:
+            async with session.get(
+                url,
+                headers=headers,
+                allow_redirects=True,
+                **self._proxy_kw,
+            ) as resp:
                 if resp.status >= 400:
                     raise HttpStatusError(resp.status, (await resp.read())[:300].decode("utf-8", "replace"))
                 return await resp.read()
@@ -200,7 +230,8 @@ class ComplianceMirrorClient:
                 continue
 
             reg_d, end_d = _parse_dates_from_html(html)
-            msg = f"Найдено на зеркале ({page_url})"
+            via = f" через прокси {self._proxy_label}" if self._proxy_label else ""
+            msg = f"Найдено на зеркале{via} ({page_url})"
             if reg_d:
                 msg += f"; рег.: {reg_d}"
             if end_d:
@@ -236,7 +267,12 @@ class ComplianceMirrorClient:
             doc_number=number,
             doc_type=dtype,
             found=False,
-            message=f"Не найдено на зеркале ({last_err or 'нет совпадений'})",
+            message=(
+                f"Не найдено на зеркале ({last_err or 'нет совпадений'})"
+                + (f". {self._network_hint()}" if self._network_hint() and "disconnect" in (last_err or "").casefold() else "")
+            ),
+            error=bool(self._network_hint() and "disconnect" in (last_err or "").casefold()),
+            error_kind="network" if self._network_hint() else "",
         )
 
 
