@@ -7034,8 +7034,8 @@
       else if (hit.status === 'fsa_not_found') fsaLabel = 'Не найден';
       else if (fsaOk) fsaLabel = 'Найден';
       let pdfLabel = '—';
-      if (hit.pdf_source === 'registry_file' || hit.pdf_source === 'registry_print') pdfLabel = 'Из реестра';
-      else if (hit.pdf_source === 'generated') pdfLabel = 'Сформирован (не скан)';
+      if (hit.pdf_source === 'registry_file' || hit.pdf_source === 'registry_print' || hit.pdf_source === 'registry_extract') pdfLabel = 'Из реестра';
+      else if (hit.pdf_source === 'generated') pdfLabel = 'Заглушка (не для Ozon)';
       else if (hit.pdf_source === 'mirror_site') pdfLabel = 'Зеркало (выписка)';
       else if (hit.status === 'no_pdf') pdfLabel = 'Нет';
       return {

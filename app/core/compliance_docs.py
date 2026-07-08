@@ -58,7 +58,20 @@ class CertInputRow:
 
 
 def _norm_vendor(v: str) -> str:
-    return str(v or "").strip()
+    """Артикул из таблицы: trim, Excel 528657007.0 → 528657007."""
+    s = str(v or "").strip()
+    if not s:
+        return ""
+    if re.fullmatch(r"\d+\.0+", s):
+        return s.split(".", 1)[0]
+    try:
+        if re.fullmatch(r"[\d.eE+\-]+", s) and ("e" in s.lower() or "." in s):
+            f = float(s)
+            if abs(f - round(f)) < 1e-9:
+                return str(int(round(f)))
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return s
 
 
 def _norm_date(s: str) -> str:

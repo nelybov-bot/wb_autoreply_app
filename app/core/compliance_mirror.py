@@ -12,6 +12,8 @@ import aiohttp
 from .compliance_docs import detect_doc_type
 from .fsa_registry import (
     FsaLookupResult,
+    FsaRecord,
+    FsaRegistryClient,
     _norm_number,
     fsa_hosted_on_render,
     fsa_proxy_configured,
@@ -38,6 +40,22 @@ _HOMO_TO_LAT = str.maketrans({
     "Ч": "Ch", "ч": "ch", "Ш": "Sh", "ш": "sh", "Щ": "Sch", "щ": "sch",
     "Ы": "Y", "ы": "y", "Ю": "Yu", "ю": "yu", "Я": "Ya", "я": "ya",
 })
+
+_RE_SOURCE_INDEX = re.compile(
+    r"""data-source-index=["'](\d+)["']""",
+    re.I,
+)
+
+
+def _parse_fsa_source_index(html: str) -> int:
+    m = _RE_SOURCE_INDEX.search(html or "")
+    if not m:
+        return 0
+    try:
+        return int(m.group(1))
+    except (TypeError, ValueError):
+        return 0
+
 
 _RE_PDF_HREF = re.compile(
     r"""href=["']([^"']+\.pdf[^"']*)["']""",
@@ -240,19 +258,40 @@ class ComplianceMirrorClient:
             pdf_bytes = b""
             pdf_source = "none"
             if fetch_pdf:
-                for pdf_url in _extract_pdf_urls(html, page_url):
+                source_idx = _parse_fsa_source_index(html)
+                if source_idx:
                     try:
-                        data = await self._get_bytes(pdf_url, referer=page_url)
-                        if is_probably_pdf(data):
+                        fsa_client = FsaRegistryClient()
+                        rec = FsaRecord(
+                            doc_type=dtype,
+                            fsa_id=source_idx,
+                            number=number,
+                            view_url=page_url,
+                        )
+                        data, src = await fsa_client._try_download_unloading_extract(rec)
+                        if data and is_probably_pdf(data):
                             pdf_bytes = data
-                            pdf_source = "mirror_site"
-                            msg = f"{msg}; PDF: выписка с зеркала"
-                            break
+                            pdf_source = src or "registry_extract"
+                            msg = f"{msg}; PDF: официальная выписка ФСА"
                     except Exception as e:
-                        log.debug("mirror pdf %s: %s", pdf_url, e)
-                        continue
+                        log.debug("mirror fsa extract %s: %s", number, e)
+
+                if not pdf_bytes:
+                    for pdf_url in _extract_pdf_urls(html, page_url):
+                        if pdf_url.rstrip("/") == page_url.rstrip("/"):
+                            continue
+                        try:
+                            data = await self._get_bytes(pdf_url, referer=page_url)
+                            if is_probably_pdf(data):
+                                pdf_bytes = data
+                                pdf_source = "mirror_site"
+                                msg = f"{msg}; PDF: выписка с зеркала"
+                                break
+                        except Exception as e:
+                            log.debug("mirror pdf %s: %s", pdf_url, e)
+                            continue
                 if fetch_pdf and not pdf_bytes:
-                    msg = f"{msg}; PDF: ссылка на странице не скачалась"
+                    msg = f"{msg}; PDF: не удалось скачать выписку"
 
             return FsaLookupResult(
                 doc_number=number,

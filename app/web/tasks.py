@@ -599,6 +599,7 @@ async def run_wb_certificates_apply(
         parse_certificates_text,
     )
     from app.core.net import HttpStatusError, UnauthorizedStoreError
+    from app.core.packaging_dims import _CATALOG_MAX_PAGES
 
     rows, parse_warnings = parse_certificates_text(text)
     if not rows:
@@ -636,7 +637,11 @@ async def run_wb_certificates_apply(
         await store_locks.release_all_for_owner(task_id)
         raise
 
-    total_steps = max(len(rows) * len(sids), 1)
+    total_steps = max(
+        len(sids) * (_CATALOG_MAX_PAGES + len(rows)),
+        len(rows) * len(sids),
+        1,
+    )
     await _init_task(task_id, "wb_certificates", "Сертификаты WB", total_steps)
     async with _tasks_lock:
         _tasks[task_id]["store_ids"] = sids
@@ -662,6 +667,7 @@ async def run_wb_certificates_apply(
                 stores_payload,
                 rows=rows,
                 dry_run=dry_run,
+                db=db,
                 progress_cb=_progress,
             )
             if parse_warnings:

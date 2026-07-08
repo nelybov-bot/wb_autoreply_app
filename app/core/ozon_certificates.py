@@ -265,7 +265,7 @@ async def _find_ozon_certificate_id(
     target = re.sub(r"\s+", "", str(doc_number or "").casefold())
     if not target:
         return 0
-    for page in range(1, 6):
+    for page in range(1, 21):
         certs = await client.product_certificate_list(page=page, page_size=100)
         if not certs:
             break
@@ -277,6 +277,55 @@ async def _find_ozon_certificate_id(
                 except (TypeError, ValueError):
                     continue
     return 0
+
+
+async def _resolve_ozon_certificate_id(
+    client: OzonClient,
+    *,
+    doc_key: str,
+    row: CertInputRow,
+    doc_type: str,
+    fsa: FsaLookupResult,
+    cert_cache: Dict[str, int],
+    cert_catalog: _OzonCertCatalog,
+) -> Tuple[int, str, str]:
+    """Один certificate_id на номер документа: кэш пачки → поиск в Ozon → create."""
+    cached = cert_cache.get(doc_key, 0)
+    if cached:
+        return cached, "reused_batch", f"сертификат {cached} (из этой пачки)"
+
+    existing = await _find_ozon_certificate_id(client, row.doc_number)
+    if existing:
+        cert_cache[doc_key] = existing
+        return existing, "reused_ozon", f"сертификат {existing} уже в Ozon"
+
+    issue = _iso_date(row.reg_date or (fsa.record.reg_date if fsa.record else ""))
+    expire = _iso_date(row.valid_until or (fsa.record.end_date if fsa.record else ""))
+    if not issue:
+        return 0, "error", "Нет даты регистрации для Ozon"
+
+    type_code = _ozon_type_code(doc_type, cert_catalog.doc_types)
+    accordance_code = _ozon_accordance_type_code(doc_type, cert_catalog.accordance_types)
+    try:
+        cert_id, note = await _create_ozon_certificate(
+            client,
+            doc_number=row.doc_number,
+            doc_type=doc_type,
+            issue_date=issue,
+            expire_date=expire,
+            pdf_bytes=fsa.pdf_bytes,
+            title=doc_type_label(doc_type),
+            catalog=cert_catalog,
+        )
+    except HttpStatusError as e:
+        return 0, "error", (
+            f"Ozon create (type={type_code}, accordance={accordance_code or '-'}): {str(e)[:220]}"
+        )
+    if not cert_id:
+        return 0, "error", f"Ozon create: {note}"
+
+    cert_cache[doc_key] = cert_id
+    return cert_id, "created", f"создан сертификат {cert_id}"
 
 
 async def _create_ozon_certificate(
@@ -366,138 +415,158 @@ async def apply_ozon_certificates_for_store(
 
     results: List[OzonCertRowResult] = []
     cert_cache: Dict[str, int] = {}
+    cert_action_by_doc: Dict[str, str] = {}
     total = max(len(rows), 1)
     step = 0
 
-    # группировка по номеру документа для create (кэш cert_cache)
+    # Группируем по номеру документа — один create на Ozon, bind на каждый offer_id
+    rows_by_doc: Dict[str, List[CertInputRow]] = {}
     for row in rows:
-        step += 1
-        if progress_cb:
-            progress_cb(step, total, f"{row.vendor_code}: проверка")
-
-        doc_type = detect_doc_type(row.doc_number)
-        fsa_key = _norm_number(row.doc_number)
-        fsa = fsa_by_number.get(fsa_key)
-
-        res = OzonCertRowResult(
-            vendor_code=row.vendor_code,
-            doc_number=row.doc_number,
-            doc_type=doc_type,
-        )
-
-        if not fsa or fsa.error or not fsa.found:
-            res.status = _fsa_row_status(fsa)
-            res.message = (fsa.message if fsa else "") or "Документ не найден"
-            if fsa:
-                res.error_kind = fsa.error_kind or ""
-            results.append(res)
-            continue
-
-        res.fsa_found = True
-        res.pdf_source = fsa.pdf_source or ""
-
-        if not fsa.pdf_bytes:
-            res.status = "no_pdf"
-            res.message = "PDF не получен"
-            results.append(res)
-            continue
-
-        if fsa_only:
-            res.status = "preview"
-            res.message = fsa.message or "ФСА OK"
-            results.append(res)
-            continue
-
-        oid = _norm_offer(row.vendor_code)
-        pid = product_by_offer.get(oid, 0)
-        res.product_id = pid
-        if not pid:
-            res.status = "not_found"
-            res.message = "Товар не найден в Ozon (offer_id)"
-            results.append(res)
-            continue
-
-        doc_key = fsa_key
-        cert_id = cert_cache.get(doc_key, 0)
-
-        if dry_run:
-            issue = _iso_date(row.reg_date or (fsa.record.reg_date if fsa.record else ""))
-            res.status = "preview"
-            res.message = (
-                f"ФСА: {fsa.message}; товар product_id={pid}; "
-                f"PDF: {fsa.pdf_source}; дата: {issue or '—'}"
+        key = _norm_number(row.doc_number)
+        if not key:
+            step += 1
+            if progress_cb:
+                progress_cb(step, total, f"{row.vendor_code}: проверка")
+            results.append(
+                OzonCertRowResult(
+                    vendor_code=row.vendor_code,
+                    doc_number=row.doc_number,
+                    status="error",
+                    message="Пустой номер документа",
+                )
             )
-            results.append(res)
             continue
+        rows_by_doc.setdefault(key, []).append(row)
 
-        if not cert_id:
-            existing = await _find_ozon_certificate_id(client, row.doc_number)
-            if existing:
-                cert_id = existing
-                cert_cache[doc_key] = cert_id
-            else:
-                issue = _iso_date(
-                    row.reg_date
-                    or (fsa.record.reg_date if fsa.record else "")
+    for doc_key, doc_rows in rows_by_doc.items():
+        sample = doc_rows[0]
+        doc_type = detect_doc_type(sample.doc_number)
+        fsa = fsa_by_number.get(doc_key)
+
+        for row in doc_rows:
+            step += 1
+            if progress_cb:
+                progress_cb(step, total, f"{row.vendor_code}: проверка")
+
+            res = OzonCertRowResult(
+                vendor_code=row.vendor_code,
+                doc_number=row.doc_number,
+                doc_type=doc_type,
+            )
+
+            if not fsa or fsa.error or not fsa.found:
+                res.status = _fsa_row_status(fsa)
+                res.message = (fsa.message if fsa else "") or "Документ не найден"
+                if fsa:
+                    res.error_kind = fsa.error_kind or ""
+                results.append(res)
+                continue
+
+            res.fsa_found = True
+            res.pdf_source = fsa.pdf_source or ""
+
+            if not fsa.pdf_bytes:
+                res.status = "no_pdf"
+                res.message = "PDF не получен"
+                results.append(res)
+                continue
+
+            if fsa.pdf_source == "generated":
+                res.status = "no_pdf"
+                res.message = (
+                    "Получена только текстовая заглушка, не официальный документ. "
+                    "Повторите «Проверить PDF (ФСА)» или используйте зеркало."
                 )
-                expire = _iso_date(
-                    row.valid_until
-                    or (fsa.record.end_date if fsa.record else "")
-                )
-                if not issue:
-                    res.status = "error"
-                    res.message = "Нет даты регистрации для Ozon"
-                    results.append(res)
-                    continue
-                title = doc_type_label(doc_type)
-                type_code = _ozon_type_code(doc_type, cert_catalog.doc_types)
-                accordance_code = _ozon_accordance_type_code(
-                    doc_type, cert_catalog.accordance_types
-                )
-                try:
-                    cert_id, note = await _create_ozon_certificate(
-                        client,
-                        doc_number=row.doc_number,
-                        doc_type=doc_type,
-                        issue_date=issue,
-                        expire_date=expire,
-                        pdf_bytes=fsa.pdf_bytes,
-                        title=title,
-                        catalog=cert_catalog,
-                    )
-                except HttpStatusError as e:
-                    res.status = "error"
+                results.append(res)
+                continue
+
+            if fsa_only:
+                res.status = "preview"
+                res.message = fsa.message or "ФСА OK"
+                results.append(res)
+                continue
+
+            oid = _norm_offer(row.vendor_code)
+            pid = product_by_offer.get(oid, 0)
+            res.product_id = pid
+            if not pid:
+                res.status = "not_found"
+                res.message = "Товар не найден в Ozon (offer_id)"
+                results.append(res)
+                continue
+
+            if dry_run:
+                if doc_key not in cert_cache:
+                    found = await _find_ozon_certificate_id(client, row.doc_number)
+                    if found:
+                        cert_cache[doc_key] = found
+                existing = cert_cache.get(doc_key, 0)
+                n_same = len(doc_rows)
+                if existing:
+                    res.certificate_id = existing
+                    res.status = "preview"
                     res.message = (
-                        f"Ozon create (type={type_code}, "
-                        f"accordance={accordance_code or '-'}): {str(e)[:220]}"
+                        f"Привязка к существующему сертификату {existing}"
+                        + (f" (ещё {n_same - 1} товар(ов) с тем же номером)" if n_same > 1 else "")
                     )
-                    results.append(res)
-                    continue
-                if not cert_id:
-                    res.status = "error"
-                    res.message = f"Ozon create: {note}"
-                    results.append(res)
-                    continue
-                cert_cache[doc_key] = cert_id
+                else:
+                    issue = _iso_date(row.reg_date or (fsa.record.reg_date if fsa.record else ""))
+                    res.status = "preview"
+                    res.message = (
+                        f"Создать сертификат и привязать товар; PDF: {fsa.pdf_source}; дата: {issue or '—'}"
+                        + (f" (+{n_same - 1} товар(ов) к тому же сертификату)" if n_same > 1 else "")
+                    )
+                results.append(res)
+                continue
 
-        res.certificate_id = cert_id
-        try:
-            bind_data = await client.product_certificate_bind(
-                certificate_id=cert_id,
-                product_ids=[pid],
-            )
-            res.status = "ok"
-            res.message = f"Привязано к сертификату {cert_id}"
-            if isinstance(bind_data, dict):
-                err = bind_data.get("error") or bind_data.get("message")
-                if err:
-                    res.status = "error"
-                    res.message = str(err)[:250]
-        except HttpStatusError as e:
-            res.status = "error"
-            res.message = f"Ozon bind: {str(e)[:250]}"
+            if doc_key not in cert_action_by_doc:
+                cert_id, action, action_msg = await _resolve_ozon_certificate_id(
+                    client,
+                    doc_key=doc_key,
+                    row=sample,
+                    doc_type=doc_type,
+                    fsa=fsa,
+                    cert_cache=cert_cache,
+                    cert_catalog=cert_catalog,
+                )
+                cert_action_by_doc[doc_key] = action_msg
 
-        results.append(res)
+            cert_id = cert_cache.get(doc_key, 0)
+            if not cert_id:
+                res.status = "error"
+                res.message = cert_action_by_doc.get(doc_key, "Не удалось получить certificate_id")
+                results.append(res)
+                continue
+
+            res.certificate_id = cert_id
+            try:
+                bind_data = await client.product_certificate_bind(
+                    certificate_id=cert_id,
+                    product_ids=[pid],
+                )
+                res.status = "ok"
+                base = cert_action_by_doc.get(doc_key, f"сертификат {cert_id}")
+                res.message = f"{base} → привязан товар {row.vendor_code}"
+                if isinstance(bind_data, dict):
+                    err = bind_data.get("error") or bind_data.get("message")
+                    if err:
+                        err_s = str(err).casefold()
+                        if "уже" in err_s or "already" in err_s or "привязан" in err_s:
+                            res.status = "ok"
+                            res.message = f"{base} → товар {row.vendor_code} уже привязан"
+                        else:
+                            res.status = "error"
+                            res.message = str(err)[:250]
+            except HttpStatusError as e:
+                err_s = str(e).casefold()
+                if "уже" in err_s or "already" in err_s or "привязан" in err_s:
+                    res.status = "ok"
+                    res.message = f"сертификат {cert_id} → товар {row.vendor_code} уже привязан"
+                else:
+                    res.status = "error"
+                    res.message = f"Ozon bind: {str(e)[:250]}"
+
+            results.append(res)
 
     prepared = sum(1 for r in results if r.status in ("ok", "preview"))
     bound = sum(1 for r in results if r.status == "ok")

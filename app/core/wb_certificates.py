@@ -597,25 +597,46 @@ async def apply_certificates_for_store(
     *,
     rows: List[CertInputRow],
     dry_run: bool = False,
+    store_id: Optional[int] = None,
+    db: Any = None,
     progress_cb: Optional[ProgressCb] = None,
 ) -> dict:
     """Сопоставляет артикулы с карточками WB и обновляет поля сертификата."""
+    from .packaging_dims import (
+        _build_card_index,
+        _fetch_full_catalog_from_wb,
+        _load_wb_cards_for_compare,
+        _lookup_card,
+    )
+
     client = WbContentClient(api_key, timeout_s=120.0)
-    vendor_codes = list(dict.fromkeys(r.vendor_code for r in rows if r.vendor_code))
-    by_vendor = {_norm_vendor(r.vendor_code).casefold(): r for r in rows}
+    vendor_codes = list(dict.fromkeys(_norm_vendor(r.vendor_code) for r in rows if _norm_vendor(r.vendor_code)))
 
     if progress_cb:
-        progress_cb(0, max(len(vendor_codes), 1), "Загрузка карточек WB…")
+        progress_cb(0, max(len(rows), 1), "Загрузка каталога WB…")
 
-    cards = await client.list_cards_all(vendor_codes=vendor_codes, max_pages=max(10, len(vendor_codes) // 50 + 5))
-    card_by_vendor: Dict[str, dict] = {}
-    for card in cards:
-        vc = _norm_vendor(card.get("vendorCode") or card.get("supplierVendorCode") or "").casefold()
-        if vc and vc not in card_by_vendor:
-            card_by_vendor[vc] = card
+    if store_id and db is not None:
+        by_vendor, by_nm_id, by_barcode, _meta = await _load_wb_cards_for_compare(
+            client,
+            vendor_codes,
+            store_id=store_id,
+            db=db,
+            progress_cb=progress_cb,
+        )
+    else:
+        cards, _meta = await _fetch_full_catalog_from_wb(client, progress_cb=progress_cb)
+        by_vendor, by_nm_id, by_barcode = _build_card_index(cards)
 
     field_cache: Dict[int, CertFieldMap] = {}
-    await _load_field_maps(client, cards, field_cache)
+    matched_cards: List[dict] = []
+    row_cards: List[Tuple[CertInputRow, Optional[dict]]] = []
+    for row in rows:
+        card = _lookup_card(by_vendor, by_nm_id, by_barcode, row.vendor_code)
+        row_cards.append((row, card))
+        if card is not None:
+            matched_cards.append(card)
+
+    await _load_field_maps(client, matched_cards, field_cache)
 
     results: List[CertApplyRowResult] = []
     updates: List[dict] = []
@@ -623,10 +644,8 @@ async def apply_certificates_for_store(
     total = len(rows)
     done = 0
 
-    for row in rows:
+    for row, card in row_cards:
         done += 1
-        key = _norm_vendor(row.vendor_code).casefold()
-        card = card_by_vendor.get(key)
         if not card:
             results.append(CertApplyRowResult(
                 vendor_code=row.vendor_code,
@@ -717,7 +736,7 @@ async def apply_certificates_for_store(
     return {
         "dry_run": dry_run,
         "parsed": len(rows),
-        "cards_found": len(card_by_vendor),
+        "cards_found": len({id(c) for c in matched_cards}),
         "prepared": len(updates),
         "sent": sent,
         "errors": errors,
@@ -740,6 +759,7 @@ async def apply_certificates_multi_store(
     *,
     rows: List[CertInputRow],
     dry_run: bool = False,
+    db: Any = None,
     progress_cb: Optional[ProgressCb] = None,
 ) -> dict:
     """stores: (store_id, store_name, api_key)."""
@@ -780,6 +800,8 @@ async def apply_certificates_multi_store(
                 api_key,
                 rows=rows,
                 dry_run=dry_run,
+                store_id=store_id,
+                db=db,
                 progress_cb=_cb if progress_cb else None,
             )
             part["store_id"] = store_id

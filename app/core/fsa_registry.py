@@ -70,7 +70,7 @@ class FsaLookupResult:
     found: bool = False
     record: Optional[FsaRecord] = None
     pdf_bytes: bytes = b""
-    pdf_source: str = ""  # registry_file | registry_print | generated | none
+    pdf_source: str = ""  # registry_file | registry_print | registry_extract | generated | none
     message: str = ""
     error: bool = False
     error_kind: str = ""  # network | api
@@ -282,6 +282,23 @@ def _fsa_user_error(exc: BaseException, *, proxy_label: str = "") -> Tuple[str, 
             f"Нет связи с реестром ФСА: {err[:120]}. Задайте FSA_PROXY_URL на сервере.",
         )
     return "api", f"Ошибка ФСА: {err[:200]}"
+
+
+_RE_UUID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.I,
+)
+
+
+def _parse_unloading_job_id(raw: Any) -> str:
+    t = str(raw or "").strip().strip('"').strip("'")
+    if _RE_UUID.match(t):
+        return t
+    return ""
+
+
+def _unloading_kind(doc_type: str) -> str:
+    return "certificates" if doc_type == "certificate" else "declarations"
 
 
 def _norm_number(num: str) -> str:
@@ -643,6 +660,33 @@ class FsaRegistryClient:
                 continue
         return b""
 
+    async def _try_download_unloading_extract(self, record: FsaRecord) -> Tuple[bytes, str]:
+        """Официальная выписка из реестра ФСА (тот же PDF, что кнопка на pub.fsa.gov.ru / зеркале)."""
+        fsa_id = int(record.fsa_id or 0)
+        if not fsa_id:
+            return b"", ""
+        kind = _unloading_kind(record.doc_type)
+        referer = record.view_url or FSA_BASE
+        try:
+            job_raw = await self._get_bytes(
+                f"/api/v1/unloading/{kind}/{fsa_id}",
+                referer=referer,
+            )
+        except HttpStatusError as e:
+            log.debug("FSA unloading job %s/%s: %s", kind, fsa_id, e)
+            return b"", ""
+        job_id = _parse_unloading_job_id(job_raw.decode("utf-8", errors="replace"))
+        if not job_id:
+            return b"", ""
+        try:
+            data = await self._get_bytes(f"/api/v1/unloading/{job_id}", referer=referer)
+        except HttpStatusError as e:
+            log.debug("FSA unloading pdf %s: %s", job_id, e)
+            return b"", ""
+        if is_probably_pdf(data):
+            return data, "registry_extract"
+        return b"", ""
+
     async def _try_download_print_pdf(self, record: FsaRecord) -> Tuple[bytes, str]:
         fsa_id = int(record.fsa_id or 0)
         if not fsa_id:
@@ -684,6 +728,10 @@ class FsaRegistryClient:
             data = await self._try_download_file(fid, referer=referer, doc_type=record.doc_type)
             if is_probably_pdf(data):
                 return data, "registry_file"
+
+        extract_data, extract_src = await self._try_download_unloading_extract(record)
+        if extract_data:
+            return extract_data, extract_src
 
         lines = [
             f"Number: {record.number}",
@@ -752,9 +800,11 @@ class FsaRegistryClient:
             else:
                 if pdf_source == "generated":
                     msg = (
-                        f"{msg}; PDF: сформирован из данных реестра "
-                        "(официальный скан не скачан — откройте ссылку вручную)"
+                        f"{msg}; PDF: только текстовая заглушка "
+                        "(официальная выписка не получена — не загружайте на Ozon)"
                     )
+                elif pdf_source == "registry_extract":
+                    msg = f"{msg}; PDF: официальная выписка из реестра ФСА"
                 elif pdf_source in ("registry_file", "registry_print"):
                     msg = f"{msg}; PDF: из реестра ФСА"
 
