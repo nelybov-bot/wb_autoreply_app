@@ -192,14 +192,17 @@ async def _resolve_char_ids_by_subject(
     char_query: str,
     *,
     db: Any = None,
+    progress_cb: Optional[ProgressCb] = None,
 ) -> Tuple[Dict[int, int], Dict[int, str], List[str]]:
     """subject_id → (char_id, char_name); warnings для предметов без поля."""
     char_id_by_subject: Dict[int, int] = {}
     char_name_by_subject: Dict[int, str] = {}
     warnings: List[str] = []
-    for sid in sorted(subject_ids):
-        if sid <= 0:
-            continue
+    subjects = sorted(s for s in subject_ids if s > 0)
+    total = max(len(subjects), 1)
+    for i, sid in enumerate(subjects, start=1):
+        if progress_cb:
+            progress_cb(i, total, f"Схема категорий: {i}/{total}")
         charcs: List[dict] = []
         if db and hasattr(db, "packaging_dims_charcs_get"):
             cached = db.packaging_dims_charcs_get(sid)
@@ -261,14 +264,24 @@ async def apply_bulk_chars_for_store(
     codes = list(dict.fromkeys(_norm_vendor_sku(v) for v in (vendor_codes or []) if _norm_vendor_sku(v)))
 
     if progress_cb:
-        progress_cb(0, max(len(codes) or 1, 1), "Загрузка каталога WB…")
+        progress_cb(0, _CATALOG_MAX_PAGES, "Загрузка каталога WB…")
 
     if all_catalog or not codes:
-        cards, load_meta = await _fetch_full_catalog_from_wb(client, progress_cb=progress_cb)
-        by_vendor, by_nm_id, by_barcode = _build_card_index(cards)
+        if store_id and db is not None:
+            by_vendor, by_nm_id, by_barcode, load_meta = await _load_wb_cards_for_compare(
+                client,
+                [],
+                store_id=store_id,
+                db=db,
+                force_refresh=force_refresh,
+                progress_cb=progress_cb,
+            )
+        else:
+            cards, load_meta = await _fetch_full_catalog_from_wb(client, progress_cb=progress_cb)
+            by_vendor, by_nm_id, by_barcode = _build_card_index(cards)
         target_cards: List[dict] = []
         seen_nm: Set[int] = set()
-        for card in cards:
+        for card in list(by_nm_id.values()) + list(by_vendor.values()):
             if not isinstance(card, dict):
                 continue
             try:
@@ -279,6 +292,8 @@ async def apply_bulk_chars_for_store(
                 seen_nm.add(nm)
                 target_cards.append(card)
         scope_label = "весь каталог"
+        if load_meta.get("cache_hit"):
+            scope_label += " (из кэша)"
     else:
         by_vendor, by_nm_id, by_barcode, load_meta = await _load_wb_cards_for_compare(
             client,
@@ -310,8 +325,10 @@ async def apply_bulk_chars_for_store(
             subject_ids.add(sid)
 
     char_id_by_subject, char_name_by_subject, schema_warnings = await _resolve_char_ids_by_subject(
-        client, subject_ids, query, db=db,
+        client, subject_ids, query, db=db, progress_cb=progress_cb,
     )
+    if progress_cb:
+        progress_cb(0, max(len(target_cards), 1), f"Проверка {len(target_cards)} карточек…")
     named_field_ids = await _load_named_field_char_ids(client, subject_ids, db=db)
 
     results: List[dict] = []
@@ -320,7 +337,7 @@ async def apply_bulk_chars_for_store(
     skipped = 0
     not_found_list = 0
     no_field = 0
-    total_work = max(len(target_cards) if all_catalog or not codes else len(codes), 1)
+    total_work = max(len(target_cards), 1)
     step = 0
 
     if not all_catalog and codes:
@@ -500,10 +517,16 @@ async def apply_bulk_chars_multi_store(
         store_grand = estimate_bulk_char_steps(n_items, 1, force_refresh=force_refresh)
 
         def _cb(cur: int, tot: int, detail: str, _off=offset, _name=store_name, _si=i) -> None:
-            if progress_cb:
-                safe_tot = max(int(tot or 0), 1)
-                safe_cur = max(0, min(int(cur or 0), safe_tot))
-                progress_cb(_off + safe_cur, grand, f"Магазин {_si + 1}/{len(stores)} · {_name}: {detail}")
+            if not progress_cb:
+                return
+            d = str(detail or "")
+            tot_i = max(int(tot or 0), 1)
+            cur_i = max(0, min(int(cur or 0), tot_i))
+            # Фаза загрузки каталога: показываем страницы/150, а не 1% от 5000+
+            if tot_i <= _CATALOG_MAX_PAGES and "каталог" in d.casefold():
+                progress_cb(cur_i, tot_i, f"Магазин {_si + 1}/{len(stores)} · {_name}: {detail}")
+                return
+            progress_cb(_off + cur_i, grand, f"Магазин {_si + 1}/{len(stores)} · {_name}: {detail}")
 
         if progress_cb:
             progress_cb(offset, grand, f"Магазин {i + 1}/{len(stores)}: {store_name}…")

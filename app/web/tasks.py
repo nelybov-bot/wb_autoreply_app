@@ -1385,7 +1385,10 @@ async def run_wb_bulk_chars_apply(
 
     n_items = 5000 if use_all else len(vendors)
     label = "Проверка характеристик WB" if dry_run else "Массовое редактирование WB"
-    total_steps = estimate_bulk_char_steps(n_items, len(sids), force_refresh=force_refresh)
+    if use_all and not force_refresh:
+        total_steps = max(len(sids) * (_CATALOG_MAX_PAGES + 500), 1)
+    else:
+        total_steps = estimate_bulk_char_steps(n_items, len(sids), force_refresh=force_refresh)
     await _init_task(task_id, "wb_bulk_chars", label, total_steps)
     async with _tasks_lock:
         _tasks[task_id]["store_ids"] = sids
