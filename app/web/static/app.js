@@ -7851,7 +7851,10 @@
       }
       parts.push(`<p><strong>${escapeHtml(st.store_name || '')}</strong> — ${escapeHtml(st.scope || '')}: `
         + `к изменению ${st.prepared ?? 0}, пропущено ${st.skipped ?? 0}, не найдено ${st.not_found ?? 0}, нет поля ${st.no_field ?? 0}`
-        + `${st.sent ? `, отправлено ${st.sent}` : ''}</p>`);
+        + `${st.sent ? `, отправлено ${st.sent}` : ''}`
+        + `${st.cache_hit === true ? ' · <span class="text-ok">каталог из кэша</span>' : ''}`
+        + `${st.cache_hit === false && st.load_mode ? ' · каталог загружен с WB' : ''}`
+        + `</p>`);
       const rows = st.rows || [];
       if (rows.length) {
         parts.push('<table class="items-table compliance-rows-table"><thead><tr>'

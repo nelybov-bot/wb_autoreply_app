@@ -263,9 +263,6 @@ async def apply_bulk_chars_for_store(
     client = WbContentClient(api_key, timeout_s=600.0)
     codes = list(dict.fromkeys(_norm_vendor_sku(v) for v in (vendor_codes or []) if _norm_vendor_sku(v)))
 
-    if progress_cb:
-        progress_cb(0, _CATALOG_MAX_PAGES, "Загрузка каталога WB…")
-
     if all_catalog or not codes:
         if store_id and db is not None:
             by_vendor, by_nm_id, by_barcode, load_meta = await _load_wb_cards_for_compare(
@@ -277,6 +274,8 @@ async def apply_bulk_chars_for_store(
                 progress_cb=progress_cb,
             )
         else:
+            if progress_cb:
+                progress_cb(0, _CATALOG_MAX_PAGES, "Загрузка каталога WB…")
             cards, load_meta = await _fetch_full_catalog_from_wb(client, progress_cb=progress_cb)
             by_vendor, by_nm_id, by_barcode = _build_card_index(cards)
         target_cards: List[dict] = []
@@ -292,8 +291,12 @@ async def apply_bulk_chars_for_store(
                 seen_nm.add(nm)
                 target_cards.append(card)
         scope_label = "весь каталог"
-        if load_meta.get("cache_hit"):
-            scope_label += " (из кэша)"
+        if load_meta.get("cache_hit") is True:
+            scope_label += " (из кэша на диске)"
+        elif load_meta.get("cache_hit") == "partial":
+            scope_label += " (кэш + догрузка с WB)"
+        elif force_refresh:
+            scope_label += " (принудительно с WB)"
     else:
         by_vendor, by_nm_id, by_barcode, load_meta = await _load_wb_cards_for_compare(
             client,
