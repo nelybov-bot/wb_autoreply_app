@@ -5800,6 +5800,27 @@ body.compliance-show-ozon-cols .compliance-col-ozon {
   cursor: pointer;
 }
 
+.wb-bulk-chars-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.wb-bulk-chars-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.wb-bulk-chars-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  grid-column: 1 / -1;
+}
+
 .wb-certs-result,
 .compliance-result {
   margin-top: 20px;

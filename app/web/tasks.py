@@ -1321,3 +1321,141 @@ async def run_packaging_dims_apply(
 
     _handles[task_id] = asyncio.create_task(_run())
     return task_id
+
+
+async def run_wb_bulk_chars_apply(
+    db: Any,
+    *,
+    store_ids: list[int],
+    char_name: str,
+    char_value: str,
+    text: str = "",
+    vendor_codes: Optional[list[str]] = None,
+    all_catalog: bool = False,
+    dry_run: bool = False,
+    only_if_different: bool = True,
+    force_refresh: bool = False,
+) -> str:
+    from app.core.net import HttpStatusError, UnauthorizedStoreError
+    from app.core.wb_bulk_chars import (
+        apply_bulk_chars_multi_store,
+        estimate_bulk_char_steps,
+        parse_vendor_list_text,
+    )
+
+    parse_warnings: list[str] = []
+    vendors: list[str] = list(vendor_codes or [])
+    if text.strip():
+        parsed, warnings = parse_vendor_list_text(text)
+        parse_warnings.extend(warnings)
+        if parsed:
+            seen = {v.casefold() for v in vendors}
+            for v in parsed:
+                if v.casefold() not in seen:
+                    vendors.append(v)
+                    seen.add(v.casefold())
+
+    use_all = bool(all_catalog)
+    if not use_all and not vendors:
+        raise ValueError("Укажите артикулы или включите «Весь каталог»")
+
+    sids = sorted({int(x) for x in store_ids if int(x) > 0})
+    if not sids:
+        raise ValueError("Выберите хотя бы один магазин WB")
+
+    stores_payload: list[tuple[int, str, str]] = []
+    by_id = {s.id: s for s in db.list_stores()}
+    for sid in sids:
+        st = by_id.get(sid)
+        if not st or str(st.marketplace or "").lower() != "wb":
+            raise ValueError(f"Магазин {sid} не найден или не WB")
+        if not (st.api_key or "").strip():
+            raise ValueError(f"У магазина «{st.name}» нет API-ключа")
+        stores_payload.append((sid, st.name, st.api_key.strip()))
+
+    task_id = _make_id()
+    try:
+        await store_locks.acquire(
+            sids, "wb_bulk_chars", task_id,
+            store_names=_store_names(db, sids),
+        )
+    except StoreBusyError:
+        await store_locks.release_all_for_owner(task_id)
+        raise
+
+    n_items = 5000 if use_all else len(vendors)
+    label = "Проверка характеристик WB" if dry_run else "Массовое редактирование WB"
+    total_steps = estimate_bulk_char_steps(n_items, len(sids), force_refresh=force_refresh)
+    await _init_task(task_id, "wb_bulk_chars", label, total_steps)
+    async with _tasks_lock:
+        _tasks[task_id]["store_ids"] = sids
+        _tasks[task_id]["parse_warnings"] = parse_warnings
+
+    def _progress(cur: int, tot: int, detail: str) -> None:
+        if _tasks.get(task_id, {}).get("status") != "running":
+            return
+        safe_tot = max(int(tot or 0), 1)
+        safe_cur = max(0, min(int(cur or 0), safe_tot))
+
+        async def _set() -> None:
+            async with _tasks_lock:
+                if task_id in _tasks:
+                    _tasks[task_id]["progress"] = [safe_cur, safe_tot]
+                    _tasks[task_id]["detail"] = detail
+
+        asyncio.create_task(_set())
+
+    async def _run() -> None:
+        try:
+            result = await apply_bulk_chars_multi_store(
+                stores_payload,
+                char_name=char_name,
+                char_value=char_value,
+                vendor_codes=None if use_all else vendors,
+                all_catalog=use_all,
+                db=db,
+                dry_run=dry_run,
+                only_if_different=only_if_different,
+                force_refresh=force_refresh,
+                progress_cb=_progress,
+            )
+            if parse_warnings:
+                result["parse_warnings"] = parse_warnings
+            sent = sum(int(s.get("sent") or 0) for s in result.get("stores") or [])
+            prepared = sum(int(s.get("prepared") or 0) for s in result.get("stores") or [])
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "done"
+                _tasks[task_id]["result"] = result
+                if dry_run:
+                    _tasks[task_id]["detail"] = f"К изменению: {prepared} карточек"
+                else:
+                    _tasks[task_id]["detail"] = f"Отправлено {sent} обновлений"
+                _tasks[task_id]["progress"] = [total_steps, total_steps]
+            _mark_finished(task_id, "done")
+        except asyncio.CancelledError:
+            async with _tasks_lock:
+                if task_id in _tasks and _tasks[task_id].get("status") == "running":
+                    _tasks[task_id]["status"] = "cancelled"
+            _mark_finished(task_id, "cancelled")
+            raise
+        except UnauthorizedStoreError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+        except HttpStatusError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e.body or e)[:400]
+            _mark_finished(task_id, "error")
+        except Exception as e:
+            log.exception("wb_bulk_chars task %s failed: %s", task_id, e)
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+        finally:
+            await store_locks.release(sids, task_id)
+
+    _handles[task_id] = asyncio.create_task(_run())
+    return task_id

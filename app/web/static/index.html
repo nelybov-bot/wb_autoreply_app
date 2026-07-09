@@ -81,6 +81,10 @@
       <i class="ti ti-ruler-measure" aria-hidden="true"></i>
       <span class="si-label">Габариты</span>
     </div>
+    <div class="si" data-tab="wb-bulk-chars" title="Массовое редактирование характеристик WB" role="button" tabindex="0">
+      <i class="ti ti-forms" aria-hidden="true"></i>
+      <span class="si-label">Характеристики</span>
+    </div>
 
     <div class="si" data-tab="auto" title="Автозапуск" role="button" tabindex="0">
       <i class="ti ti-player-play" aria-hidden="true"></i>
@@ -817,6 +821,72 @@
           <button type="button" class="btn btn-secondary" id="btn-packaging-dims-copy" disabled title="Скопировать результат сравнения — вставьте в Google Таблицы">Скопировать для Google Таблиц</button>
         </div>
         <div id="packaging-dims-result" class="compliance-result" hidden></div>
+      </div>
+    </section>
+
+    <!-- Массовое редактирование характеристик WB -->
+    <section id="panel-wb-bulk-chars" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">Wildberries</div>
+          <div class="panel-heading">Массовое редактирование характеристик</div>
+        </div>
+      </div>
+      <div class="form-card form-card-wide">
+        <p class="form-hint">Подставить одно значение в характеристику для многих карточек (например <strong>Ставка НДС → 5</strong>). Каталог грузится целиком; повтор — из кэша (как в «Габариты»). Сначала «Проверить», затем «Применить на WB».</p>
+        <div class="wb-bulk-chars-fields">
+          <label class="wb-bulk-chars-field">
+            <span class="toolbar-label">Название характеристики</span>
+            <input type="text" id="wb-bulk-chars-name" class="input-md" value="Ставка НДС" placeholder="Ставка НДС">
+          </label>
+          <label class="wb-bulk-chars-field">
+            <span class="toolbar-label">Новое значение</span>
+            <input type="text" id="wb-bulk-chars-value" class="input-md" value="5" placeholder="5">
+          </label>
+          <div class="wb-bulk-chars-presets">
+            <span class="toolbar-label">Быстро:</span>
+            <button type="button" class="btn btn-secondary btn-sm" data-wb-bulk-preset="nds-5">НДС 5%</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-wb-bulk-preset="nds-10">НДС 10%</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-wb-bulk-preset="nds-20">НДС 20%</button>
+          </div>
+        </div>
+        <label class="packaging-dims-only-mismatch">
+          <input type="checkbox" id="wb-bulk-chars-all-catalog" checked>
+          Весь каталог магазина
+        </label>
+        <label class="packaging-dims-only-mismatch">
+          <input type="checkbox" id="wb-bulk-chars-only-diff" checked>
+          Только если значение отличается
+        </label>
+        <label class="packaging-dims-only-mismatch">
+          <input type="checkbox" id="wb-bulk-chars-refresh-catalog">
+          Обновить каталог с WB
+        </label>
+        <div class="compliance-input-block" id="wb-bulk-chars-list-wrap" hidden>
+          <div class="compliance-input-toolbar">
+            <span class="toolbar-label">Артикулы (если не весь каталог)</span>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-wb-bulk-chars-parse">Разобрать список</button>
+            <label class="btn btn-secondary btn-sm">
+              Файл
+              <input type="file" id="wb-bulk-chars-file" accept=".csv,.txt,.tsv,text/plain" hidden>
+            </label>
+          </div>
+          <textarea id="wb-bulk-chars-text" class="compliance-textarea" rows="8" placeholder="807773&#10;807774&#10;или колонка sku из таблицы"></textarea>
+        </div>
+        <div class="compliance-stores-block">
+          <div class="compliance-stores-toolbar">
+            <span class="toolbar-label">Магазины WB</span>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-wb-bulk-chars-stores-all">Все</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-wb-bulk-chars-stores-none">Снять</button>
+          </div>
+          <div id="wb-bulk-chars-store-list" class="auto-store-list auto-store-list--compact"></div>
+        </div>
+        <div class="progress-container" id="progress-wb-bulk-chars" hidden></div>
+        <div class="compliance-actions">
+          <button type="button" class="btn btn-secondary" id="btn-wb-bulk-chars-preview">Проверить (dry-run)</button>
+          <button type="button" class="btn btn-primary" id="btn-wb-bulk-chars-apply">Применить на WB</button>
+        </div>
+        <div id="wb-bulk-chars-result" class="compliance-result" hidden></div>
       </div>
     </section>
 
@@ -1825,7 +1895,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=107"></script>
+  <script src="/static/app.js?v=108"></script>
   <script src="/static/card_links_master.js?v=8"></script>
 </body>
 </html>

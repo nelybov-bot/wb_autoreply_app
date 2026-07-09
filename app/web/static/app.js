@@ -641,6 +641,7 @@
     if (tabId === 'card-links') loadCardLinksPanel();
     if (tabId === 'compliance') loadCompliancePanel();
     if (tabId === 'packaging-dims') loadPackagingDimsPanel();
+    if (tabId === 'wb-bulk-chars') loadWbBulkCharsPanel();
     if (tabId === 'auto') loadAutoSchedulePanel();
     if (tabId === 'agent') loadAgentPanel();
     if (tabId === 'settings') {
@@ -7804,6 +7805,181 @@
     });
   }
 
+  let wbBulkCharsParsedVendors = [];
+
+  function loadWbBulkCharsPanel() {
+    wireWbBulkCharsPanel();
+    const wb = storesForMarketplace('wb');
+    const prev = getAutoMpStoreIds('wb-bulk-chars-store-list');
+    const selected = prev.length ? prev : wb.map((s) => s.id);
+    renderAutoMpStoreList('wb-bulk-chars-store-list', 'wb', selected);
+    syncWbBulkCharsListVisibility();
+  }
+
+  function syncWbBulkCharsListVisibility() {
+    const all = !!document.getElementById('wb-bulk-chars-all-catalog')?.checked;
+    const wrap = document.getElementById('wb-bulk-chars-list-wrap');
+    if (wrap) wrap.hidden = all;
+  }
+
+  function wbBulkCharsSetStoreChecks(on) {
+    document.querySelectorAll('#wb-bulk-chars-store-list input[type="checkbox"]').forEach((cb) => {
+      cb.checked = !!on;
+    });
+  }
+
+  function renderWbBulkCharsResult(result) {
+    const box = document.getElementById('wb-bulk-chars-result');
+    if (!box) return;
+    if (!result) {
+      box.hidden = true;
+      return;
+    }
+    const parts = [];
+    if (result.parse_warnings?.length) {
+      parts.push(`<p class="form-hint text-warn">${escapeHtml(result.parse_warnings.join('; '))}</p>`);
+    }
+    const stores = result.stores || [];
+    for (const st of stores) {
+      if (st.error) {
+        parts.push(`<p class="form-hint text-error"><strong>${escapeHtml(st.store_name || '')}</strong>: ${escapeHtml(st.error)}</p>`);
+        continue;
+      }
+      const sw = (st.schema_warnings || []).slice(0, 5);
+      if (sw.length) {
+        parts.push(`<p class="form-hint text-warn">${escapeHtml(sw.join('; '))}</p>`);
+      }
+      parts.push(`<p><strong>${escapeHtml(st.store_name || '')}</strong> — ${escapeHtml(st.scope || '')}: `
+        + `к изменению ${st.prepared ?? 0}, пропущено ${st.skipped ?? 0}, не найдено ${st.not_found ?? 0}, нет поля ${st.no_field ?? 0}`
+        + `${st.sent ? `, отправлено ${st.sent}` : ''}</p>`);
+      const rows = st.rows || [];
+      if (rows.length) {
+        parts.push('<table class="items-table compliance-rows-table"><thead><tr>'
+          + '<th>Артикул</th><th>nmID</th><th>Поле</th><th>Было</th><th>Будет</th><th>Статус</th><th>Сообщение</th>'
+          + '</tr></thead><tbody>');
+        for (const r of rows.slice(0, 200)) {
+          parts.push(`<tr><td>${escapeHtml(r.vendor_code || '')}</td><td>${escapeHtml(String(r.nm_id || ''))}</td>`
+            + `<td>${escapeHtml(r.char_name || '')}</td><td>${escapeHtml(r.current_value || '')}</td>`
+            + `<td>${escapeHtml(r.new_value || '')}</td><td>${escapeHtml(r.status || '')}</td>`
+            + `<td>${escapeHtml(r.message || '')}</td></tr>`);
+        }
+        parts.push('</tbody></table>');
+        if ((st.rows_total || rows.length) > 200) {
+          parts.push(`<p class="form-hint">Показаны первые 200 из ${st.rows_total || rows.length}</p>`);
+        }
+      }
+    }
+    box.innerHTML = parts.join('');
+    box.hidden = false;
+  }
+
+  async function parseWbBulkCharsList() {
+    const text = (document.getElementById('wb-bulk-chars-text')?.value || '').trim();
+    if (!text) {
+      toast('Вставьте список артикулов', 'error');
+      return;
+    }
+    const btn = document.getElementById('btn-wb-bulk-chars-parse');
+    try {
+      if (btn) btn.disabled = true;
+      const res = await api('/wb/bulk-chars/parse', { method: 'POST', body: JSON.stringify({ text }) });
+      wbBulkCharsParsedVendors = (res.rows || []).map((r) => r.vendor_code).filter(Boolean);
+      if (res.warnings?.length) toast(res.warnings.join('; '), 'warn');
+      toast(`Разобрано артикулов: ${res.count || 0}`);
+    } catch (err) {
+      toast(err.message || 'Ошибка разбора', 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function runWbBulkCharsApply(dryRun) {
+    const storeIds = getAutoMpStoreIds('wb-bulk-chars-store-list');
+    if (!storeIds.length) {
+      toast('Выберите магазин WB', 'error');
+      return;
+    }
+    const charName = (document.getElementById('wb-bulk-chars-name')?.value || '').trim();
+    const charValue = (document.getElementById('wb-bulk-chars-value')?.value || '').trim();
+    if (!charName || !charValue) {
+      toast('Укажите характеристику и значение', 'error');
+      return;
+    }
+    const allCatalog = !!document.getElementById('wb-bulk-chars-all-catalog')?.checked;
+    const text = (document.getElementById('wb-bulk-chars-text')?.value || '').trim();
+    if (!allCatalog && !text && !wbBulkCharsParsedVendors.length) {
+      toast('Включите «Весь каталог» или вставьте список артикулов', 'error');
+      return;
+    }
+    if (!dryRun) {
+      const scope = allCatalog ? 'весь каталог' : `${wbBulkCharsParsedVendors.length || 'список'} артикулов`;
+      if (!confirm(`Применить «${charName}» = «${charValue}» для ${scope}?\n\nКарточки на WB будут изменены.`)) return;
+    }
+    const onlyDiff = !!document.getElementById('wb-bulk-chars-only-diff')?.checked;
+    const refreshCatalog = !!document.getElementById('wb-bulk-chars-refresh-catalog')?.checked;
+    const btns = ['btn-wb-bulk-chars-preview', 'btn-wb-bulk-chars-apply'];
+    btns.forEach((id) => { const b = document.getElementById(id); if (b) b.disabled = true; });
+    try {
+      const res = await api('/wb/bulk-chars/apply', {
+        method: 'POST',
+        body: JSON.stringify({
+          store_ids: storeIds,
+          char_name: charName,
+          char_value: charValue,
+          text,
+          vendor_codes: wbBulkCharsParsedVendors,
+          all_catalog: allCatalog,
+          dry_run: !!dryRun,
+          only_if_different: onlyDiff,
+          refresh_catalog: refreshCatalog,
+        }),
+      });
+      pollItemsTask(res.task_id, 'wb-bulk-chars', {
+        label: dryRun ? 'Проверка характеристик WB…' : 'Массовое редактирование WB…',
+        onDone: (data) => renderWbBulkCharsResult(data.result),
+      });
+    } catch (err) {
+      toast(err.message || 'Ошибка запуска', 'error');
+    } finally {
+      btns.forEach((id) => { const b = document.getElementById(id); if (b) b.disabled = false; });
+    }
+  }
+
+  function wireWbBulkCharsPanel() {
+    if (wireWbBulkCharsPanel._done) return;
+    wireWbBulkCharsPanel._done = true;
+    document.getElementById('wb-bulk-chars-all-catalog')?.addEventListener('change', syncWbBulkCharsListVisibility);
+    document.getElementById('btn-wb-bulk-chars-stores-all')?.addEventListener('click', () => wbBulkCharsSetStoreChecks(true));
+    document.getElementById('btn-wb-bulk-chars-stores-none')?.addEventListener('click', () => wbBulkCharsSetStoreChecks(false));
+    document.getElementById('btn-wb-bulk-chars-parse')?.addEventListener('click', () => { void parseWbBulkCharsList(); });
+    document.getElementById('btn-wb-bulk-chars-preview')?.addEventListener('click', () => { void runWbBulkCharsApply(true); });
+    document.getElementById('btn-wb-bulk-chars-apply')?.addEventListener('click', () => { void runWbBulkCharsApply(false); });
+    document.querySelectorAll('[data-wb-bulk-preset]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const p = btn.getAttribute('data-wb-bulk-preset');
+        const nameEl = document.getElementById('wb-bulk-chars-name');
+        const valEl = document.getElementById('wb-bulk-chars-value');
+        if (nameEl) nameEl.value = 'Ставка НДС';
+        if (valEl && p === 'nds-5') valEl.value = '5';
+        if (valEl && p === 'nds-10') valEl.value = '10';
+        if (valEl && p === 'nds-20') valEl.value = '20';
+      });
+    });
+    document.getElementById('wb-bulk-chars-file')?.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const ta = document.getElementById('wb-bulk-chars-text');
+        if (ta) ta.value = text;
+        toast('Файл загружен — нажмите «Разобрать список» или снимите «Весь каталог»');
+      } catch (err) {
+        toast(err.message || 'Не удалось прочитать файл', 'error');
+      }
+      e.target.value = '';
+    });
+  }
+
   function wireCardLinksPanel() {
     if (wireCardLinksPanel._done) return;
     wireCardLinksPanel._done = true;
@@ -10313,6 +10489,7 @@
     wireCardLinksPanel();
     wireCompliancePanel();
     wirePackagingDimsPanel();
+    wireWbBulkCharsPanel();
     wireAgentPanel();
     ensureStoresLoaded().then(() => {
       fillStoreSelects();

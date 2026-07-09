@@ -4601,6 +4601,22 @@ class PackagingDimsApplyBody(BaseModel):
     refresh_catalog: bool = False
 
 
+class WbBulkCharsParseBody(BaseModel):
+    text: str = ""
+
+
+class WbBulkCharsApplyBody(BaseModel):
+    store_ids: list[int] = []
+    char_name: str = "Ставка НДС"
+    char_value: str = ""
+    text: str = ""
+    vendor_codes: list[str] = []
+    all_catalog: bool = False
+    dry_run: bool = False
+    only_if_different: bool = True
+    refresh_catalog: bool = False
+
+
 @app.get("/api/compliance/fsa-status")
 async def api_compliance_fsa_status(_: UserRow = Depends(require_user)):
     """Диагностика: прокси ФСА и доступность pub.fsa.gov.ru."""
@@ -4726,6 +4742,77 @@ async def api_packaging_dims_apply(
                 "vendor_codes_count": len(body.vendor_codes or []),
                 "dry_run": bool(body.dry_run),
                 "only_mismatch": bool(body.only_mismatch),
+            },
+        )
+    except Exception:
+        pass
+    return {"task_id": task_id, "status": "running"}
+
+
+@app.post("/api/wb/bulk-chars/parse")
+def api_wb_bulk_chars_parse(
+    body: WbBulkCharsParseBody,
+    _: UserRow = Depends(require_user),
+):
+    """Разбор списка артикулов (одна колонка)."""
+    from app.core.wb_bulk_chars import parse_vendor_list_text
+
+    text = (body.text or "").strip()
+    if not text:
+        return {"rows": [], "warnings": [], "count": 0}
+    vendors, warnings = parse_vendor_list_text(text)
+    return {
+        "rows": [{"vendor_code": v} for v in vendors],
+        "warnings": warnings,
+        "count": len(vendors),
+    }
+
+
+@app.post("/api/wb/bulk-chars/apply")
+async def api_wb_bulk_chars_apply(
+    body: WbBulkCharsApplyBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    """Массовая подстановка значения характеристики в карточки WB."""
+    if not body.store_ids:
+        raise HTTPException(400, "Выберите хотя бы один магазин WB")
+    char_name = (body.char_name or "").strip()
+    char_value = (body.char_value or "").strip()
+    if not char_name:
+        raise HTTPException(400, "Укажите название характеристики")
+    if not char_value:
+        raise HTTPException(400, "Укажите новое значение")
+    try:
+        vendor_codes = [str(v).strip() for v in (body.vendor_codes or []) if str(v).strip()]
+        task_id = await web_tasks.run_wb_bulk_chars_apply(
+            db,
+            store_ids=body.store_ids,
+            char_name=char_name,
+            char_value=char_value,
+            text=(body.text or "").strip(),
+            vendor_codes=vendor_codes or None,
+            all_catalog=bool(body.all_catalog),
+            dry_run=bool(body.dry_run),
+            only_if_different=bool(body.only_if_different),
+            force_refresh=bool(body.refresh_catalog),
+        )
+    except StoreBusyError as e:
+        raise HTTPException(409, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="wb_bulk_chars_apply",
+            item_type="wb_bulk_chars",
+            result="started",
+            meta={
+                "store_ids": body.store_ids,
+                "char_name": char_name,
+                "char_value": char_value,
+                "all_catalog": bool(body.all_catalog),
+                "dry_run": bool(body.dry_run),
             },
         )
     except Exception:
