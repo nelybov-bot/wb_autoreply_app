@@ -131,7 +131,20 @@ from app.core.telegram_notify import (
     normalize_telegram_bot_token,
     resolve_telegram_chat_id,
     send_activity_report,
+    send_telegram_message,
     test_telegram_delivery,
+)
+from app.core.wb_banned_cards import (
+    SETTING_CHAT_ID as WB_BANNED_CARDS_CHAT_ID,
+    SETTING_ENABLED as WB_BANNED_CARDS_ENABLED,
+    SETTING_IN_REPORT as WB_BANNED_CARDS_IN_REPORT,
+    SETTING_INTERVAL as WB_BANNED_CARDS_INTERVAL,
+    SETTING_LAST_SENT as WB_BANNED_CARDS_LAST_SENT,
+    banned_cards_enabled,
+    banned_cards_in_report,
+    banned_cards_interval,
+    collect_banned_cards_summary,
+    format_banned_cards_message,
 )
 from app.core.ozon_alerts import (
     DEFAULT_TELEGRAM_TEMPLATE as DEFAULT_OZON_ALERT_TELEGRAM_TEMPLATE,
@@ -542,8 +555,11 @@ _wb_chat_list_cache: dict[int, tuple[float, list]] = {}
 _ozon_chat_list_cache: dict[int, tuple[float, list, Optional[str]]] = {}
 _scheduler_task: Optional[asyncio.Task] = None
 _telegram_report_task: Optional[asyncio.Task] = None
+_wb_banned_cards_task: Optional[asyncio.Task] = None
 _tg_report_fail_until: float = 0.0
 _tg_report_fail_token: str = ""
+_wb_banned_fail_until: float = 0.0
+_wb_banned_fail_token: str = ""
 _scheduler_seen: set[str] = set()
 _auto_run_task: Optional[asyncio.Task] = None
 _interval_skip_logged: bool = False
@@ -1490,6 +1506,13 @@ async def _send_telegram_report(
     stats = db.get_activity_stats_since(since_iso, until_iso)
     period_label = _format_report_period_label(since_dt, until_dt)
     include_card_errors = (db.get_setting(SETTING_CARD_CHECK_IN_REPORT) or "1").strip() != "0"
+    banned_summary = None
+    if banned_cards_in_report(db):
+        try:
+            banned_summary = await collect_banned_cards_summary(db)
+        except Exception:
+            log.exception("telegram_report: banned cards summary failed")
+            banned_summary = None
     ok, tg_err = await send_activity_report(
         token,
         chat_id,
@@ -1497,6 +1520,7 @@ async def _send_telegram_report(
         period_label=period_label,
         interval=interval,
         include_card_errors=include_card_errors,
+        banned_cards_summary=banned_summary,
         db=db,
     )
     if not ok:
@@ -1516,6 +1540,7 @@ async def _send_telegram_report(
                 "period_label": period_label,
                 "since": since_iso,
                 "manual": manual,
+                "wb_banned_total": (banned_summary or {}).get("total"),
                 **stats,
             },
         )
@@ -1523,7 +1548,7 @@ async def _send_telegram_report(
         pass
     log.info(
         "telegram_report sent interval=%s manual=%s reviews=%s questions=%s chats=%s "
-        "ozon_removed=%s ozon_alerts=%s",
+        "ozon_removed=%s ozon_alerts=%s wb_banned=%s",
         interval,
         manual,
         stats.get("reviews_sent"),
@@ -1531,8 +1556,13 @@ async def _send_telegram_report(
         stats.get("chat_replies_total"),
         stats.get("ozon_products_removed"),
         stats.get("ozon_alerts"),
+        (banned_summary or {}).get("total"),
     )
-    return {"ok": True, "period_label": period_label, **stats}
+    out = {"ok": True, "period_label": period_label, **stats}
+    if banned_summary is not None:
+        out["wb_banned_total"] = banned_summary.get("total")
+        out["wb_banned_stores"] = banned_summary.get("stores")
+    return out
 
 
 async def _maybe_send_telegram_report() -> None:
@@ -1587,6 +1617,101 @@ async def _telegram_report_loop() -> None:
             raise
         except Exception:
             log.exception("telegram report loop failed")
+        await asyncio.sleep(60)
+
+
+async def _send_wb_banned_cards_report(db: Database, *, manual: bool = False) -> dict:
+    token = normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or "")
+    chat_id = resolve_telegram_chat_id(db, "banned_cards")
+    if not token:
+        raise HTTPException(400, "Укажите токен бота в настройках Telegram")
+    if not chat_id:
+        raise HTTPException(
+            400,
+            "Укажите ID чата для заблокированных карточек или основной ID чата",
+        )
+    summary = await collect_banned_cards_summary(db)
+    body = format_banned_cards_message(summary)
+    ok, tg_err = await send_telegram_message(
+        token, chat_id, body, parse_mode="HTML", db=db
+    )
+    if not ok:
+        detail = "Не удалось отправить сообщение в Telegram"
+        if tg_err:
+            detail = f"{detail}: {tg_err}"
+        raise HTTPException(502, detail)
+    now = dt.datetime.now(MSK_TZ)
+    try:
+        db.set_setting(WB_BANNED_CARDS_LAST_SENT, now.isoformat(timespec="seconds"))
+        db.add_audit_event(
+            actor="system",
+            action="wb_banned_cards_report",
+            item_type="wb_banned",
+            result="ok",
+            meta={
+                "manual": manual,
+                "total": summary.get("total"),
+                "stores_ok": summary.get("stores_ok"),
+                "stores_failed": summary.get("stores_failed"),
+            },
+        )
+    except Exception:
+        pass
+    log.info(
+        "wb_banned_cards sent manual=%s total=%s stores=%s",
+        manual,
+        summary.get("total"),
+        summary.get("stores_total"),
+    )
+    return {"ok": True, **summary}
+
+
+async def _maybe_send_wb_banned_cards() -> None:
+    global _wb_banned_fail_until, _wb_banned_fail_token
+    db = get_db()
+    if not banned_cards_enabled(db):
+        return
+    token = normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or "")
+    chat_id = resolve_telegram_chat_id(db, "banned_cards")
+    if not token or not chat_id:
+        return
+    if time.time() < _wb_banned_fail_until and token == _wb_banned_fail_token:
+        return
+    interval = banned_cards_interval(db)
+    period_sec = _telegram_report_period_seconds(interval)
+    now = dt.datetime.now(MSK_TZ)
+    last_s = (db.get_setting(WB_BANNED_CARDS_LAST_SENT) or "").strip()
+    if last_s:
+        try:
+            last_dt = dt.datetime.fromisoformat(last_s)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=MSK_TZ)
+            if (now - last_dt).total_seconds() < period_sec:
+                return
+        except Exception:
+            pass
+    try:
+        await _send_wb_banned_cards_report(db, manual=False)
+        _wb_banned_fail_until = 0.0
+        _wb_banned_fail_token = ""
+    except HTTPException as e:
+        detail = str(e.detail or "")
+        if "404" in detail or "неверный токен" in detail.lower() or "not found" in detail.lower():
+            _wb_banned_fail_until = time.time() + 1800
+            _wb_banned_fail_token = token
+            log.warning("wb_banned_cards: %s (повтор не раньше чем через 30 мин)", detail)
+        else:
+            log.warning("wb_banned_cards: %s", detail)
+
+
+async def _wb_banned_cards_loop() -> None:
+    while True:
+        try:
+            await _maybe_send_wb_banned_cards()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("wb banned cards loop failed")
         await asyncio.sleep(60)
 
 
@@ -2014,7 +2139,9 @@ def api_admin_reset(body: AdminResetBody, db: Database = Depends(get_db)):
     if not expected:
         raise HTTPException(503, "ADMIN_RESET_TOKEN не задан на сервере")
     token = (body.reset_token or "").strip()
-    if not token or not hmac.compare_digest(token, expected):
+    if not token or not hmac.compare_digest(
+        token.encode("utf-8"), expected.encode("utf-8")
+    ):
         raise HTTPException(401, "Неверный reset token")
     if len(body.new_password or "") < 6:
         raise HTTPException(400, "Пароль минимум 6 символов")
@@ -2245,6 +2372,10 @@ def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(requir
         WB_ALERTS_TELEGRAM,
         WB_ALERTS_TEMPLATE,
         "wb_alerts_telegram_chat_id",
+        WB_BANNED_CARDS_ENABLED,
+        WB_BANNED_CARDS_INTERVAL,
+        WB_BANNED_CARDS_CHAT_ID,
+        WB_BANNED_CARDS_IN_REPORT,
         "telegram_agent_enabled",
         "telegram_agent_chat_id",
         "telegram_agent_user_id",
@@ -2324,6 +2455,15 @@ async def api_telegram_report_now(
     now = dt.datetime.now(MSK_TZ)
     since_dt = now - dt.timedelta(seconds=period_sec)
     return await _send_telegram_report(db, since_dt=since_dt, until_dt=now, interval=interval, manual=True)
+
+
+@app.post("/api/telegram/wb-banned-cards-now")
+async def api_telegram_wb_banned_cards_now(
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_permission("view_settings")),
+):
+    """Сразу посчитать заблокированные карточки WB и отправить в беседку (включая 0)."""
+    return await _send_wb_banned_cards_report(db, manual=True)
 
 
 @app.get("/api/auto-schedule")
@@ -5123,7 +5263,7 @@ def api_log_tail(db: Database = Depends(get_db), _: UserRow = Depends(require_pe
 
 @app.on_event("startup")
 async def _startup_scheduler():
-    global _scheduler_task, _telegram_report_task
+    global _scheduler_task, _telegram_report_task, _wb_banned_cards_task
     # После инициализации uvicorn — ещё раз, чтобы формат логов не затирался дефолтом воркера
     setup_logging(LOG_PATH)
     try:
@@ -5137,6 +5277,9 @@ async def _startup_scheduler():
     if _telegram_report_task is None or _telegram_report_task.done():
         _telegram_report_task = asyncio.create_task(_telegram_report_loop())
         log.info("Telegram report scheduler started (MSK)")
+    if _wb_banned_cards_task is None or _wb_banned_cards_task.done():
+        _wb_banned_cards_task = asyncio.create_task(_wb_banned_cards_loop())
+        log.info("WB banned cards scheduler started (MSK)")
     start_telegram_agent_task()
     log.info("Telegram agent polling started")
     try:
@@ -5156,7 +5299,7 @@ async def _startup_scheduler():
 
 @app.on_event("shutdown")
 async def _shutdown_scheduler():
-    global _scheduler_task, _telegram_report_task, _auto_run_task
+    global _scheduler_task, _telegram_report_task, _wb_banned_cards_task, _auto_run_task
     await stop_telegram_agent_task()
     await web_tasks.cancel_all_running()
     if _auto_run_task and not _auto_run_task.done():
@@ -5180,6 +5323,13 @@ async def _shutdown_scheduler():
         except Exception:
             pass
     _telegram_report_task = None
+    if _wb_banned_cards_task and not _wb_banned_cards_task.done():
+        _wb_banned_cards_task.cancel()
+        try:
+            await _wb_banned_cards_task
+        except Exception:
+            pass
+    _wb_banned_cards_task = None
 
 
 # ---------- Static SPA & PWA ----------

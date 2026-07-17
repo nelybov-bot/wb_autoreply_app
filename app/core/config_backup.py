@@ -16,6 +16,7 @@ APP_NAME = "wb_autoreply"
 RUNTIME_SETTING_KEYS = frozenset({
     "auto_schedule_last_run_at",
     "telegram_report_last_sent",
+    "wb_banned_cards_last_sent",
     "telegram_agent_update_offset",
 })
 
@@ -46,6 +47,10 @@ SETTING_KEYS = (
     "wb_alerts_telegram_enabled",
     "wb_alerts_telegram_template",
     "wb_alerts_telegram_chat_id",
+    "wb_banned_cards_enabled",
+    "wb_banned_cards_interval",
+    "wb_banned_cards_telegram_chat_id",
+    "wb_banned_cards_in_report",
     "theme",
     "buyer_chat_reply_from_date",
     "buyer_chat_auto_max_age_days",

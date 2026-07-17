@@ -1416,6 +1416,11 @@
             <label>Чат для важных новостей WB</label>
             <input type="text" id="setting-wb_alerts_telegram_chat_id" placeholder="необязательно">
           </div>
+          <div class="form-group">
+            <label>Чат для заблокированных карточек WB</label>
+            <input type="text" id="setting-wb_banned_cards_telegram_chat_id" placeholder="необязательно — иначе основной / отчёты">
+            <div class="form-hint">Отдельная беседа, куда уходит только число заблокированных (включая 0). В сводный отчёт блок тоже добавляется.</div>
+          </div>
 
           <h3 class="settings-subhead">AI-ассистент в Telegram</h3>
             <p class="form-hint">Пишите боту в указанном чате — те же команды, что во вкладке AI. <b>В группе</b> обращайтесь через @бот или ответ на его сообщение.</p>
@@ -1441,6 +1446,8 @@
             <div class="toggle-row"><span class="toggle-label">Важные новости WB <em class="toggle-hint">мгновенно</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_alerts_telegram_enabled" checked><span class="switch-track"></span></label></div>
             <div class="toggle-row"><span class="toggle-label">Периодический сводный отчёт</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-telegram_report_enabled"><span class="switch-track"></span></label></div>
             <div class="toggle-row"><span class="toggle-label">Ошибки карточек в отчёте</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-card_check_include_in_periodic_report" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Заблокированные карточки WB в сводном отчёте</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_banned_cards_in_report" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Отдельные уведомления: заблокированные WB <em class="toggle-hint">включая 0</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_banned_cards_enabled"><span class="switch-track"></span></label></div>
           </div>
           <div class="form-group">
             <label>Период отчёта</label>
@@ -1448,6 +1455,14 @@
               <option value="hour">Раз в час (за прошедший час)</option>
               <option value="day">Раз в сутки (за прошедшие сутки)</option>
             </select>
+          </div>
+          <div class="form-group">
+            <label>Период уведомлений о заблокированных карточках</label>
+            <select id="setting-wb_banned_cards_interval">
+              <option value="hour">Раз в час</option>
+              <option value="day">Раз в сутки</option>
+            </select>
+            <div class="form-hint">Независимо от периода сводного отчёта. Сообщение уходит даже если заблокированных 0.</div>
           </div>
 
           <h3 class="settings-subhead">Шаблоны мгновенных сообщений (HTML)</h3>
@@ -1472,6 +1487,7 @@
             <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
             <button type="button" class="btn btn-secondary" id="btn-telegram-test">Проверить бота</button>
             <button type="button" class="btn btn-secondary" id="btn-telegram-report-now">Отправить отчёт сейчас</button>
+            <button type="button" class="btn btn-secondary" id="btn-telegram-wb-banned-now">Заблокированные WB сейчас</button>
           </div>
         </div>
 
@@ -1895,7 +1911,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=109"></script>
+  <script src="/static/app.js?v=110"></script>
   <script src="/static/card_links_master.js?v=8"></script>
 </body>
 </html>

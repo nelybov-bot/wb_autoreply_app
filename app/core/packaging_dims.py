@@ -74,18 +74,20 @@ def _progress_load_steps(load_meta: dict) -> int:
     return int(load_meta.get("pages_fetched") or 0)
 
 
-async def _load_named_field_char_ids(
+async def _load_subject_charcs_map(
     client: WbContentClient,
     subject_ids: Set[int],
     *,
     db: Any = None,
-) -> Set[int]:
-    from .wb_certificates import collect_named_field_char_ids
-
-    out: Set[int] = set()
-    for sid in sorted(subject_ids):
-        if sid <= 0:
-            continue
+    progress_cb: Optional[ProgressCb] = None,
+) -> Dict[int, List[dict]]:
+    """Схемы характеристик предметов: SQLite-кэш → API (без лишних пауз)."""
+    out: Dict[int, List[dict]] = {}
+    subjects = sorted(s for s in subject_ids if s > 0)
+    total = max(len(subjects), 1)
+    for i, sid in enumerate(subjects, start=1):
+        if progress_cb:
+            progress_cb(i, total, f"Схема категорий: {i}/{total}")
         charcs: List[dict] = []
         if db and hasattr(db, "packaging_dims_charcs_get"):
             cached = db.packaging_dims_charcs_get(sid)
@@ -95,11 +97,35 @@ async def _load_named_field_char_ids(
             try:
                 charcs = await client.get_subject_charcs(sid)
             except Exception as e:
-                log.warning("packaging_dims charcs subject %s: %s", sid, e)
+                log.warning("subject charcs %s: %s", sid, e)
                 charcs = []
             if db and hasattr(db, "packaging_dims_charcs_put") and charcs:
                 db.packaging_dims_charcs_put(sid, charcs)
-        out |= collect_named_field_char_ids(charcs)
+        out[sid] = charcs
+    return out
+
+
+async def _load_named_field_char_ids(
+    client: WbContentClient,
+    subject_ids: Set[int],
+    *,
+    db: Any = None,
+    charcs_by_subject: Optional[Dict[int, List[dict]]] = None,
+) -> Set[int]:
+    from .wb_certificates import collect_named_field_char_ids
+
+    out: Set[int] = set()
+    if charcs_by_subject is not None:
+        for sid in sorted(subject_ids):
+            if sid <= 0:
+                continue
+            out |= collect_named_field_char_ids(charcs_by_subject.get(sid) or [])
+        return out
+    schemas = await _load_subject_charcs_map(client, subject_ids, db=db)
+    for sid in sorted(subject_ids):
+        if sid <= 0:
+            continue
+        out |= collect_named_field_char_ids(schemas.get(sid) or [])
     return out
 
 _RE_HEADER = re.compile(

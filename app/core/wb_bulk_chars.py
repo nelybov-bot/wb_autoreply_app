@@ -1,7 +1,6 @@
 """Массовое редактирование характеристик карточек WB (cards/update)."""
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -13,6 +12,7 @@ from .packaging_dims import (
     _build_card_index,
     _fetch_full_catalog_from_wb,
     _load_named_field_char_ids,
+    _load_subject_charcs_map,
     _load_wb_cards_for_compare,
     _lookup_card,
     _norm_vendor as _norm_vendor_sku,
@@ -187,36 +187,17 @@ def _card_char_value(card: dict, char_id: int) -> Any:
 
 
 async def _resolve_char_ids_by_subject(
-    client: WbContentClient,
-    subject_ids: Set[int],
+    charcs_by_subject: Dict[int, List[dict]],
     char_query: str,
-    *,
-    db: Any = None,
-    progress_cb: Optional[ProgressCb] = None,
 ) -> Tuple[Dict[int, int], Dict[int, str], List[str]]:
     """subject_id → (char_id, char_name); warnings для предметов без поля."""
     char_id_by_subject: Dict[int, int] = {}
     char_name_by_subject: Dict[int, str] = {}
     warnings: List[str] = []
-    subjects = sorted(s for s in subject_ids if s > 0)
-    total = max(len(subjects), 1)
-    for i, sid in enumerate(subjects, start=1):
-        if progress_cb:
-            progress_cb(i, total, f"Схема категорий: {i}/{total}")
-        charcs: List[dict] = []
-        if db and hasattr(db, "packaging_dims_charcs_get"):
-            cached = db.packaging_dims_charcs_get(sid)
-            if cached is not None:
-                charcs = cached
-        if not charcs:
-            try:
-                charcs = await client.get_subject_charcs(sid)
-            except Exception as e:
-                warnings.append(f"Предмет {sid}: схема недоступна ({e})")
-                continue
-            if db and hasattr(db, "packaging_dims_charcs_put") and charcs:
-                db.packaging_dims_charcs_put(sid, charcs)
-            await asyncio.sleep(0.55)
+    for sid in sorted(charcs_by_subject):
+        if sid <= 0:
+            continue
+        charcs = charcs_by_subject.get(sid) or []
         cid, cname = find_char_by_name(charcs, char_query)
         if cid:
             char_id_by_subject[sid] = cid
@@ -235,8 +216,8 @@ def estimate_bulk_char_steps(
     stores = max(int(store_count or 0), 1)
     n = max(int(item_count or 0), 1)
     if force_refresh:
-        return stores * (_CATALOG_MAX_PAGES + n + max(1, (n + 99) // 100))
-    return stores * (2 + n + max(1, (n + 99) // 100))
+        return stores * (_CATALOG_MAX_PAGES + n + max(1, (n + 299) // 300))
+    return stores * (2 + n + max(1, (n + 299) // 300))
 
 
 async def apply_bulk_chars_for_store(
@@ -327,12 +308,17 @@ async def apply_bulk_chars_for_store(
         if sid:
             subject_ids.add(sid)
 
-    char_id_by_subject, char_name_by_subject, schema_warnings = await _resolve_char_ids_by_subject(
-        client, subject_ids, query, db=db, progress_cb=progress_cb,
+    charcs_by_subject = await _load_subject_charcs_map(
+        client, subject_ids, db=db, progress_cb=progress_cb,
+    )
+    char_id_by_subject, char_name_by_subject, schema_warnings = _resolve_char_ids_by_subject(
+        charcs_by_subject, query,
     )
     if progress_cb:
         progress_cb(0, max(len(target_cards), 1), f"Проверка {len(target_cards)} карточек…")
-    named_field_ids = await _load_named_field_char_ids(client, subject_ids, db=db)
+    named_field_ids = await _load_named_field_char_ids(
+        client, subject_ids, db=db, charcs_by_subject=charcs_by_subject,
+    )
 
     results: List[dict] = []
     updates: List[dict] = []

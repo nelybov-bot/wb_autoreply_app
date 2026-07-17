@@ -59,6 +59,11 @@ API `GET /api/settings` возвращает секреты **замаскиро
 | `telegram_agent_chat_id` | Чат для агента |
 | `telegram_agent_user_id` | Разрешённый Telegram user id |
 | `telegram_agent_update_offset` | Служебный offset long polling |
+| `wb_banned_cards_enabled` | `1` — отдельные периодические уведомления о заблокированных карточках WB |
+| `wb_banned_cards_interval` | `hour` \| `day` — период отдельной рассылки |
+| `wb_banned_cards_telegram_chat_id` | Отдельный чат (пустой = основной `telegram_chat_id`) |
+| `wb_banned_cards_in_report` | `1` — блок в сводном периодическом отчёте (включая 0) |
+| `wb_banned_cards_last_sent` | Служебная метка (не экспортируется) |
 
 ### Проверка карточек (`card_check.py`)
 

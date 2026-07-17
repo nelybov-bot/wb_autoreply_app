@@ -79,6 +79,8 @@
 | `config_backup.py` | Экспорт/импорт конфигурации (`/api/config/*`) |
 | `secret_mask.py` | Маскирование секретов в API и аудите |
 | `telegram_notify.py` | Telegram-уведомления и отчёты |
+| `wb_analytics_client.py` | Analytics API — заблокированные карточки |
+| `wb_banned_cards.py` | Сводка banned cards по магазинам + Telegram |
 | `async_runner.py` | Asyncio в отдельном потоке (desktop) |
 
 ### Workflows (`workflows.py`)
@@ -177,6 +179,7 @@
   - bootstrap admin
   - _auto_scheduler_loop()      # MSK слоты
   - _telegram_report_loop()
+  - _wb_banned_cards_loop()     # заблокированные карточки WB → Telegram
   - start_telegram_agent_task()
 ```
 

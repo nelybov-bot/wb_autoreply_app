@@ -61,6 +61,7 @@
 | T-042 | Откат связки (undo merge) | todo | Есть disconnect/unlink по отдельности |
 | T-043 | PWA offline mode улучшения | todo | `sw.js` есть, покрытие неизвестно |
 | T-044 | Desktop: паритет с web UI | todo | Desktop отстаёт по функциям |
+| T-045 | WB: уведомления о заблокированных карточках в Telegram | done | В отчётах + отдельный chat/интервал; `wb_banned_cards_*` |
 
 ---
 

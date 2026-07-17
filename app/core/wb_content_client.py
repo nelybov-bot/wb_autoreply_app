@@ -16,8 +16,10 @@ log = logging.getLogger("wb.content")
 BASE = "https://content-api.wildberries.ru"
 _PAGE_LIMIT = 100
 _VENDOR_SEARCH_BATCH = 40
-_UPDATE_BATCH_SIZE = 100
-_UPDATE_BATCH_PAUSE_S = 6.5
+# WB cards/update: до 3000 карточек/запрос, ~10 запросов/мин на продавца
+_UPDATE_BATCH_SIZE = 300
+_UPDATE_BATCH_PAUSE_S = 0.0
+_MUTATE_RPS = 10.0 / 60.0  # ~1 запрос / 6 с
 
 
 class WbContentClient:
@@ -26,9 +28,9 @@ class WbContentClient:
         if self.api_key.lower().startswith("bearer "):
             self.api_key = self.api_key[7:].strip()
         self.timeout = aiohttp.ClientTimeout(connect=15, total=timeout_s)
-        # Content API: ~100 req/min на продавца — чтение и мутации раздельно
+        # Content API: ~100 req/min чтение; cards/update ~10 req/min
         self._read_limiter = RateLimiter(0.75)
-        self._mutate_limiter = RateLimiter(0.35)
+        self._mutate_limiter = RateLimiter(_MUTATE_RPS)
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -138,7 +140,7 @@ class WbContentClient:
         pause_s: float = _UPDATE_BATCH_PAUSE_S,
         progress_cb: Optional[Callable[[int, int, str], None]] = None,
     ) -> Tuple[int, List[dict]]:
-        """cards/update пачками (WB: до 3000 карточек/запрос, лимит ~10 req/мин на update)."""
+        """cards/update пачками; при ошибке пачки — деление пополам, не по одной карточке."""
         if not cards:
             return 0, []
         total = len(cards)
@@ -146,35 +148,52 @@ class WbContentClient:
         errors: List[dict] = []
         bs = max(1, int(batch_size))
         batches_n = (total + bs - 1) // bs
+
+        async def _send_chunk(chunk: List[dict], *, depth: int = 0, retries_429: int = 0) -> None:
+            nonlocal sent
+            if not chunk:
+                return
+            try:
+                await self.update_cards(chunk)
+                sent += len(chunk)
+            except HttpStatusError as e:
+                if e.status == 429 and retries_429 < 3:
+                    await asyncio.sleep(6.0 * (retries_429 + 1))
+                    await _send_chunk(chunk, depth=depth, retries_429=retries_429 + 1)
+                    return
+                if len(chunk) > 1 and depth < 10:
+                    mid = len(chunk) // 2
+                    log.warning(
+                        "WB cards/update split %s cards (depth %s) after HTTP %s: %s",
+                        len(chunk),
+                        depth,
+                        e.status,
+                        (e.body or "")[:200],
+                    )
+                    await _send_chunk(chunk[:mid], depth=depth + 1)
+                    await _send_chunk(chunk[mid:], depth=depth + 1)
+                    return
+                card = chunk[0]
+                errors.append({
+                    "vendor_code": str(card.get("vendorCode") or ""),
+                    "nm_id": card.get("nmID"),
+                    "status": e.status,
+                    "body": (e.body or "")[:500],
+                })
+                log.warning(
+                    "WB cards/update failed %s nm=%s: %s",
+                    card.get("vendorCode"),
+                    card.get("nmID"),
+                    (e.body or "")[:200],
+                )
+
         for bi in range(0, total, bs):
             batch = cards[bi : bi + bs]
             batch_no = bi // bs + 1
             if progress_cb:
                 progress_cb(sent, total, f"Пачка {batch_no}/{batches_n}: {len(batch)} карточек…")
-            try:
-                await self.update_cards(batch)
-                sent += len(batch)
-            except HttpStatusError as e:
-                log.warning(
-                    "WB cards/update batch %s/%s failed (%s cards), retry one-by-one: %s",
-                    batch_no,
-                    batches_n,
-                    len(batch),
-                    (e.body or "")[:200],
-                )
-                for card in batch:
-                    try:
-                        await self.update_cards([card])
-                        sent += 1
-                    except HttpStatusError as e2:
-                        errors.append({
-                            "vendor_code": str(card.get("vendorCode") or ""),
-                            "nm_id": card.get("nmID"),
-                            "status": e2.status,
-                            "body": (e2.body or "")[:500],
-                        })
-                    await asyncio.sleep(0.35)
-            if bi + bs < total:
+            await _send_chunk(batch)
+            if pause_s > 0 and bi + bs < total:
                 await asyncio.sleep(pause_s)
         if progress_cb:
             progress_cb(sent, total, f"Отправлено {sent} из {total}")

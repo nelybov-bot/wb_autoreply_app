@@ -25,6 +25,7 @@ SETTING_REPORT_CHAT_ID = "telegram_report_chat_id"
 SETTING_CARD_ERROR_CHAT_ID = "telegram_card_error_chat_id"
 SETTING_OZON_ALERTS_CHAT_ID = "ozon_alerts_telegram_chat_id"
 SETTING_WB_ALERTS_CHAT_ID = "wb_alerts_telegram_chat_id"
+SETTING_BANNED_CARDS_CHAT_ID = "wb_banned_cards_telegram_chat_id"
 SETTING_AGENT_CHAT_ID = "telegram_agent_chat_id"
 
 _CHAT_ID_SETTING_KEYS = (
@@ -32,6 +33,8 @@ _CHAT_ID_SETTING_KEYS = (
     SETTING_REPORT_CHAT_ID,
     SETTING_CARD_ERROR_CHAT_ID,
     SETTING_OZON_ALERTS_CHAT_ID,
+    SETTING_WB_ALERTS_CHAT_ID,
+    SETTING_BANNED_CARDS_CHAT_ID,
     SETTING_AGENT_CHAT_ID,
 )
 
@@ -242,7 +245,8 @@ def normalize_telegram_chat_id(chat_id: Union[str, int]) -> Union[str, int]:
 def resolve_telegram_chat_id(db, purpose: str) -> str:
     """
     purpose: default — отзывы; report — отчёт; card_error — карточки;
-    ozon_alerts — важные уведомления Ozon; wb_alerts — важные новости WB.
+    ozon_alerts — важные уведомления Ozon; wb_alerts — важные новости WB;
+    banned_cards — заблокированные карточки WB.
     Для остальных пустое значение = чат по умолчанию (telegram_chat_id).
     """
     default = (db.get_setting("telegram_chat_id") or "").strip()
@@ -253,6 +257,7 @@ def resolve_telegram_chat_id(db, purpose: str) -> str:
         "card_error": SETTING_CARD_ERROR_CHAT_ID,
         "ozon_alerts": SETTING_OZON_ALERTS_CHAT_ID,
         "wb_alerts": SETTING_WB_ALERTS_CHAT_ID,
+        "banned_cards": SETTING_BANNED_CARDS_CHAT_ID,
     }
     key = keys.get(purpose, SETTING_CARD_ERROR_CHAT_ID)
     specific = (db.get_setting(key) or "").strip()
@@ -436,8 +441,11 @@ def format_activity_report(
     period_label: str,
     interval: str,
     include_card_errors: bool = True,
+    banned_cards_summary: Optional[dict] = None,
 ) -> str:
     """Текст периодического отчёта для Telegram (HTML)."""
+    from .wb_banned_cards import format_banned_cards_report_block
+
     reviews = int(stats.get("reviews_sent") or 0)
     questions = int(stats.get("questions_sent") or 0)
     wb_chats = int(stats.get("wb_chat_replies") or 0)
@@ -509,6 +517,7 @@ def format_activity_report(
         lines.append(f"<b>Акции Ozon:</b> снято товаров {removed}")
     if include_card_errors:
         lines.append(f"<b>Ошибки в карточках:</b> {card_errors}")
+    lines.extend(format_banned_cards_report_block(banned_cards_summary))
     return "\n".join(lines)
 
 
@@ -520,6 +529,7 @@ async def send_activity_report(
     period_label: str,
     interval: str,
     include_card_errors: bool = True,
+    banned_cards_summary: Optional[dict] = None,
     db=None,
 ) -> Tuple[bool, str]:
     body = format_activity_report(
@@ -527,6 +537,7 @@ async def send_activity_report(
         period_label=period_label,
         interval=interval,
         include_card_errors=include_card_errors,
+        banned_cards_summary=banned_cards_summary,
     )
     return await send_telegram_message(
         bot_token, chat_id, body, parse_mode=TELEGRAM_PARSE_MODE, db=db

@@ -8964,6 +8964,7 @@
         'telegram_chat_id',
         'telegram_report_chat_id',
         'telegram_card_error_chat_id',
+        'wb_banned_cards_telegram_chat_id',
         'telegram_agent_chat_id',
         'telegram_agent_user_id',
         'buyer_chat_reply_from_date',
@@ -8988,6 +8989,12 @@
       if (tgReport) tgReport.checked = String(data.telegram_report_enabled || '0') === '1';
       const tgInterval = document.getElementById('setting-telegram_report_interval');
       if (tgInterval) tgInterval.value = (data.telegram_report_interval || 'hour') === 'day' ? 'day' : 'hour';
+      const bannedEnabled = document.getElementById('setting-wb_banned_cards_enabled');
+      if (bannedEnabled) bannedEnabled.checked = String(data.wb_banned_cards_enabled || '0') === '1';
+      const bannedInReport = document.getElementById('setting-wb_banned_cards_in_report');
+      if (bannedInReport) bannedInReport.checked = String(data.wb_banned_cards_in_report || '1') !== '0';
+      const bannedInterval = document.getElementById('setting-wb_banned_cards_interval');
+      if (bannedInterval) bannedInterval.value = (data.wb_banned_cards_interval || 'hour') === 'day' ? 'day' : 'hour';
       const tgAgent = document.getElementById('setting-telegram_agent_enabled');
       if (tgAgent) tgAgent.checked = String(data.telegram_agent_enabled || '0') === '1';
       const cardEnabled = document.getElementById('setting-card_check_enabled');
@@ -9372,6 +9379,10 @@
       telegram_enabled: document.getElementById('setting-telegram_enabled')?.checked ? '1' : '0',
       telegram_report_enabled: document.getElementById('setting-telegram_report_enabled')?.checked ? '1' : '0',
       telegram_report_interval: document.getElementById('setting-telegram_report_interval')?.value === 'day' ? 'day' : 'hour',
+      wb_banned_cards_enabled: document.getElementById('setting-wb_banned_cards_enabled')?.checked ? '1' : '0',
+      wb_banned_cards_in_report: document.getElementById('setting-wb_banned_cards_in_report')?.checked ? '1' : '0',
+      wb_banned_cards_interval: document.getElementById('setting-wb_banned_cards_interval')?.value === 'day' ? 'day' : 'hour',
+      wb_banned_cards_telegram_chat_id: document.getElementById('setting-wb_banned_cards_telegram_chat_id')?.value || '',
       telegram_agent_enabled: document.getElementById('setting-telegram_agent_enabled')?.checked ? '1' : '0',
       telegram_agent_chat_id: document.getElementById('setting-telegram_agent_chat_id')?.value || '',
       telegram_agent_user_id: document.getElementById('setting-telegram_agent_user_id')?.value || '',
@@ -9444,15 +9455,34 @@
       btnTgReportNow.disabled = true;
       try {
         const res = await api('/telegram/report-now', { method: 'POST' });
+        const bannedPart = (res.wb_banned_total != null)
+          ? `, заблок. WB ${res.wb_banned_total}`
+          : '';
         toast(
           `Отчёт отправлен: отзывы ${res.reviews_sent || 0}, вопросы ${res.questions_sent || 0}, `
           + `чаты ${res.chat_replies_total || 0}, документы Ozon ${res.ozon_cert_requests_products || 0}, `
-          + `скрытия ${res.ozon_hidden_products || 0}, акции −${res.ozon_products_removed || 0} / +${res.ozon_products_added || 0}`,
+          + `скрытия ${res.ozon_hidden_products || 0}, акции −${res.ozon_products_removed || 0} / +${res.ozon_products_added || 0}`
+          + bannedPart,
         );
       } catch (err) {
         toast(err.message, 'error');
       } finally {
         btnTgReportNow.disabled = false;
+      }
+    });
+  }
+
+  const btnWbBannedNow = document.getElementById('btn-telegram-wb-banned-now');
+  if (btnWbBannedNow) {
+    btnWbBannedNow.addEventListener('click', async () => {
+      btnWbBannedNow.disabled = true;
+      try {
+        const res = await api('/telegram/wb-banned-cards-now', { method: 'POST' });
+        toast(`Заблокированные WB: итого ${res.total ?? 0} (магазинов ${res.stores_total ?? 0})`);
+      } catch (err) {
+        toast(err.message, 'error');
+      } finally {
+        btnWbBannedNow.disabled = false;
       }
     });
   }
@@ -9485,6 +9515,7 @@
       ozon_buyer_chat_send: 'Чат Ozon: отправка',
       ozon_buyer_chat_mass_send: 'Чат Ozon: массово ИИ+отправка',
       telegram_report: 'Telegram: отчёт',
+      wb_banned_cards_report: 'Telegram: заблокированные WB',
       card_error_detected: 'Ошибка в карточке',
     };
     return m[a] || a || '—';

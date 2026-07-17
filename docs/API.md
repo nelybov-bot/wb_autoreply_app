@@ -102,6 +102,7 @@
 |-------|------|------------|----------|
 | POST | `/api/telegram/test` | `view_settings` | Тестовое сообщение в чат |
 | POST | `/api/telegram/report-now` | `view_settings` | Отправить периодический отчёт сейчас |
+| POST | `/api/telegram/wb-banned-cards-now` | `view_settings` | Сводка заблокированных карточек WB во все магазины → Telegram (включая 0) |
 
 ---
 
