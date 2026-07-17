@@ -8993,8 +8993,6 @@
       if (bannedEnabled) bannedEnabled.checked = String(data.wb_banned_cards_enabled || '0') === '1';
       const bannedInReport = document.getElementById('setting-wb_banned_cards_in_report');
       if (bannedInReport) bannedInReport.checked = String(data.wb_banned_cards_in_report || '1') !== '0';
-      const bannedInterval = document.getElementById('setting-wb_banned_cards_interval');
-      if (bannedInterval) bannedInterval.value = (data.wb_banned_cards_interval || 'hour') === 'day' ? 'day' : 'hour';
       const tgAgent = document.getElementById('setting-telegram_agent_enabled');
       if (tgAgent) tgAgent.checked = String(data.telegram_agent_enabled || '0') === '1';
       const cardEnabled = document.getElementById('setting-card_check_enabled');
@@ -9381,7 +9379,6 @@
       telegram_report_interval: document.getElementById('setting-telegram_report_interval')?.value === 'day' ? 'day' : 'hour',
       wb_banned_cards_enabled: document.getElementById('setting-wb_banned_cards_enabled')?.checked ? '1' : '0',
       wb_banned_cards_in_report: document.getElementById('setting-wb_banned_cards_in_report')?.checked ? '1' : '0',
-      wb_banned_cards_interval: document.getElementById('setting-wb_banned_cards_interval')?.value === 'day' ? 'day' : 'hour',
       wb_banned_cards_telegram_chat_id: document.getElementById('setting-wb_banned_cards_telegram_chat_id')?.value || '',
       telegram_agent_enabled: document.getElementById('setting-telegram_agent_enabled')?.checked ? '1' : '0',
       telegram_agent_chat_id: document.getElementById('setting-telegram_agent_chat_id')?.value || '',
@@ -9478,7 +9475,11 @@
       btnWbBannedNow.disabled = true;
       try {
         const res = await api('/telegram/wb-banned-cards-now', { method: 'POST' });
-        toast(`Заблокированные WB: итого ${res.total ?? 0} (магазинов ${res.stores_total ?? 0})`);
+        const d = res.delta;
+        let extra = '';
+        if (d && d.kind === 'increase') extra = ` · СРОЧНО +${d.total_delta}`;
+        else if (d && d.kind === 'decrease') extra = ` · разблокировали ${Math.abs(d.total_delta)}`;
+        toast(`Заблокированные WB: итого ${res.total ?? 0} (магазинов ${res.stores_total ?? 0})${extra}`);
       } catch (err) {
         toast(err.message, 'error');
       } finally {
@@ -9516,6 +9517,7 @@
       ozon_buyer_chat_mass_send: 'Чат Ozon: массово ИИ+отправка',
       telegram_report: 'Telegram: отчёт',
       wb_banned_cards_report: 'Telegram: заблокированные WB',
+      wb_banned_cards_change: 'Telegram: изменение заблокированных WB',
       card_error_detected: 'Ошибка в карточке',
     };
     return m[a] || a || '—';

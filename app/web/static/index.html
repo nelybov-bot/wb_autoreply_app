@@ -1457,12 +1457,15 @@
             </select>
           </div>
           <div class="form-group">
-            <label>Период уведомлений о заблокированных карточках</label>
-            <select id="setting-wb_banned_cards_interval">
-              <option value="hour">Раз в час</option>
-              <option value="day">Раз в сутки</option>
-            </select>
-            <div class="form-hint">Независимо от периода сводного отчёта. Сообщение уходит даже если заблокированных 0.</div>
+            <label>Расписание заблокированных карточек WB</label>
+            <div class="form-hint">
+              <b>Живой запрос к WB — каждый час</b> (все активные магазины).
+              Если после проверки число изменилось — сразу в беседку:
+              «СРОЧНО СТАЛО БОЛЬШЕ…» или «РАЗБЛОКИРОВАЛИ КАРТОЧКИ…» (с разбивкой по магазинам).
+              <br>
+              <b>Плановая сводка</b> (включая 0) — <b>09:00</b>, <b>15:00</b>, <b>21:00</b> МСК.
+              В часовой сводный отчёт MarketAI идёт последний снимок без лишнего запроса к WB.
+            </div>
           </div>
 
           <h3 class="settings-subhead">Шаблоны мгновенных сообщений (HTML)</h3>
@@ -1911,7 +1914,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=110"></script>
+  <script src="/static/app.js?v=113"></script>
   <script src="/static/card_links_master.js?v=8"></script>
 </body>
 </html>

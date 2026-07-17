@@ -17,6 +17,9 @@ RUNTIME_SETTING_KEYS = frozenset({
     "auto_schedule_last_run_at",
     "telegram_report_last_sent",
     "wb_banned_cards_last_sent",
+    "wb_banned_cards_last_slot",
+    "wb_banned_cards_last_check",
+    "wb_banned_cards_last_snapshot",
     "telegram_agent_update_offset",
 })
 
@@ -48,7 +51,6 @@ SETTING_KEYS = (
     "wb_alerts_telegram_template",
     "wb_alerts_telegram_chat_id",
     "wb_banned_cards_enabled",
-    "wb_banned_cards_interval",
     "wb_banned_cards_telegram_chat_id",
     "wb_banned_cards_in_report",
     "theme",

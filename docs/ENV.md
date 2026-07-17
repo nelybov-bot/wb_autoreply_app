@@ -59,11 +59,13 @@ API `GET /api/settings` возвращает секреты **замаскиро
 | `telegram_agent_chat_id` | Чат для агента |
 | `telegram_agent_user_id` | Разрешённый Telegram user id |
 | `telegram_agent_update_offset` | Служебный offset long polling |
-| `wb_banned_cards_enabled` | `1` — отдельные периодические уведомления о заблокированных карточках WB |
-| `wb_banned_cards_interval` | `hour` \| `day` — период отдельной рассылки |
+| `wb_banned_cards_enabled` | `1` — уведомления о заблокированных карточках WB |
 | `wb_banned_cards_telegram_chat_id` | Отдельный чат (пустой = основной `telegram_chat_id`) |
-| `wb_banned_cards_in_report` | `1` — блок в сводном периодическом отчёте (включая 0) |
-| `wb_banned_cards_last_sent` | Служебная метка (не экспортируется) |
+| `wb_banned_cards_in_report` | `1` — блок в сводном отчёте из снимка (без live WB) |
+| `wb_banned_cards_last_sent` | Служебная метка последней плановой сводки |
+| `wb_banned_cards_last_slot` | Служебный ключ слота `YYYY-MM-DD|HH` (09/15/21 МСК) |
+| `wb_banned_cards_last_check` | Служебная метка последнего live-опроса (раз в час) |
+| `wb_banned_cards_last_snapshot` | JSON последнего снимка counts (срочные алерты) |
 
 ### Проверка карточек (`card_check.py`)
 
