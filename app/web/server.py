@@ -147,6 +147,7 @@ from app.core.wb_banned_cards import (
     collect_banned_cards_summary,
     compute_banned_delta,
     digest_slot_key,
+    due_digest_slot,
     format_banned_cards_message,
     format_banned_delta_message,
     load_snapshot,
@@ -567,6 +568,7 @@ _tg_report_fail_until: float = 0.0
 _tg_report_fail_token: str = ""
 _wb_banned_fail_until: float = 0.0
 _wb_banned_fail_token: str = ""
+_wb_banned_skip_log_until: float = 0.0
 _scheduler_seen: set[str] = set()
 _auto_run_task: Optional[asyncio.Task] = None
 _interval_skip_logged: bool = False
@@ -1635,6 +1637,7 @@ async def _send_wb_banned_cards_report(
     manual: bool = False,
     force_digest: bool = False,
     allow_change_alert: bool = True,
+    digest_slot: Optional[str] = None,
 ) -> dict:
     token = normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or "")
     chat_id = resolve_telegram_chat_id(db, "banned_cards")
@@ -1679,11 +1682,11 @@ async def _send_wb_banned_cards_report(
         except Exception:
             pass
 
-    slot = digest_slot_key(now)
+    slot_mark = (digest_slot or "").strip() or digest_slot_key(now)
     need_digest = bool(manual or force_digest)
-    if slot and not need_digest:
+    if slot_mark and not need_digest:
         last_slot = (db.get_setting(WB_BANNED_CARDS_LAST_SLOT) or "").strip()
-        if last_slot != slot:
+        if last_slot != slot_mark:
             need_digest = True
 
     if need_digest:
@@ -1699,8 +1702,8 @@ async def _send_wb_banned_cards_report(
         sent_kinds.append("digest")
         try:
             db.set_setting(WB_BANNED_CARDS_LAST_SENT, now.isoformat(timespec="seconds"))
-            if slot and not manual:
-                db.set_setting(WB_BANNED_CARDS_LAST_SLOT, slot)
+            if slot_mark and not manual:
+                db.set_setting(WB_BANNED_CARDS_LAST_SLOT, slot_mark)
             db.add_audit_event(
                 actor="system",
                 action="wb_banned_cards_report",
@@ -1708,7 +1711,7 @@ async def _send_wb_banned_cards_report(
                 result="ok",
                 meta={
                     "manual": manual,
-                    "slot": slot,
+                    "slot": slot_mark,
                     "total": summary.get("total"),
                     "stores_ok": summary.get("stores_ok"),
                     "stores_failed": summary.get("stores_failed"),
@@ -1724,7 +1727,6 @@ async def _send_wb_banned_cards_report(
         pass
 
     if not sent_kinds and not delta:
-        # Опрос без изменений и вне слота — только обновили снимок.
         log.info(
             "wb_banned_cards check no-change total=%s stores=%s",
             summary.get("total"),
@@ -1732,11 +1734,12 @@ async def _send_wb_banned_cards_report(
         )
 
     log.info(
-        "wb_banned_cards done manual=%s sent=%s total=%s delta=%s",
+        "wb_banned_cards done manual=%s sent=%s total=%s delta=%s slot=%s",
         manual,
         ",".join(sent_kinds) or "none",
         summary.get("total"),
         (delta or {}).get("total_delta"),
+        slot_mark or "",
     )
     out = {"ok": True, "sent": sent_kinds, **summary}
     if delta:
@@ -1748,23 +1751,35 @@ async def _maybe_send_wb_banned_cards() -> None:
     """
     Каждый час — живой опрос всех WB-магазинов.
     Если число изменилось vs прошлый запрос — срочный Telegram сразу после проверки.
-    В 09:00 / 15:00 / 21:00 МСК — дополнительно плановая сводка (включая 0).
+    В 09:00 / 15:00 / 21:00 МСК — плановая сводка (включая 0); пропущенные слоты догоняются.
     """
-    global _wb_banned_fail_until, _wb_banned_fail_token
+    global _wb_banned_fail_until, _wb_banned_fail_token, _wb_banned_skip_log_until
     db = get_db()
+    now_ts = time.time()
     if not banned_cards_enabled(db):
+        if now_ts >= _wb_banned_skip_log_until:
+            log.warning(
+                "wb_banned_cards: автоцикл выключен — включите "
+                "«Отдельные уведомления: заблокированные WB» в Настройки → Telegram"
+            )
+            _wb_banned_skip_log_until = now_ts + 3600
         return
     token = normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or "")
     chat_id = resolve_telegram_chat_id(db, "banned_cards")
     if not token or not chat_id:
+        if now_ts >= _wb_banned_skip_log_until:
+            log.warning(
+                "wb_banned_cards: нет токена бота или chat_id — автоуведомления не отправляются"
+            )
+            _wb_banned_skip_log_until = now_ts + 3600
         return
-    if time.time() < _wb_banned_fail_until and token == _wb_banned_fail_token:
+    if now_ts < _wb_banned_fail_until and token == _wb_banned_fail_token:
         return
 
     now = dt.datetime.now(MSK_TZ)
-    slot = digest_slot_key(now)
     last_slot = (db.get_setting(WB_BANNED_CARDS_LAST_SLOT) or "").strip()
-    slot_due = bool(slot and slot != last_slot)
+    due_slot = due_digest_slot(now, last_slot)
+    slot_due = bool(due_slot)
 
     last_check_s = (db.get_setting(WB_BANNED_CARDS_LAST_CHECK) or "").strip()
     poll_due = True
@@ -1787,17 +1802,20 @@ async def _maybe_send_wb_banned_cards() -> None:
             manual=False,
             force_digest=slot_due,
             allow_change_alert=True,
+            digest_slot=due_slot,
         )
         _wb_banned_fail_until = 0.0
         _wb_banned_fail_token = ""
     except HTTPException as e:
         detail = str(e.detail or "")
         if "404" in detail or "неверный токен" in detail.lower() or "not found" in detail.lower():
-            _wb_banned_fail_until = time.time() + 1800
+            _wb_banned_fail_until = now_ts + 1800
             _wb_banned_fail_token = token
             log.warning("wb_banned_cards: %s (повтор не раньше чем через 30 мин)", detail)
         else:
             log.warning("wb_banned_cards: %s", detail)
+    except Exception:
+        log.exception("wb_banned_cards: unexpected failure")
 
 
 async def _wb_banned_cards_loop() -> None:

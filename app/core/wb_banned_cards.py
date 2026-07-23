@@ -289,7 +289,27 @@ def snapshot_as_report_summary(snap: Optional[dict[str, Any]]) -> Optional[dict[
 
 
 def digest_slot_key(now) -> Optional[str]:
-    """Ключ слота YYYY-MM-DD|HH для 09/15/21 МСК, иначе None."""
+    """Ключ слота YYYY-MM-DD|HH, если сейчас ровно час 09/15/21 МСК."""
     if int(now.hour) not in DIGEST_HOURS_MSK:
         return None
     return f"{now.date().isoformat()}|{int(now.hour):02d}"
+
+
+def due_digest_slot(now, last_slot: str) -> Optional[str]:
+    """
+    Первый пропущенный/наступивший слот 09/15/21 за сегодня (МСК).
+
+    Если сервис спал и проснулся в 10:30 — вернёт сегодняшний 09,
+    чтобы плановая сводка всё равно ушла (catch-up).
+    """
+    last = (last_slot or "").strip()
+    today = now.date().isoformat()
+    for h in DIGEST_HOURS_MSK:
+        if int(now.hour) < int(h):
+            break
+        key = f"{today}|{int(h):02d}"
+        if last == key:
+            continue
+        if not last or last < key:
+            return key
+    return None

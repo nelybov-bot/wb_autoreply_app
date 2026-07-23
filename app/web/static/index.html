@@ -1447,7 +1447,7 @@
             <div class="toggle-row"><span class="toggle-label">Периодический сводный отчёт</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-telegram_report_enabled"><span class="switch-track"></span></label></div>
             <div class="toggle-row"><span class="toggle-label">Ошибки карточек в отчёте</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-card_check_include_in_periodic_report" checked><span class="switch-track"></span></label></div>
             <div class="toggle-row"><span class="toggle-label">Заблокированные карточки WB в сводном отчёте</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_banned_cards_in_report" checked><span class="switch-track"></span></label></div>
-            <div class="toggle-row"><span class="toggle-label">Отдельные уведомления: заблокированные WB <em class="toggle-hint">включая 0</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_banned_cards_enabled"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Отдельные уведомления: заблокированные WB <em class="toggle-hint">обязательно для авто</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_banned_cards_enabled"><span class="switch-track"></span></label></div>
           </div>
           <div class="form-group">
             <label>Период отчёта</label>
@@ -1459,11 +1459,14 @@
           <div class="form-group">
             <label>Расписание заблокированных карточек WB</label>
             <div class="form-hint">
+              <b>Важно:</b> галочка выше должна быть включена — иначе автоцикл молчит (кнопка «сейчас» работает и без неё).
+              <br>
               <b>Живой запрос к WB — каждый час</b> (все активные магазины).
               Если после проверки число изменилось — сразу в беседку:
               «СРОЧНО СТАЛО БОЛЬШЕ…» или «РАЗБЛОКИРОВАЛИ КАРТОЧКИ…» (с разбивкой по магазинам).
               <br>
-              <b>Плановая сводка</b> (включая 0) — <b>09:00</b>, <b>15:00</b>, <b>21:00</b> МСК.
+              <b>Плановая сводка</b> (включая 0) — <b>09:00</b>, <b>15:00</b>, <b>21:00</b> МСК
+              (если сервис спал — слот догоняется при следующем запуске).
               В часовой сводный отчёт MarketAI идёт последний снимок без лишнего запроса к WB.
             </div>
           </div>
@@ -1914,7 +1917,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=113"></script>
+  <script src="/static/app.js?v=114"></script>
   <script src="/static/card_links_master.js?v=8"></script>
 </body>
 </html>
