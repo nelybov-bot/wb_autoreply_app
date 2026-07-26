@@ -1376,6 +1376,7 @@ async def run_wb_bulk_chars_apply(
     force_refresh: bool = False,
 ) -> str:
     from app.core.net import HttpStatusError, UnauthorizedStoreError
+    from app.core.packaging_dims import _CATALOG_MAX_PAGES
     from app.core.wb_bulk_chars import (
         apply_bulk_chars_multi_store,
         estimate_bulk_char_steps,
