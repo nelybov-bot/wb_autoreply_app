@@ -16,20 +16,37 @@ _OP_LABELS = {
     "wb_bulk_chars": "характеристики WB",
     "wb_card_drafts": "черновики WB",
     "ozon_certificates": "документы Ozon",
+    "packaging_dims": "габариты WB",
 }
 
 
 class StoreBusyError(Exception):
-    def __init__(self, store_id: int, store_name: str, operation: str) -> None:
+    def __init__(
+        self,
+        store_id: int,
+        store_name: str,
+        operation: str,
+        *,
+        owner: str = "",
+    ) -> None:
         self.store_id = store_id
         self.store_name = store_name
         self.operation = operation
-        op_ru = _OP_LABELS.get(operation, operation)
+        self.owner = str(owner or "")
         busy_ru = _OP_LABELS.get(operation, operation)
         super().__init__(
             f"Магазин «{store_name}» занят: выполняется «{busy_ru}». "
             f"Дождитесь завершения или остановите текущую задачу."
         )
+
+    def as_dict(self) -> dict:
+        return {
+            "message": str(self),
+            "store_id": int(self.store_id),
+            "store_name": self.store_name,
+            "operation": self.operation,
+            "task_id": self.owner or None,
+        }
 
 
 class StoreLockManager:
@@ -55,8 +72,13 @@ class StoreLockManager:
         async with self._lock:
             for sid in ids:
                 if sid in self._held:
-                    op, _ = self._held[sid]
-                    raise StoreBusyError(sid, self._store_name(sid, store_names), op)
+                    op, held_owner = self._held[sid]
+                    raise StoreBusyError(
+                        sid,
+                        self._store_name(sid, store_names),
+                        op,
+                        owner=held_owner,
+                    )
             for sid in ids:
                 self._held[sid] = (operation, owner)
 
@@ -87,6 +109,39 @@ class StoreLockManager:
 
     def is_busy(self, store_id: int) -> bool:
         return int(store_id) in self._held
+
+    def snapshot(self) -> list[dict]:
+        out: list[dict] = []
+        for sid, (op, owner) in sorted(self._held.items()):
+            out.append({
+                "store_id": int(sid),
+                "operation": op,
+                "operation_label": _OP_LABELS.get(op, op),
+                "task_id": owner,
+            })
+        return out
+
+    async def force_release(
+        self,
+        store_ids: Optional[Iterable[int]] = None,
+    ) -> list[dict]:
+        """Снять блокировки без проверки owner (для UI «сбросить»)."""
+        want: Optional[set[int]] = None
+        if store_ids is not None:
+            want = {int(x) for x in store_ids if int(x) > 0}
+        released: list[dict] = []
+        async with self._lock:
+            for sid, (op, owner) in list(self._held.items()):
+                if want is not None and sid not in want:
+                    continue
+                released.append({
+                    "store_id": int(sid),
+                    "operation": op,
+                    "operation_label": _OP_LABELS.get(op, op),
+                    "task_id": owner,
+                })
+                del self._held[sid]
+        return released
 
 
 store_locks = StoreLockManager()

@@ -46,6 +46,10 @@ from app.db import (
 )
 from app.web import tasks as web_tasks
 from app.web.store_locks import StoreBusyError, store_locks
+
+
+def _http_store_busy(e: StoreBusyError) -> HTTPException:
+    return HTTPException(status_code=409, detail=e.as_dict())
 from app.agent.orchestrator import handle_agent_message
 from app.agent.session import clear_session, get_or_create_session, get_session_if_owner, session_public_view
 from app.agent.tools import AgentContext
@@ -3000,7 +3004,7 @@ async def api_load_new(body: LoadNewBody, db: Database = Depends(get_db), _: Use
     try:
         task_id = await web_tasks.run_load_new(db, body.store_ids)
     except StoreBusyError as e:
-        raise HTTPException(409, str(e)) from e
+        raise _http_store_busy(e) from e
     return {"task_id": task_id}
 
 
@@ -3012,7 +3016,7 @@ async def api_generate(body: GenerateBody, db: Database = Depends(get_db), _: Us
     try:
         task_id = await web_tasks.run_generate(db, body.item_ids, key)
     except StoreBusyError as e:
-        raise HTTPException(409, str(e)) from e
+        raise _http_store_busy(e) from e
     return {"task_id": task_id}
 
 
@@ -3021,7 +3025,7 @@ async def api_send(body: SendBody, db: Database = Depends(get_db), _: UserRow = 
     try:
         task_id = await web_tasks.run_send(db, body.item_ids)
     except StoreBusyError as e:
-        raise HTTPException(409, str(e)) from e
+        raise _http_store_busy(e) from e
     return {"task_id": task_id}
 
 
@@ -3151,6 +3155,17 @@ def api_log_ops(
     }
 
 
+@app.get("/api/tasks")
+async def api_list_tasks(
+    status: Optional[str] = Query(None),
+    action: Optional[str] = Query(None),
+    limit: int = Query(20, ge=1, le=50),
+    _: UserRow = Depends(require_user),
+):
+    rows = await web_tasks.list_tasks(status=status, action=action, limit=limit)
+    return {"tasks": rows}
+
+
 @app.get("/api/tasks/{task_id}")
 async def api_get_task(task_id: str, _: UserRow = Depends(require_user)):
     state = await web_tasks.get_task(task_id)
@@ -3165,6 +3180,32 @@ async def api_cancel_task(task_id: str, _: UserRow = Depends(require_user)):
     if not ok:
         raise HTTPException(404, "Задача не найдена")
     return {"ok": True}
+
+
+class StoreLocksClearBody(BaseModel):
+    store_ids: list[int] = []
+
+
+@app.get("/api/store-locks")
+async def api_store_locks(_: UserRow = Depends(require_user)):
+    return {"locks": store_locks.snapshot()}
+
+
+@app.post("/api/store-locks/clear")
+async def api_store_locks_clear(
+    body: StoreLocksClearBody,
+    _: UserRow = Depends(require_user),
+):
+    """Снять блокировки магазинов и отменить связанные задачи (если ещё running)."""
+    sids = [int(x) for x in (body.store_ids or []) if int(x) > 0] or None
+    released = await store_locks.force_release(sids)
+    owners = [str(x.get("task_id") or "") for x in released if x.get("task_id")]
+    cancelled = await web_tasks.cancel_owners(owners)
+    return {
+        "ok": True,
+        "released": released,
+        "cancelled_tasks": cancelled,
+    }
 
 
 async def _wb_buyer_chat_list_cached(store_id: int, api_key: str, *, force_refresh: bool) -> list:
@@ -4778,7 +4819,7 @@ async def api_card_links_master_step(
             bundle_ids=bundle_ids,
         )
     except StoreBusyError as e:
-        raise HTTPException(409, str(e)) from e
+        raise _http_store_busy(e) from e
     return {"task_id": task_id, "status": "running", "step": step}
 
 
@@ -4938,7 +4979,7 @@ async def api_packaging_dims_compare(
             force_refresh=bool(body.refresh_catalog),
         )
     except StoreBusyError as e:
-        raise HTTPException(409, str(e)) from e
+        raise _http_store_busy(e) from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     try:
@@ -4981,7 +5022,7 @@ async def api_packaging_dims_apply(
             force_refresh=bool(body.refresh_catalog),
         )
     except StoreBusyError as e:
-        raise HTTPException(409, str(e)) from e
+        raise _http_store_busy(e) from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     try:
@@ -5051,7 +5092,7 @@ async def api_wb_bulk_chars_apply(
             force_refresh=bool(body.refresh_catalog),
         )
     except StoreBusyError as e:
-        raise HTTPException(409, str(e)) from e
+        raise _http_store_busy(e) from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     try:
@@ -5114,7 +5155,7 @@ async def api_wb_certificates_apply(
             dry_run=bool(body.dry_run),
         )
     except StoreBusyError as e:
-        raise HTTPException(409, str(e)) from e
+        raise _http_store_busy(e) from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     try:
@@ -5151,7 +5192,7 @@ async def api_wb_card_drafts_scan(
             vendor_codes=vendor_codes or None,
         )
     except StoreBusyError as e:
-        raise HTTPException(409, str(e)) from e
+        raise _http_store_busy(e) from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     try:
@@ -5200,7 +5241,7 @@ async def api_wb_card_drafts_fill(
             manual_fills=manual or None,
         )
     except StoreBusyError as e:
-        raise HTTPException(409, str(e)) from e
+        raise _http_store_busy(e) from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     try:
@@ -5245,7 +5286,7 @@ async def api_ozon_certificates_apply(
             pdf_source=str(body.pdf_source or "fsa"),
         )
     except StoreBusyError as e:
-        raise HTTPException(409, str(e)) from e
+        raise _http_store_busy(e) from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     try:

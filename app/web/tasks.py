@@ -559,17 +559,30 @@ async def cancel_all_running() -> None:
         await cancel_task(tid)
 
 
-async def list_tasks(*, status: Optional[str] = None, limit: int = 15) -> list[dict[str, Any]]:
-    """Список задач в памяти (load/generate/send)."""
+async def list_tasks(
+    *,
+    status: Optional[str] = None,
+    action: Optional[str] = None,
+    limit: int = 15,
+) -> list[dict[str, Any]]:
+    """Список задач в памяти (load/generate/send/…)."""
     await _prune_tasks()
-    safe_limit = max(1, min(int(limit), 30))
+    safe_limit = max(1, min(int(limit), 50))
     async with _tasks_lock:
         rows = [(tid, dict(st)) for tid, st in _tasks.items()]
-    rows.sort(key=lambda x: float(x[1].get("finished_at") or 0), reverse=True)
+    rows.sort(
+        key=lambda x: (
+            0 if str(x[1].get("status") or "") == "running" else 1,
+            -float(x[1].get("finished_at") or 0),
+        )
+    )
     out: list[dict[str, Any]] = []
+    want_action = str(action or "").strip()
     for tid, st in rows:
         st_status = str(st.get("status") or "")
         if status and st_status != status:
+            continue
+        if want_action and str(st.get("action") or "") != want_action:
             continue
         out.append({
             "task_id": tid,
@@ -579,10 +592,36 @@ async def list_tasks(*, status: Optional[str] = None, limit: int = 15) -> list[d
             "progress": st.get("progress"),
             "error": st.get("error"),
             "result": st.get("result"),
+            "store_ids": list(st.get("store_ids") or []),
         })
         if len(out) >= safe_limit:
             break
     return out
+
+
+async def find_running_task(
+    *,
+    action: Optional[str] = None,
+    store_ids: Optional[list[int]] = None,
+) -> Optional[dict[str, Any]]:
+    """Найти running-задачу по action и/или пересечению store_ids."""
+    want_stores = {int(x) for x in (store_ids or []) if int(x) > 0}
+    rows = await list_tasks(status="running", action=action, limit=50)
+    for row in rows:
+        if want_stores:
+            held = {int(x) for x in (row.get("store_ids") or []) if int(x) > 0}
+            if not (held & want_stores):
+                continue
+        return row
+    return None
+
+
+async def cancel_owners(task_ids: list[str]) -> list[str]:
+    cancelled: list[str] = []
+    for tid in dict.fromkeys(str(x) for x in task_ids if str(x).strip()):
+        if await cancel_task(tid):
+            cancelled.append(tid)
+    return cancelled
 
 
 async def run_wb_certificates_apply(

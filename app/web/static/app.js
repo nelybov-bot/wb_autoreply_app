@@ -135,14 +135,26 @@
       } catch (_) {
         err = { detail: text };
       }
-      const msg = Array.isArray(err.detail) ? err.detail.map(d => d.msg || d).join(' ') : (err.detail || res.statusText);
+      let msg;
+      let payload = null;
+      if (err && typeof err.detail === 'object' && err.detail && !Array.isArray(err.detail)) {
+        payload = err.detail;
+        msg = payload.message || payload.detail || res.statusText;
+      } else if (Array.isArray(err.detail)) {
+        msg = err.detail.map(d => d.msg || d).join(' ');
+      } else {
+        msg = err.detail || res.statusText;
+      }
       if (res.status === 401) {
         if (!location.pathname.startsWith('/login')) {
           window.location.href = '/login';
         }
       }
       if (res.status === 409) {
-        throw new Error(msg || 'Магазин занят другой задачей. Дождитесь завершения или остановите её.');
+        const e = new Error(msg || 'Магазин занят другой задачей. Дождитесь завершения или остановите её.');
+        e.status = 409;
+        e.payload = payload || { message: msg };
+        throw e;
       }
       throw new Error(msg);
     }
@@ -7897,15 +7909,6 @@
 
   let wbBulkCharsParsedVendors = [];
 
-  function loadWbBulkCharsPanel() {
-    wireWbBulkCharsPanel();
-    const wb = storesForMarketplace('wb');
-    const prev = getAutoMpStoreIds('wb-bulk-chars-store-list');
-    const selected = prev.length ? prev : wb.map((s) => s.id);
-    renderAutoMpStoreList('wb-bulk-chars-store-list', 'wb', selected);
-    syncWbBulkCharsListVisibility();
-  }
-
   function syncWbBulkCharsListVisibility() {
     const all = !!document.getElementById('wb-bulk-chars-all-catalog')?.checked;
     const wrap = document.getElementById('wb-bulk-chars-list-wrap');
@@ -7986,6 +7989,90 @@
     }
   }
 
+  function setWbBulkCharsActionBusy(busy) {
+    ['btn-wb-bulk-chars-preview', 'btn-wb-bulk-chars-apply'].forEach((id) => {
+      const b = document.getElementById(id);
+      if (b) b.disabled = !!busy;
+    });
+  }
+
+  function wbBulkCharsPollHandlers(label) {
+    return {
+      label: label || 'Характеристики WB…',
+      onFinish: () => setWbBulkCharsActionBusy(false),
+      onDone: (result) => {
+        setWbBulkCharsActionBusy(false);
+        renderWbBulkCharsResult(result);
+        const sent = (result?.stores || []).reduce((a, s) => a + (Number(s.sent) || 0), 0);
+        const prepared = (result?.stores || []).reduce((a, s) => a + (Number(s.prepared) || 0), 0);
+        const dry = !!(result?.stores || []).some((s) => s.dry_run) || result?.dry_run;
+        if (sent) toast(`WB: отправлено ${sent} обновлений характеристик`);
+        else if (prepared) toast(`К изменению: ${prepared} карточек`);
+        else if (dry) toast('Проверка характеристик завершена');
+        else toast('Готово — см. отчёт');
+      },
+    };
+  }
+
+  function attachWbBulkCharsTask(taskId, label) {
+    if (!taskId) return;
+    setWbBulkCharsActionBusy(true);
+    pollItemsTask(taskId, 'wb-bulk-chars', wbBulkCharsPollHandlers(label));
+  }
+
+  async function attachRunningWbBulkCharsTask(opts = {}) {
+    const silent = !!opts.silent;
+    try {
+      const storeIds = getAutoMpStoreIds('wb-bulk-chars-store-list');
+      const container = document.getElementById('progress-wb-bulk-chars');
+      if (container && container._pollInterval) return true;
+      const res = await api('/tasks?status=running&action=wb_bulk_chars&limit=20');
+      const tasks = res.tasks || [];
+      let hit = null;
+      if (storeIds.length) {
+        const want = new Set(storeIds.map(Number));
+        hit = tasks.find((t) => (t.store_ids || []).some((id) => want.has(Number(id)))) || null;
+      }
+      if (!hit) hit = tasks[0] || null;
+      if (hit?.task_id) {
+        attachWbBulkCharsTask(hit.task_id, hit.detail || 'Характеристики WB…');
+        if (!silent) toast('Подключено к уже идущей задаче характеристик');
+        return true;
+      }
+      const locks = await api('/store-locks');
+      const busy = (locks.locks || []).find((l) => l.operation === 'wb_bulk_chars' && l.task_id);
+      if (busy?.task_id) {
+        attachWbBulkCharsTask(busy.task_id, 'Характеристики WB…');
+        if (!silent) toast('Подключено к уже идущей задаче характеристик');
+        return true;
+      }
+    } catch (_) { /* ignore */ }
+    return false;
+  }
+
+  async function stopWbBulkCharsBusy() {
+    const storeIds = getAutoMpStoreIds('wb-bulk-chars-store-list');
+    const activeId = getActiveTask('wb-bulk-chars');
+    try {
+      if (activeId) {
+        try {
+          await api('/tasks/' + activeId + '/cancel', { method: 'POST', body: JSON.stringify({}) });
+        } catch (_) { /* may already be gone */ }
+      }
+      const res = await api('/store-locks/clear', {
+        method: 'POST',
+        body: JSON.stringify({ store_ids: storeIds }),
+      });
+      setActiveTask('wb-bulk-chars', '');
+      setNavTaskRunning('wb-bulk-chars', false);
+      setWbBulkCharsActionBusy(false);
+      const n = (res.released || []).length;
+      toast(n ? `Остановлено, снято блокировок: ${n}` : 'Блокировок не было — можно запускать снова');
+    } catch (err) {
+      toast(err.message || 'Не удалось остановить', 'error');
+    }
+  }
+
   async function runWbBulkCharsApply(dryRun) {
     const storeIds = getAutoMpStoreIds('wb-bulk-chars-store-list');
     if (!storeIds.length) {
@@ -8010,8 +8097,7 @@
     }
     const onlyDiff = !!document.getElementById('wb-bulk-chars-only-diff')?.checked;
     const refreshCatalog = !!document.getElementById('wb-bulk-chars-refresh-catalog')?.checked;
-    const btns = ['btn-wb-bulk-chars-preview', 'btn-wb-bulk-chars-apply'];
-    btns.forEach((id) => { const b = document.getElementById(id); if (b) b.disabled = true; });
+    setWbBulkCharsActionBusy(true);
     try {
       const res = await api('/wb/bulk-chars/apply', {
         method: 'POST',
@@ -8027,28 +8113,39 @@
           refresh_catalog: refreshCatalog,
         }),
       });
-      pollItemsTask(res.task_id, 'wb-bulk-chars', {
-        label: dryRun ? 'Проверка характеристик WB…' : 'Массовое редактирование WB…',
-        onDone: (result) => {
-          renderWbBulkCharsResult(result);
-          const sent = (result?.stores || []).reduce((a, s) => a + (Number(s.sent) || 0), 0);
-          const prepared = (result?.stores || []).reduce((a, s) => a + (Number(s.prepared) || 0), 0);
-          if (dryRun) {
-            toast(prepared
-              ? `К изменению: ${prepared} карточек — проверьте и нажмите «Применить»`
-              : 'Нет карточек для изменения');
-          } else {
-            toast(sent
-              ? `WB: отправлено ${sent} обновлений характеристик`
-              : 'Отправка завершена — см. отчёт');
-          }
-        },
-      });
+      attachWbBulkCharsTask(
+        res.task_id,
+        dryRun ? 'Проверка характеристик WB…' : 'Массовое редактирование WB…',
+      );
     } catch (err) {
+      if (err && err.status === 409) {
+        const tid = err.payload?.task_id;
+        if (tid) {
+          toast('Магазин уже в работе — показываю прогресс текущей задачи');
+          attachWbBulkCharsTask(tid, err.payload?.operation === 'wb_bulk_chars'
+            ? 'Характеристики WB…'
+            : (err.message || 'Выполняется…'));
+          return;
+        }
+        const attached = await attachRunningWbBulkCharsTask();
+        if (attached) return;
+        toast((err.message || 'Магазин занят') + ' — нажмите «Стоп / сбросить»', 'error');
+        setWbBulkCharsActionBusy(false);
+        return;
+      }
+      setWbBulkCharsActionBusy(false);
       toast(err.message || 'Ошибка запуска', 'error');
-    } finally {
-      btns.forEach((id) => { const b = document.getElementById(id); if (b) b.disabled = false; });
     }
+  }
+
+  function loadWbBulkCharsPanel() {
+    wireWbBulkCharsPanel();
+    const wb = storesForMarketplace('wb');
+    const prev = getAutoMpStoreIds('wb-bulk-chars-store-list');
+    const selected = prev.length ? prev : wb.map((s) => s.id);
+    renderAutoMpStoreList('wb-bulk-chars-store-list', 'wb', selected);
+    syncWbBulkCharsListVisibility();
+    void attachRunningWbBulkCharsTask({ silent: true });
   }
 
   function wireWbBulkCharsPanel() {
@@ -8060,6 +8157,7 @@
     document.getElementById('btn-wb-bulk-chars-parse')?.addEventListener('click', () => { void parseWbBulkCharsList(); });
     document.getElementById('btn-wb-bulk-chars-preview')?.addEventListener('click', () => { void runWbBulkCharsApply(true); });
     document.getElementById('btn-wb-bulk-chars-apply')?.addEventListener('click', () => { void runWbBulkCharsApply(false); });
+    document.getElementById('btn-wb-bulk-chars-stop')?.addEventListener('click', () => { void stopWbBulkCharsBusy(); });
     document.querySelectorAll('[data-wb-bulk-preset]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const p = btn.getAttribute('data-wb-bulk-preset');

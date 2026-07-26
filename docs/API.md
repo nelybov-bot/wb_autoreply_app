@@ -142,7 +142,10 @@
 | POST | `/api/send` | Отправить ответы на площадки → `task_id` |
 | POST | `/api/apply-template` | Применить шаблон без OpenAI |
 | GET | `/api/tasks/{task_id}` | Статус задачи (`progress`, `status`) |
+| GET | `/api/tasks` | Список задач. Query: `status`, `action`, `limit` |
 | POST | `/api/tasks/{task_id}/cancel` | Отмена |
+| GET | `/api/store-locks` | Текущие блокировки магазинов |
+| POST | `/api/store-locks/clear` | Снять блокировки (+ cancel owners). Body: `{ store_ids?: number[] }` |
 
 Статусы задачи: `running`, `done`, `error`, `cancelled`. Хранение in-memory, TTL 1 ч.
 

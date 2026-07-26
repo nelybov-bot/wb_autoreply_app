@@ -34,6 +34,12 @@
 - **Причина:** `resumePanelTask` был только для reviews/questions; Stop только на progress bar; cancel не проверялся в sync-цикле `wb_bulk_chars`; `onDone` ждал `data.result`
 - **Файлы:** `app.js`, `styles.css`, `wb_bulk_chars.py`, `tasks.py`
 
+### BUG-006: Характеристики — «магазин уже в работе», прогресса нет
+- **Статус:** `fixed` (2026-07-26)
+- **Симптом:** 409 StoreBusy, UI не показывает текущую задачу, нельзя остановить
+- **Причина:** задача жива на сервере, фронт потерял `task_id`; 409 без owner; нет force-unlock
+- **Файлы:** `store_locks.py`, `tasks.py`, `server.py`, `app.js`, `index.html`
+
 ---
 
 ## Открытые — функциональность
