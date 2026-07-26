@@ -1,6 +1,7 @@
 """Массовое редактирование характеристик карточек WB (cards/update)."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -28,6 +29,17 @@ from .wb_content_client import WbContentClient
 log = logging.getLogger("wb.bulk_chars")
 
 ProgressCb = Callable[[int, int, str], None]
+
+
+def _raise_if_cancelled(cancel: Any) -> None:
+    if cancel is None:
+        return
+    fn = getattr(cancel, "raise_if_cancelled", None)
+    if callable(fn):
+        fn()
+    elif bool(getattr(cancel, "cancelled", False)):
+        raise asyncio.CancelledError()
+
 
 _RE_SKU_HEADER = re.compile(r"sku|артикул|vendor|offer", re.I)
 
@@ -233,6 +245,7 @@ async def apply_bulk_chars_for_store(
     only_if_different: bool = True,
     force_refresh: bool = False,
     progress_cb: Optional[ProgressCb] = None,
+    cancel: Any = None,
 ) -> dict:
     query = str(char_name or "").strip()
     new_val = str(char_value or "").strip()
@@ -241,6 +254,7 @@ async def apply_bulk_chars_for_store(
     if not new_val:
         raise ValueError("Укажите новое значение (например: 5)")
 
+    _raise_if_cancelled(cancel)
     client = WbContentClient(api_key, timeout_s=600.0)
     codes = list(dict.fromkeys(_norm_vendor_sku(v) for v in (vendor_codes or []) if _norm_vendor_sku(v)))
 
@@ -338,6 +352,8 @@ async def apply_bulk_chars_for_store(
         }
         for vc in codes:
             step += 1
+            if step % 25 == 0:
+                _raise_if_cancelled(cancel)
             key = _norm_vendor_sku(vc).casefold()
             if key not in found_vcs:
                 not_found_list += 1
@@ -355,6 +371,8 @@ async def apply_bulk_chars_for_store(
 
     for card in target_cards:
         step += 1
+        if step % 25 == 0:
+            _raise_if_cancelled(cancel)
         vc = str(card.get("vendorCode") or card.get("supplierVendorCode") or "")
         nm = int(card.get("nmID") or card.get("nmId") or 0)
         try:
@@ -434,6 +452,7 @@ async def apply_bulk_chars_for_store(
     errors: List[dict] = []
     if not dry_run and updates:
         def _send_prog(cur: int, tot: int, detail: str) -> None:
+            _raise_if_cancelled(cancel)
             if progress_cb:
                 progress_cb(total_work + cur, total_work + tot, detail)
 
@@ -496,6 +515,7 @@ async def apply_bulk_chars_multi_store(
     only_if_different: bool = True,
     force_refresh: bool = False,
     progress_cb: Optional[ProgressCb] = None,
+    cancel: Any = None,
 ) -> dict:
     out_stores: List[dict] = []
     n_items = len(vendor_codes) if vendor_codes else 5000
@@ -503,9 +523,11 @@ async def apply_bulk_chars_multi_store(
     offset = 0
 
     for i, (store_id, store_name, api_key) in enumerate(stores):
+        _raise_if_cancelled(cancel)
         store_grand = estimate_bulk_char_steps(n_items, 1, force_refresh=force_refresh)
 
         def _cb(cur: int, tot: int, detail: str, _off=offset, _name=store_name, _si=i) -> None:
+            _raise_if_cancelled(cancel)
             if not progress_cb:
                 return
             d = str(detail or "")
@@ -533,10 +555,13 @@ async def apply_bulk_chars_multi_store(
                 only_if_different=only_if_different,
                 force_refresh=force_refresh,
                 progress_cb=_cb,
+                cancel=cancel,
             )
             part["store_id"] = store_id
             part["store_name"] = store_name
             out_stores.append(part)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             log.exception("wb bulk chars store %s: %s", store_id, e)
             out_stores.append({

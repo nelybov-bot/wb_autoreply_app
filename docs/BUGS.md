@@ -28,6 +28,12 @@
 - **Статус:** `fixed` (`65dd216`)
 - **Причина:** CSS `display:flex` перебивал `[hidden]` на `.card-links-review-wrap`
 
+### BUG-005: Характеристики WB — прогресс/стоп пропадали после reload
+- **Статус:** `fixed` (2026-07-26)
+- **Симптом:** F5 → нет полоски прогресса, в меню не видно что идёт, «Стоп» недоступен
+- **Причина:** `resumePanelTask` был только для reviews/questions; Stop только на progress bar; cancel не проверялся в sync-цикле `wb_bulk_chars`; `onDone` ждал `data.result`
+- **Файлы:** `app.js`, `styles.css`, `wb_bulk_chars.py`, `tasks.py`
+
 ---
 
 ## Открытые — функциональность

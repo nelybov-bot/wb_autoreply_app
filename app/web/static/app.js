@@ -413,7 +413,10 @@
     }
 
     container._stopFake = fakeProgress(tracker, 8000);
-    if (panelPrefix) setActiveTask(panelPrefix, taskId);
+    if (panelPrefix) {
+      setActiveTask(panelPrefix, taskId);
+      setNavTaskRunning(panelPrefix, true);
+    }
 
     const finish = (opts = {}) => {
       clearItemsProgressPoll(container);
@@ -447,6 +450,11 @@
           finish();
           tracker.done();
           hideItemsProgressContainer(container);
+          if (panelPrefix) {
+            setActiveTask(panelPrefix, '');
+            setNavTaskRunning(panelPrefix, false);
+            setPanelOpsBusy(panelPrefix, false);
+          }
           if (onDone) onDone(state.result);
         } else if (state.status === 'error' || state.status === 'cancelled') {
           finish();
@@ -455,6 +463,7 @@
           setTimeout(() => hideItemsProgressContainer(container), 2000);
           if (panelPrefix) {
             setActiveTask(panelPrefix, '');
+            setNavTaskRunning(panelPrefix, false);
             setPanelOpsBusy(panelPrefix, false);
           }
           toast(errMsg, state.status === 'cancelled' ? 'success' : 'error');
@@ -640,8 +649,32 @@
     }
     if (tabId === 'card-links') loadCardLinksPanel();
     if (tabId === 'compliance') loadCompliancePanel();
-    if (tabId === 'packaging-dims') loadPackagingDimsPanel();
-    if (tabId === 'wb-bulk-chars') loadWbBulkCharsPanel();
+    if (tabId === 'packaging-dims') {
+      loadPackagingDimsPanel();
+      resumePanelTask('packaging-dims', {
+        label: 'Габариты WB…',
+        onDone: (result) => {
+          if (!result) return;
+          const isApply = result.dry_run != null
+            || (result.stores || []).some((s) => s.prepared != null || s.sent != null);
+          if (isApply) renderPackagingDimsApplyResult(result);
+          else renderPackagingDimsResult(result);
+        },
+      });
+    }
+    if (tabId === 'wb-bulk-chars') {
+      loadWbBulkCharsPanel();
+      resumePanelTask('wb-bulk-chars', {
+        label: 'Характеристики WB…',
+        onDone: (result) => {
+          renderWbBulkCharsResult(result);
+          const sent = (result?.stores || []).reduce((a, s) => a + (Number(s.sent) || 0), 0);
+          const prepared = (result?.stores || []).reduce((a, s) => a + (Number(s.prepared) || 0), 0);
+          if (sent) toast(`WB: отправлено ${sent} обновлений характеристик`);
+          else if (prepared) toast(`К изменению: ${prepared} карточек`);
+        },
+      });
+    }
     if (tabId === 'auto') loadAutoSchedulePanel();
     if (tabId === 'agent') loadAgentPanel();
     if (tabId === 'settings') {
@@ -736,33 +769,90 @@
     try { return localStorage.getItem(_activeTaskKey(panelPrefix)) || ''; } catch (_) { return ''; }
   }
 
-  async function resumePanelTask(panelPrefix) {
+  function setNavTaskRunning(panelPrefix, running) {
+    const tabId = String(panelPrefix || '');
+    if (!tabId) return;
+    document.querySelectorAll(`.si[data-tab="${tabId}"]`).forEach((el) => {
+      if (!el.hasAttribute('data-title-base')) {
+        el.setAttribute('data-title-base', el.getAttribute('title') || '');
+      }
+      el.classList.toggle('task-running', !!running);
+      const base = el.getAttribute('data-title-base') || '';
+      el.setAttribute('title', running
+        ? (base ? `${base} — выполняется…` : 'Выполняется…')
+        : base);
+    });
+  }
+
+  async function resumePanelTask(panelPrefix, opts = {}) {
     const taskId = getActiveTask(panelPrefix);
     if (!taskId) return;
+    const label = opts.label
+      || (panelPrefix === 'reviews' ? 'Отзывы…'
+        : panelPrefix === 'questions' ? 'Вопросы…'
+          : panelPrefix === 'wb-bulk-chars' ? 'Характеристики WB…'
+            : panelPrefix === 'packaging-dims' ? 'Габариты WB…'
+              : 'Выполняется…');
     try {
       const state = await api('/tasks/' + taskId);
       if (!state || !state.status) {
         setActiveTask(panelPrefix, '');
+        setNavTaskRunning(panelPrefix, false);
         return;
       }
       if (state.status === 'running') {
         setPanelOpsBusy(panelPrefix, true);
+        setNavTaskRunning(panelPrefix, true);
         pollItemsTask(taskId, panelPrefix, {
-          label: panelPrefix === 'reviews' ? 'Отзывы…' : 'Вопросы…',
-          onDone: () => {
+          label,
+          onDone: (result) => {
             setPanelOpsBusy(panelPrefix, false);
-            if (panelPrefix === 'reviews') loadReviews();
+            setNavTaskRunning(panelPrefix, false);
+            if (opts.onDone) opts.onDone(result);
+            else if (panelPrefix === 'reviews') loadReviews();
             else if (panelPrefix === 'questions') loadQuestions();
           },
+          onFinish: opts.onFinish,
         });
       } else {
         setActiveTask(panelPrefix, '');
+        setNavTaskRunning(panelPrefix, false);
+        if (state.status === 'done' && state.result && opts.onDone) {
+          opts.onDone(state.result);
+        }
       }
     } catch (err) {
       if (err && String(err.message || '').includes('не найдена')) {
         setActiveTask(panelPrefix, '');
+        setNavTaskRunning(panelPrefix, false);
       }
     }
+  }
+
+  function bootstrapActiveTasks() {
+    void resumePanelTask('reviews');
+    void resumePanelTask('questions');
+    void resumePanelTask('wb-bulk-chars', {
+      label: 'Характеристики WB…',
+      onDone: (result) => {
+        renderWbBulkCharsResult(result);
+        const sent = (result?.stores || []).reduce((a, s) => a + (Number(s.sent) || 0), 0);
+        const prepared = (result?.stores || []).reduce((a, s) => a + (Number(s.prepared) || 0), 0);
+        if (sent) toast(`WB: отправлено ${sent} обновлений характеристик`);
+        else if (prepared) toast(`К изменению: ${prepared} карточек`);
+        else toast('Проверка характеристик завершена');
+      },
+    });
+    void resumePanelTask('packaging-dims', {
+      label: 'Габариты WB…',
+      onDone: (result) => {
+        if (!result) return;
+        const isApply = result.dry_run != null
+          || (result.stores || []).some((s) => s.prepared != null || s.sent != null);
+        if (isApply) renderPackagingDimsApplyResult(result);
+        else renderPackagingDimsResult(result);
+      },
+    });
   }
 
   // ---- Navigation ----
@@ -7939,7 +8029,20 @@
       });
       pollItemsTask(res.task_id, 'wb-bulk-chars', {
         label: dryRun ? 'Проверка характеристик WB…' : 'Массовое редактирование WB…',
-        onDone: (data) => renderWbBulkCharsResult(data.result),
+        onDone: (result) => {
+          renderWbBulkCharsResult(result);
+          const sent = (result?.stores || []).reduce((a, s) => a + (Number(s.sent) || 0), 0);
+          const prepared = (result?.stores || []).reduce((a, s) => a + (Number(s.prepared) || 0), 0);
+          if (dryRun) {
+            toast(prepared
+              ? `К изменению: ${prepared} карточек — проверьте и нажмите «Применить»`
+              : 'Нет карточек для изменения');
+          } else {
+            toast(sent
+              ? `WB: отправлено ${sent} обновлений характеристик`
+              : 'Отправка завершена — см. отчёт');
+          }
+        },
       });
     } catch (err) {
       toast(err.message || 'Ошибка запуска', 'error');
@@ -10527,6 +10630,7 @@
     wirePackagingDimsPanel();
     wireWbBulkCharsPanel();
     wireAgentPanel();
+    bootstrapActiveTasks();
     ensureStoresLoaded().then(() => {
       fillStoreSelects();
       loadReviews();

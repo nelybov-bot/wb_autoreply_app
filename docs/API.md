@@ -219,6 +219,18 @@ Query-параметры каталога:
 
 ---
 
+## Габариты и характеристики WB
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| POST | `/api/packaging-dims/parse` | Разбор таблицы габаритов |
+| POST | `/api/packaging-dims/compare` | Сравнение с WB → `{ task_id }` |
+| POST | `/api/packaging-dims/apply` | Замена габаритов на WB → `{ task_id }` |
+| POST | `/api/wb/bulk-chars/parse` | Разбор списка артикулов |
+| POST | `/api/wb/bulk-chars/apply` | Массовая подстановка характеристики. Body: `{ store_ids, char_name, char_value, text?, vendor_codes?, all_catalog?, dry_run?, only_if_different?, refresh_catalog? }` → `{ task_id }` |
+
+Прогресс/отмена: `GET/POST /api/tasks/{id}` (+ `/cancel`). После F5 UI восстанавливает задачу из `localStorage`.
+
 ## Документы (сертификаты / декларации)
 
 | Метод | Путь | Описание |

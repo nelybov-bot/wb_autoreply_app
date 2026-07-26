@@ -460,6 +460,27 @@ body.sidebar-expanded .si-label {
 .si:hover { background: #1e1e1e; color: #ccc; }
 .si.active { background: #1a1a2e; color: #7F77DD; }
 .si.active .si-label { color: #c4c0f0; }
+.si.task-running {
+  position: relative;
+  color: #e8a54b;
+}
+.si.task-running::after {
+  content: '';
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e8a54b;
+  box-shadow: 0 0 0 0 rgba(232, 165, 75, 0.55);
+  animation: si-task-pulse 1.4s ease-out infinite;
+}
+@keyframes si-task-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(232, 165, 75, 0.55); }
+  70% { box-shadow: 0 0 0 8px rgba(232, 165, 75, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(232, 165, 75, 0); }
+}
 .si-spacer { flex: 1; min-height: 8px; }
 
 .si-toggle {

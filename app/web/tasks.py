@@ -1389,7 +1389,7 @@ async def run_wb_bulk_chars_apply(
         total_steps = max(len(sids) * (_CATALOG_MAX_PAGES + 500), 1)
     else:
         total_steps = estimate_bulk_char_steps(n_items, len(sids), force_refresh=force_refresh)
-    await _init_task(task_id, "wb_bulk_chars", label, total_steps)
+    ctrl = await _init_task(task_id, "wb_bulk_chars", label, total_steps)
     async with _tasks_lock:
         _tasks[task_id]["store_ids"] = sids
         _tasks[task_id]["parse_warnings"] = parse_warnings
@@ -1421,6 +1421,7 @@ async def run_wb_bulk_chars_apply(
                 only_if_different=only_if_different,
                 force_refresh=force_refresh,
                 progress_cb=_progress,
+                cancel=ctrl,
             )
             if parse_warnings:
                 result["parse_warnings"] = parse_warnings
