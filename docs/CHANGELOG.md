@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-07-26 — Fix: unpack coroutine в bulk-chars (НДС)
+
+- `_resolve_char_ids_by_subject` больше не `async` (вызывалась без await → ошибка на магазине)
+
 ## 2026-07-26 — Fix: NameError `_CATALOG_MAX_PAGES` в bulk-chars
 
 - Импорт `_CATALOG_MAX_PAGES` в `run_wb_bulk_chars_apply` (иначе 500 при запуске НДС)

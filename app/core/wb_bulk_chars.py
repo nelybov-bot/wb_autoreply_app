@@ -198,7 +198,7 @@ def _card_char_value(card: dict, char_id: int) -> Any:
     return None
 
 
-async def _resolve_char_ids_by_subject(
+def _resolve_char_ids_by_subject(
     charcs_by_subject: Dict[int, List[dict]],
     char_query: str,
 ) -> Tuple[Dict[int, int], Dict[int, str], List[str]]:

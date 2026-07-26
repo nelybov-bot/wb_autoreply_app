@@ -2,7 +2,17 @@
 
 > Обновлено: 2026-07-26
 
-## Последнее (2026-07-26) — Fix: NameError при запуске характеристик
+## Последнее (2026-07-26) — Fix: unpack coroutine в характеристиках
+
+**Ошибка:** `WB …: cannot unpack non-iterable coroutine object`
+
+**Причина:** `_resolve_char_ids_by_subject` осталась `async`, вызывалась без `await`.
+
+**Исправлено:** сделана обычной sync-функцией.
+
+---
+
+## (2026-07-26) — Fix: NameError при запуске характеристик
 
 **Ошибка:** `NameError: _CATALOG_MAX_PAGES is not defined` в `run_wb_bulk_chars_apply`.
 
