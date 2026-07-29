@@ -8138,6 +8138,286 @@
     }
   }
 
+  // ─── Черновики WB: дозаполнение характеристик ───────────────────────────────
+
+  let wbDraftsFillData = null; // результат ИИ-подбора (dry_run), для редактирования
+
+  function wbDraftsGetStoreIds() {
+    return getAutoMpStoreIds('wb-bulk-chars-store-list');
+  }
+
+  function wbDraftsSetBusy(busy) {
+    ['btn-wb-drafts-scan', 'btn-wb-drafts-ai', 'btn-wb-drafts-send'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (id === 'btn-wb-drafts-scan') { el.disabled = busy; return; }
+      if (id === 'btn-wb-drafts-ai') { el.disabled = busy || !wbDraftsFillData; return; }
+      if (id === 'btn-wb-drafts-send') { el.disabled = busy || !wbDraftsFillData; return; }
+    });
+  }
+
+  function wbDraftsUpdateButtons() {
+    const aiBtn = document.getElementById('btn-wb-drafts-ai');
+    const sendBtn = document.getElementById('btn-wb-drafts-send');
+    if (aiBtn) aiBtn.disabled = !wbDraftsFillData;
+    if (sendBtn) sendBtn.disabled = !wbDraftsFillData;
+  }
+
+  /** Рендер таблицы скана (только просмотр — что пустое) */
+  function renderWbDraftsScanResult(result) {
+    const box = document.getElementById('wb-drafts-scan-result');
+    if (!box) return;
+    const stores = result?.stores || [];
+    if (!stores.length) { box.hidden = true; box.innerHTML = ''; return; }
+    const parts = [];
+    let totalDrafts = 0;
+    for (const st of stores) {
+      totalDrafts += Number(st.draft_count) || 0;
+      const title = escapeHtml(st.store_name || st.store_id || 'Магазин');
+      if (st.error) {
+        parts.push(`<h4 class="compliance-result-store">${title}</h4><p class="text-error">${escapeHtml(st.error)}</p>`);
+        continue;
+      }
+      const cnt = Number(st.draft_count) || 0;
+      const miss = Number(st.with_missing_required) || 0;
+      parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
+      if (!cnt) { parts.push('<p class="form-hint">Черновиков не найдено.</p>'); continue; }
+      parts.push(`<p class="form-hint">Черновиков: ${cnt}, с пустыми обязательными полями: ${miss}</p>`);
+      parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Категория</th><th>Название</th><th>Ошибки WB</th><th>Пустые обязательные поля</th></tr></thead><tbody>');
+      for (const r of (st.rows || []).slice(0, 200)) {
+        const errs = (r.wb_errors || []).map(escapeHtml).join('<br>') || '—';
+        const fields = (r.missing_required || []).map((m) => {
+          const n = m.name || `id ${m.charc_id}`;
+          return m.unit_name ? `${n} (${m.unit_name})` : n;
+        }).join('; ') || '—';
+        parts.push(`<tr>
+          <td>${escapeHtml(r.vendor_code)}</td>
+          <td>${r.nm_id || '—'}</td>
+          <td>${escapeHtml(r.subject_name || '')}</td>
+          <td>${escapeHtml((r.title || '').slice(0, 80))}</td>
+          <td class="text-error">${errs}</td>
+          <td>${escapeHtml(fields)}</td>
+        </tr>`);
+      }
+      if ((st.rows || []).length > 200) parts.push(`<tr><td colspan="6">…ещё ${st.rows.length - 200}</td></tr>`);
+      parts.push('</tbody></table>');
+    }
+    box.innerHTML = parts.join('');
+    box.hidden = !parts.length;
+    // Сохраняем данные скана чтобы потом можно было запустить ИИ
+    wbDraftsFillData = totalDrafts > 0 ? { _scanResult: result } : null;
+    wbDraftsUpdateButtons();
+  }
+
+  /** Рендер редактируемой таблицы после ИИ-подбора */
+  function renderWbDraftsFillTable(result) {
+    const wrap = document.getElementById('wb-drafts-fill-table');
+    if (!wrap) return;
+    const stores = result?.stores || [];
+    const parts = [];
+    parts.push('<p class="form-hint" style="font-weight:600">Подобранные ИИ значения — отредактируйте при необходимости и нажмите «Отправить на WB»</p>');
+
+    let rowIndex = 0;
+    for (const st of stores) {
+      if (st.error) continue;
+      const rows = (st.rows || []).filter((r) => (r.ai_fills || []).length && r.status !== 'skipped');
+      if (!rows.length) continue;
+      const title = escapeHtml(st.store_name || st.store_id || 'Магазин');
+      parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
+      parts.push('<table class="items-table compliance-result-table"><thead><tr><th style="width:2rem"></th><th>Артикул</th><th>Название</th><th>Поле</th><th>Значение (редактируемо)</th><th>Уверенность</th></tr></thead><tbody>');
+      for (const r of rows) {
+        for (const f of (r.ai_fills || [])) {
+          const usable = f.value != null && String(f.value).trim() !== '';
+          const conf = f.confidence || 'medium';
+          const confClass = conf === 'high' ? 'text-success' : conf === 'low' ? 'text-error' : '';
+          const inputId = `wb-drafts-fill-val-${rowIndex}`;
+          const cbId = `wb-drafts-fill-cb-${rowIndex}`;
+          parts.push(`<tr data-store-id="${st.store_id}" data-vendor="${escapeHtml(r.vendor_code)}" data-charc-id="${f.charc_id}" data-row="${rowIndex}">
+            <td><input type="checkbox" id="${cbId}" class="wb-drafts-fill-cb" data-row="${rowIndex}" ${usable ? 'checked' : ''}></td>
+            <td>${escapeHtml(r.vendor_code)}</td>
+            <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(r.title || '')}">${escapeHtml((r.title || '').slice(0, 50))}</td>
+            <td>${escapeHtml(f.name || `id ${f.charc_id}`)}${f.unit_name ? ` <span class="text-muted">(${escapeHtml(f.unit_name)})</span>` : ''}</td>
+            <td><input type="text" id="${inputId}" class="wb-drafts-fill-input input-sm" data-row="${rowIndex}" value="${escapeHtml(String(f.value ?? ''))}"></td>
+            <td class="${confClass}">${escapeHtml(conf)}</td>
+          </tr>`);
+          rowIndex++;
+        }
+      }
+      parts.push('</tbody></table>');
+    }
+
+    if (rowIndex === 0) {
+      wrap.innerHTML = '<p class="form-hint text-error">ИИ не смог подобрать значения ни для одного поля.</p>';
+      wrap.hidden = false;
+      wbDraftsFillData = null;
+      wbDraftsUpdateButtons();
+      return;
+    }
+
+    parts.push('<p class="form-hint" style="margin-top:.5rem">Снимите галочку со строк, которые не нужно отправлять.</p>');
+    wrap.innerHTML = parts.join('');
+    wrap.hidden = false;
+    // Сохраняем результат — соберём payload из таблицы при отправке
+    wbDraftsFillData = { _fillResult: result };
+    wbDraftsUpdateButtons();
+  }
+
+  /** Собрать payload из редактируемой таблицы */
+  function wbDraftsBuildSendPayload() {
+    const rows = document.querySelectorAll('#wb-drafts-fill-table tr[data-row]');
+    const byStore = {};
+    rows.forEach((tr) => {
+      const rowIdx = tr.getAttribute('data-row');
+      const cb = document.getElementById(`wb-drafts-fill-cb-${rowIdx}`);
+      if (!cb || !cb.checked) return;
+      const storeId = Number(tr.getAttribute('data-store-id')) || 0;
+      const vendor = tr.getAttribute('data-vendor') || '';
+      const charcId = Number(tr.getAttribute('data-charc-id')) || 0;
+      const input = document.getElementById(`wb-drafts-fill-val-${rowIdx}`);
+      const value = input ? input.value.trim() : '';
+      if (!storeId || !vendor || !charcId || value === '') return;
+      const key = `${storeId}__${vendor}`;
+      if (!byStore[key]) byStore[key] = { store_id: storeId, vendor_code: vendor, characteristics: [] };
+      // Получим meta из оригинальных данных
+      const fillResult = wbDraftsFillData?._fillResult;
+      const st = (fillResult?.stores || []).find((s) => Number(s.store_id) === storeId);
+      const rowData = (st?.rows || []).find((r) => r.vendor_code === vendor);
+      const fillMeta = (rowData?.ai_fills || []).find((f) => f.charc_id === charcId) || {};
+      byStore[key].characteristics.push({
+        charc_id: charcId,
+        name: fillMeta.name || '',
+        unit_name: fillMeta.unit_name || '',
+        charc_type: fillMeta.charc_type,
+        value,
+        confidence: fillMeta.confidence || 'medium',
+      });
+    });
+    return Object.values(byStore);
+  }
+
+  async function runWbDraftsScan() {
+    const storeIds = wbDraftsGetStoreIds();
+    if (!storeIds.length) { toast('Выберите хотя бы один магазин WB', 'error'); return; }
+    wbDraftsFillData = null;
+    wbDraftsUpdateButtons();
+    document.getElementById('wb-drafts-fill-table').hidden = true;
+    wbDraftsSetBusy(true);
+    try {
+      const res = await api('/wb/certificates/drafts-scan', {
+        method: 'POST',
+        body: JSON.stringify({ store_ids: storeIds, vendor_codes: [] }),
+      });
+      pollItemsTask(res.task_id, 'wb-drafts', {
+        label: `Черновики WB (${storeIds.length} магаз.)…`,
+        onFinish: () => wbDraftsSetBusy(false),
+        onDone: (result) => {
+          renderWbDraftsScanResult(result);
+          const cnt = (result?.stores || []).reduce((a, s) => a + (Number(s.draft_count) || 0), 0);
+          toast(cnt ? `Найдено черновиков: ${cnt} — нажмите «Подобрать ИИ»` : 'Черновиков с незаполненными полями не найдено');
+        },
+      });
+    } catch (err) {
+      wbDraftsSetBusy(false);
+      toast(err.message || 'Ошибка', 'error');
+    }
+  }
+
+  async function runWbDraftsAi() {
+    const storeIds = wbDraftsGetStoreIds();
+    if (!storeIds.length) { toast('Выберите хотя бы один магазин WB', 'error'); return; }
+    wbDraftsSetBusy(true);
+    try {
+      const res = await api('/wb/certificates/drafts-fill', {
+        method: 'POST',
+        body: JSON.stringify({ store_ids: storeIds, vendor_codes: [], dry_run: true, fills: [] }),
+      });
+      pollItemsTask(res.task_id, 'wb-drafts', {
+        label: `ИИ подбор для черновиков (${storeIds.length} магаз.)…`,
+        onFinish: () => wbDraftsSetBusy(false),
+        onDone: (result) => {
+          renderWbDraftsFillTable(result);
+          const cnt = (result?.stores || []).reduce((a, s) => a + (Number(s.prepared) || 0), 0);
+          toast(cnt ? `ИИ подобрал значения для ${cnt} карточек — проверьте и отредактируйте` : 'ИИ не смог подобрать значения');
+        },
+      });
+    } catch (err) {
+      wbDraftsSetBusy(false);
+      toast(err.message || 'Ошибка', 'error');
+    }
+  }
+
+  async function runWbDraftsSend() {
+    const fills = wbDraftsBuildSendPayload();
+    if (!fills.length) { toast('Нет строк для отправки (все сняты или пусты)', 'error'); return; }
+    // Группируем по store_id
+    const byStore = {};
+    fills.forEach((f) => {
+      if (!byStore[f.store_id]) byStore[f.store_id] = {};
+      byStore[f.store_id][f.vendor_code] = f.characteristics;
+    });
+    const storeIds = Object.keys(byStore).map(Number);
+    wbDraftsSetBusy(true);
+    try {
+      const res = await api('/wb/certificates/drafts-fill', {
+        method: 'POST',
+        body: JSON.stringify({
+          store_ids: storeIds,
+          vendor_codes: [],
+          dry_run: false,
+          fills: fills,
+        }),
+      });
+      pollItemsTask(res.task_id, 'wb-drafts', {
+        label: `Отправка черновиков на WB (${storeIds.length} магаз.)…`,
+        onFinish: () => wbDraftsSetBusy(false),
+        onDone: (result) => {
+          const sent = (result?.stores || []).reduce((a, s) => a + (Number(s.sent) || 0), 0);
+          toast(sent ? `Отправлено обновлений: ${sent}` : 'Отправка завершена — см. результат ниже');
+          // Показываем итоговый результат в таблице (обновляем статусы)
+          renderWbDraftsFillTableSentResult(result);
+          wbDraftsFillData = null;
+          wbDraftsUpdateButtons();
+        },
+      });
+    } catch (err) {
+      wbDraftsSetBusy(false);
+      toast(err.message || 'Ошибка', 'error');
+    }
+  }
+
+  /** После отправки — обновляем статусы строк в таблице */
+  function renderWbDraftsFillTableSentResult(result) {
+    const scanBox = document.getElementById('wb-drafts-scan-result');
+    if (scanBox) { scanBox.hidden = true; scanBox.innerHTML = ''; }
+    const wrap = document.getElementById('wb-drafts-fill-table');
+    if (!wrap) return;
+    const parts = [];
+    parts.push('<p class="form-hint" style="font-weight:600">Результат отправки на WB</p>');
+    for (const st of (result?.stores || [])) {
+      if (st.error) continue;
+      const rows = (st.rows || []).filter((r) => r.status && r.status !== 'skipped');
+      if (!rows.length) continue;
+      const title = escapeHtml(st.store_name || st.store_id || 'Магазин');
+      parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
+      parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>Статус</th><th>Поля</th><th>Сообщение</th></tr></thead><tbody>');
+      for (const r of rows) {
+        const statusClass = r.status === 'ok' ? 'text-success' : r.status === 'error' ? 'text-error' : '';
+        const fields = (r.ai_fills || []).map((f) => `${f.name || f.charc_id}: ${f.value}`).join('; ');
+        parts.push(`<tr>
+          <td>${escapeHtml(r.vendor_code)}</td>
+          <td class="${statusClass}">${escapeHtml(r.status || '')}</td>
+          <td>${escapeHtml(fields)}</td>
+          <td>${escapeHtml(r.message || '')}</td>
+        </tr>`);
+      }
+      parts.push('</tbody></table>');
+    }
+    wrap.innerHTML = parts.join('');
+    wrap.hidden = false;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+
   function loadWbBulkCharsPanel() {
     wireWbBulkCharsPanel();
     const wb = storesForMarketplace('wb');
@@ -8158,6 +8438,9 @@
     document.getElementById('btn-wb-bulk-chars-preview')?.addEventListener('click', () => { void runWbBulkCharsApply(true); });
     document.getElementById('btn-wb-bulk-chars-apply')?.addEventListener('click', () => { void runWbBulkCharsApply(false); });
     document.getElementById('btn-wb-bulk-chars-stop')?.addEventListener('click', () => { void stopWbBulkCharsBusy(); });
+    document.getElementById('btn-wb-drafts-scan')?.addEventListener('click', () => { void runWbDraftsScan(); });
+    document.getElementById('btn-wb-drafts-ai')?.addEventListener('click', () => { void runWbDraftsAi(); });
+    document.getElementById('btn-wb-drafts-send')?.addEventListener('click', () => { void runWbDraftsSend(); });
     document.querySelectorAll('[data-wb-bulk-preset]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const p = btn.getAttribute('data-wb-bulk-preset');

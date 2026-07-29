@@ -889,6 +889,20 @@
         </div>
         <div id="wb-bulk-chars-result" class="compliance-result" hidden></div>
       </div>
+
+      <!-- Черновики WB: дозаполнение характеристик -->
+      <div class="form-card form-card-wide" style="margin-top:1.5rem">
+        <p class="form-hint" style="font-weight:600;margin-bottom:.5rem">Черновики WB — дозаполнение обязательных характеристик</p>
+        <p class="form-hint">Найти товары в черновике из-за незаполненных обязательных полей, подобрать значения через ИИ, отредактировать и отправить на WB.</p>
+        <div class="compliance-actions" style="margin-bottom:.75rem">
+          <button type="button" class="btn btn-secondary" id="btn-wb-drafts-scan">Найти черновики</button>
+          <button type="button" class="btn btn-secondary" id="btn-wb-drafts-ai" disabled>Подобрать ИИ</button>
+          <button type="button" class="btn btn-primary" id="btn-wb-drafts-send" disabled>Отправить на WB</button>
+        </div>
+        <div class="progress-container" id="progress-wb-drafts" hidden></div>
+        <div id="wb-drafts-scan-result" class="compliance-result" hidden></div>
+        <div id="wb-drafts-fill-table" hidden></div>
+      </div>
     </section>
 
     <!-- Связки карточек WB / Ozon -->
@@ -1918,7 +1932,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=116"></script>
+  <script src="/static/app.js?v=117"></script>
   <script src="/static/card_links_master.js?v=8"></script>
 </body>
 </html>
