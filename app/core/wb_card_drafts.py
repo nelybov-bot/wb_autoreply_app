@@ -258,6 +258,8 @@ async def scan_card_drafts_for_store(
         card = card_by_vendor.get(vc_key)
         nm = 0
         title = ""
+        brand = ""
+        description = ""
         sid = int(entry.get("subject_id") or 0)
         subj_name = str(entry.get("subject_name") or "")
         missing: List[dict] = []

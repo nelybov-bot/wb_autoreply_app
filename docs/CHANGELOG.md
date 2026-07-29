@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-07-29 — Fix: UnboundLocalError brand при скане черновиков WB
+
+- В `scan_card_drafts_for_store` инициализированы `brand`/`description` до `if card`
+- Ошибка возникала, если артикул из `cards/error/list` не нашёлся в каталоге
+
+## 2026-07-29 — Черновики WB в панели «Характеристики»
+
+- Блок скана / ИИ-подбора / отправки с редактируемыми значениями в `panel-wb-bulk-chars`
+- `app.js?v=117`
+
 ## 2026-07-26 — Fix: unpack coroutine в bulk-chars (НДС)
 
 - `_resolve_char_ids_by_subject` больше не `async` (вызывалась без await → ошибка на магазине)

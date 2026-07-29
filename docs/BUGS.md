@@ -40,6 +40,12 @@
 - **Причина:** задача жива на сервере, фронт потерял `task_id`; 409 без owner; нет force-unlock
 - **Файлы:** `store_locks.py`, `tasks.py`, `server.py`, `app.js`, `index.html`
 
+### BUG-007: Скан черновиков WB — UnboundLocalError `brand`
+- **Статус:** `fixed` (2026-07-29)
+- **Симптом:** при «Найти черновики» на магазине — `cannot access local variable 'brand' where it is not associated with a value`
+- **Причина:** `brand`/`description` задавались только при найденной карточке, но всегда передавались в `CardDraftRow`
+- **Файлы:** `app/core/wb_card_drafts.py`
+
 ---
 
 ## Открытые — функциональность
