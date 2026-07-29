@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-07-29 — Fix: ИИ черновиков пустой при ошибках «Аромат»/«Объём»
+
+- Поля из текстов ошибок WB добавляются в `missing_required` даже без флага required в схеме
+- Fallback: полный каталог, если textSearch не нашёл карточки
+- `app.js?v=118`
+
 ## 2026-07-29 — Fix: UnboundLocalError brand при скане черновиков WB
 
 - В `scan_card_drafts_for_store` инициализированы `brand`/`description` до `if card`

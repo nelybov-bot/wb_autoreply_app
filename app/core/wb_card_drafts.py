@@ -167,6 +167,133 @@ def find_missing_required_characteristics(
     return missing
 
 
+_FIELD_FROM_ERROR_RE = re.compile(
+    r"Заполните\s+поле\s+[«\"']([^»\"']+)[»\"']",
+    re.IGNORECASE,
+)
+
+
+def _field_names_from_wb_errors(errors: List[str]) -> List[str]:
+    """Извлекает имена полей из текстов ошибок WB: «Заполните поле «Аромат средства»»."""
+    names: List[str] = []
+    seen: Set[str] = set()
+    for err in errors or []:
+        for m in _FIELD_FROM_ERROR_RE.finditer(str(err or "")):
+            name = (m.group(1) or "").strip()
+            key = name.casefold().replace("ё", "е")
+            if name and key not in seen:
+                seen.add(key)
+                names.append(name)
+    return names
+
+
+def _schema_char_by_name(charcs_schema: List[dict], name: str) -> Optional[dict]:
+    want = (name or "").casefold().replace("ё", "е").strip()
+    if not want:
+        return None
+    for sch in charcs_schema or []:
+        if not isinstance(sch, dict):
+            continue
+        sn = str(sch.get("name") or "").casefold().replace("ё", "е").strip()
+        if sn == want:
+            return sch
+    # частичное совпадение: «Объем» ↔ «Объем товара»
+    for sch in charcs_schema or []:
+        if not isinstance(sch, dict):
+            continue
+        sn = str(sch.get("name") or "").casefold().replace("ё", "е").strip()
+        if want in sn or sn in want:
+            return sch
+    return None
+
+
+def _missing_entry_from_schema(sch: dict, *, from_error: bool = False) -> dict:
+    return {
+        "charc_id": _charc_id(sch),
+        "name": str(sch.get("name") or "").strip(),
+        "unit_name": str(sch.get("unitName") or "").strip(),
+        "charc_type": sch.get("charcType"),
+        "required": bool(sch.get("required")) or from_error,
+        "is_required_for_create": bool(sch.get("isRequiredForCreate")) or from_error,
+        "from_wb_error": from_error,
+    }
+
+
+def merge_missing_from_wb_errors(
+    missing: List[dict],
+    wb_errors: List[str],
+    charcs_schema: List[dict],
+    card: Optional[dict] = None,
+) -> List[dict]:
+    """Добавляет поля из текстов ошибок WB, даже если схема не пометила их как required."""
+    by_id: Dict[int, dict] = {}
+    for m in missing or []:
+        try:
+            cid = int(m.get("charc_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if cid:
+            by_id[cid] = m
+
+    filled = _card_filled_charcs(card) if card else {}
+    for fname in _field_names_from_wb_errors(wb_errors):
+        sch = _schema_char_by_name(charcs_schema, fname)
+        if not sch:
+            continue
+        cid = _charc_id(sch)
+        if not cid or cid in filled or cid in by_id:
+            continue
+        by_id[cid] = _missing_entry_from_schema(sch, from_error=True)
+
+    out = list(by_id.values())
+    out.sort(key=lambda x: (x.get("name") or "").casefold())
+    return out
+
+
+async def _load_draft_cards_by_vendor(
+    client: WbContentClient,
+    vendor_list: List[str],
+    *,
+    progress_cb: Optional[ProgressCb] = None,
+) -> Dict[str, dict]:
+    """Сначала textSearch по артикулам; если не хватает — полный каталог (как в сертификатах)."""
+    from .packaging_dims import _build_card_index, _fetch_full_catalog_from_wb, _lookup_card
+
+    card_by_vendor: Dict[str, dict] = {}
+    if not vendor_list:
+        return card_by_vendor
+
+    if progress_cb:
+        progress_cb(1, 3, f"Поиск карточек ({len(vendor_list)})…")
+
+    cards = await client.list_cards_all(vendor_codes=vendor_list)
+    for card in cards:
+        vc = _norm_vendor(card.get("vendorCode") or card.get("supplierVendorCode") or "").casefold()
+        if vc and vc not in card_by_vendor:
+            card_by_vendor[vc] = card
+
+    missing = [v for v in vendor_list if v.casefold() not in card_by_vendor]
+    if not missing:
+        return card_by_vendor
+
+    if progress_cb:
+        progress_cb(
+            1,
+            3,
+            f"textSearch нашёл {len(card_by_vendor)}/{len(vendor_list)} — полный каталог…",
+        )
+    all_cards, _meta = await _fetch_full_catalog_from_wb(client, progress_cb=None)
+    by_vendor, by_nm_id, by_barcode = _build_card_index(all_cards)
+    for vc in vendor_list:
+        key = vc.casefold()
+        if key in card_by_vendor:
+            continue
+        card = _lookup_card(by_vendor, by_nm_id, by_barcode, vc)
+        if card:
+            card_by_vendor[key] = card
+    return card_by_vendor
+
+
 async def _load_charcs_cache(
     client: WbContentClient,
     subject_ids: Set[int],
@@ -223,15 +350,9 @@ async def scan_card_drafts_for_store(
         }
 
     vendor_list = [e["vendor_code"] for e in entries]
-    if progress_cb:
-        progress_cb(1, 3, f"Загрузка карточек ({len(vendor_list)})…")
-
-    cards = await client.list_cards_all(vendor_codes=vendor_list)
-    card_by_vendor: Dict[str, dict] = {}
-    for card in cards:
-        vc = _norm_vendor(card.get("vendorCode") or card.get("supplierVendorCode") or "").casefold()
-        if vc and vc not in card_by_vendor:
-            card_by_vendor[vc] = card
+    card_by_vendor = await _load_draft_cards_by_vendor(
+        client, vendor_list, progress_cb=progress_cb,
+    )
 
     subject_ids: Set[int] = set()
     for e in entries:
@@ -263,6 +384,7 @@ async def scan_card_drafts_for_store(
         sid = int(entry.get("subject_id") or 0)
         subj_name = str(entry.get("subject_name") or "")
         missing: List[dict] = []
+        wb_errs = list(entry.get("wb_errors") or [])
 
         if card:
             nm = int(card.get("nmID") or card.get("nmId") or 0)
@@ -281,6 +403,9 @@ async def scan_card_drafts_for_store(
             if schema:
                 missing = find_missing_required_characteristics(card, schema)
 
+        schema = charcs_cache.get(sid) or []
+        missing = merge_missing_from_wb_errors(missing, wb_errs, schema, card=card)
+
         rows.append(CardDraftRow(
             vendor_code=entry["vendor_code"],
             nm_id=nm,
@@ -289,7 +414,7 @@ async def scan_card_drafts_for_store(
             title=title,
             brand=brand,
             description=description,
-            wb_errors=list(entry.get("wb_errors") or []),
+            wb_errors=wb_errs,
             missing_required=missing,
             updated_at=str(entry.get("updated_at") or ""),
         ))
@@ -300,10 +425,12 @@ async def scan_card_drafts_for_store(
         progress_cb(3, 3, f"Готово: {len(rows)} черновиков")
 
     with_missing = sum(1 for r in rows if r.missing_required)
+    cards_found = sum(1 for r in rows if r.nm_id)
     return {
         "batches": len(batches),
         "draft_count": len(rows),
         "with_missing_required": with_missing,
+        "cards_found": cards_found,
         "rows": [r.to_dict() for r in rows],
     }
 
@@ -696,12 +823,9 @@ async def fill_card_drafts_for_store(
 
     client = WbContentClient(api_key, timeout_s=120.0)
     vendor_list = [str(r.get("vendor_code") or "") for r in rows_data if r.get("vendor_code")]
-    cards = await client.list_cards_all(vendor_codes=vendor_list)
-    card_by_vendor: Dict[str, dict] = {}
-    for card in cards:
-        vc = _norm_vendor(card.get("vendorCode") or card.get("supplierVendorCode") or "").casefold()
-        if vc and vc not in card_by_vendor:
-            card_by_vendor[vc] = card
+    card_by_vendor = await _load_draft_cards_by_vendor(
+        client, vendor_list, progress_cb=progress_cb,
+    )
 
     draft_rows: List[CardDraftRow] = []
     for r in rows_data:

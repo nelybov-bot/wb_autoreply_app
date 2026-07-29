@@ -8247,7 +8247,12 @@
     }
 
     if (rowIndex === 0) {
-      wrap.innerHTML = '<p class="form-hint text-error">ИИ не смог подобрать значения ни для одного поля.</p>';
+      const skipped = (result?.stores || []).reduce((a, s) => a + (s.rows || []).filter((r) => r.status === 'skipped').length, 0);
+      const drafts = (result?.stores || []).reduce((a, s) => a + (Number(s.draft_count) || (s.rows || []).length), 0);
+      const hint = skipped && drafts
+        ? `Черновиков: ${drafts}, но пустые обязательные поля не определены (пропущено ${skipped}). Повторите после обновления сервера.`
+        : 'ИИ не смог подобрать значения ни для одного поля.';
+      wrap.innerHTML = `<p class="form-hint text-error">${escapeHtml(hint)}</p>`;
       wrap.hidden = false;
       wbDraftsFillData = null;
       wbDraftsUpdateButtons();
