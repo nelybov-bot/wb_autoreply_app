@@ -50,6 +50,9 @@
 | `card_links_master_items` | Кэш карточек WB для мастера связок |
 | `card_links_master_bundles` | План связок мастера (до 29 SKU) |
 | `card_links_master_state` | Шаги, лог, время загрузки каталога |
+| `card_links_catalog_items` | Кэш каталога связок WB (по store_id) |
+| `card_links_catalog_groups` | Группы imtID в кэше каталога |
+| `card_links_catalog_meta` | Мета кэша: catalog_at, stale, count |
 
 ### Потокобезопасность
 
@@ -110,6 +113,7 @@
 2. **Группировка:** `group_wb_rows` (по imtID), `group_ozon_rows` (по model_name / related_sku)
 3. **Статус linked:** `apply_link_status` — linked только при 2+ SKU в группе
 4. **Предложения:**
+   - `suggest_wb_singles` — **WB одиночки**: attach_batch с лимитом слотов, new_link для жёстко похожих; фасовки 1/2/3 атомами; без relocate
    - `suggest_link_candidates` — новые связки (похожие названия)
    - `suggest_attach_to_groups` — одиночки → существующие связки
    - `group_attach_suggestions` — пулы attach в одну связку
@@ -118,8 +122,9 @@
 5. **Операции:** `wb_merge_cards`, `wb_disconnect_cards`, `ozon_link_by_model`, `ozon_unlink_cards`, `link_ozon_tms_qty_groups`
 6. **ИИ:** `ai_suggest_card_links`
 7. **Сортировка каталога:** `sort_catalog_rows` (категория → связки → одиночки)
+8. **Кэш каталога WB:** таблицы `card_links_catalog_*` (`clc_*` в `db.py`), отдельно от мастера
 
-Эвристики сопоставления названий: `_title_base_key`, `_titles_related_enough`, `_item_matches_group`, `_item_matches_group_attach`.
+Эвристики сопоставления названий: `_title_base_key`, `_titles_related_enough`, `_titles_strictly_similar`, `_item_matches_group`, `_item_matches_group_attach`.
 
 Лимит: `MAX_LINK_ITEMS = 30`.
 

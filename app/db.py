@@ -427,6 +427,60 @@ class Database:
                 "ON card_links_master_items(store_id, bundle_id)"
             )
             c.execute("""
+                CREATE TABLE IF NOT EXISTS card_links_catalog_items (
+                    store_id INTEGER NOT NULL,
+                    nm_id INTEGER NOT NULL,
+                    vendor_code TEXT NOT NULL DEFAULT '',
+                    imt_id INTEGER NOT NULL DEFAULT 0,
+                    subject_id INTEGER NOT NULL DEFAULT 0,
+                    subject_name TEXT NOT NULL DEFAULT '',
+                    parent_id INTEGER NOT NULL DEFAULT 0,
+                    parent_name TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    brand TEXT NOT NULL DEFAULT '',
+                    linked INTEGER NOT NULL DEFAULT 0,
+                    link_group_id TEXT NOT NULL DEFAULT '',
+                    row_json TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (store_id, nm_id)
+                )
+            """)
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS card_links_catalog_groups (
+                    store_id INTEGER NOT NULL,
+                    group_id TEXT NOT NULL,
+                    group_label TEXT NOT NULL DEFAULT '',
+                    item_count INTEGER NOT NULL DEFAULT 0,
+                    linked INTEGER NOT NULL DEFAULT 0,
+                    subject_id INTEGER NOT NULL DEFAULT 0,
+                    group_json TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (store_id, group_id)
+                )
+            """)
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS card_links_catalog_meta (
+                    store_id INTEGER PRIMARY KEY,
+                    catalog_at TEXT NOT NULL DEFAULT '',
+                    count INTEGER NOT NULL DEFAULT 0,
+                    unlinked_count INTEGER NOT NULL DEFAULT 0,
+                    linked_groups INTEGER NOT NULL DEFAULT 0,
+                    source TEXT NOT NULL DEFAULT 'wb',
+                    partial INTEGER NOT NULL DEFAULT 0,
+                    stale INTEGER NOT NULL DEFAULT 0,
+                    meta_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                )
+            """)
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_clc_items_store_linked "
+                "ON card_links_catalog_items(store_id, linked)"
+            )
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_clc_items_store_imt "
+                "ON card_links_catalog_items(store_id, imt_id)"
+            )
+            c.execute("""
                 CREATE TABLE IF NOT EXISTS packaging_dims_cards (
                     store_id INTEGER NOT NULL,
                     vendor_code TEXT NOT NULL,
@@ -2420,6 +2474,213 @@ class Database:
                 "singles": int(solo["n"]) if solo else 0,
                 "bundles": int(bundles["n"]) if bundles else 0,
             }
+
+    # ---------- Card links catalog cache (WB) ----------
+    def clc_clear_store(self, store_id: int) -> None:
+        with _DB_LOCK:
+            sid = int(store_id)
+            self._conn.execute("DELETE FROM card_links_catalog_items WHERE store_id=?", (sid,))
+            self._conn.execute("DELETE FROM card_links_catalog_groups WHERE store_id=?", (sid,))
+            self._conn.execute("DELETE FROM card_links_catalog_meta WHERE store_id=?", (sid,))
+            self._conn.commit()
+
+    def clc_save_catalog(
+        self,
+        store_id: int,
+        rows: list[dict],
+        groups: list[dict],
+        *,
+        catalog_meta: Optional[dict] = None,
+        source: str = "wb",
+    ) -> dict:
+        """Сохранить каталог WB + группы связок для магазина."""
+        ts = utc_now_iso()
+        sid = int(store_id)
+        cm = catalog_meta or {}
+        unlinked = sum(1 for r in rows if not r.get("linked"))
+        linked_groups = sum(1 for g in groups if g.get("linked"))
+        meta_out = {
+            "store_id": sid,
+            "catalog_at": ts,
+            "count": len(rows),
+            "unlinked_count": unlinked,
+            "linked_groups": linked_groups,
+            "source": (source or "wb").strip() or "wb",
+            "partial": 1 if cm.get("partial") or cm.get("truncated") else 0,
+            "stale": 0,
+            "meta_json": {
+                k: cm.get(k)
+                for k in (
+                    "scope",
+                    "truncated",
+                    "partial",
+                    "missing_count",
+                    "wb_error_status",
+                    "partial_message",
+                )
+                if cm.get(k) is not None
+            },
+            "updated_at": ts,
+        }
+        with _DB_LOCK:
+            self._conn.execute("DELETE FROM card_links_catalog_items WHERE store_id=?", (sid,))
+            self._conn.execute("DELETE FROM card_links_catalog_groups WHERE store_id=?", (sid,))
+            for r in rows:
+                nid = int(r.get("nm_id") or 0)
+                if not nid:
+                    continue
+                self._conn.execute(
+                    """INSERT INTO card_links_catalog_items(
+                        store_id, nm_id, vendor_code, imt_id, subject_id, subject_name,
+                        parent_id, parent_name, title, brand, linked, link_group_id,
+                        row_json, updated_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        sid,
+                        nid,
+                        str(r.get("vendor_code") or ""),
+                        int(r.get("imt_id") or 0),
+                        int(r.get("subject_id") or 0),
+                        str(r.get("subject_name") or ""),
+                        int(r.get("parent_id") or 0),
+                        str(r.get("parent_name") or ""),
+                        str(r.get("title") or "")[:240],
+                        str(r.get("brand") or ""),
+                        1 if r.get("linked") else 0,
+                        str(r.get("link_group_id") or r.get("imt_id") or ""),
+                        json.dumps(r, ensure_ascii=False, default=str),
+                        ts,
+                    ),
+                )
+            for g in groups:
+                gid = str(g.get("group_id") or "").strip()
+                if not gid or gid == "__unlinked__":
+                    continue
+                self._conn.execute(
+                    """INSERT INTO card_links_catalog_groups(
+                        store_id, group_id, group_label, item_count, linked,
+                        subject_id, group_json, updated_at
+                    ) VALUES (?,?,?,?,?,?,?,?)""",
+                    (
+                        sid,
+                        gid,
+                        str(g.get("group_label") or "")[:240],
+                        int(g.get("count") or len(g.get("items") or [])),
+                        1 if g.get("linked") else 0,
+                        int(g.get("subject_id") or 0),
+                        json.dumps(g, ensure_ascii=False, default=str),
+                        ts,
+                    ),
+                )
+            self._conn.execute(
+                """INSERT INTO card_links_catalog_meta(
+                    store_id, catalog_at, count, unlinked_count, linked_groups,
+                    source, partial, stale, meta_json, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(store_id) DO UPDATE SET
+                    catalog_at=excluded.catalog_at,
+                    count=excluded.count,
+                    unlinked_count=excluded.unlinked_count,
+                    linked_groups=excluded.linked_groups,
+                    source=excluded.source,
+                    partial=excluded.partial,
+                    stale=excluded.stale,
+                    meta_json=excluded.meta_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    sid,
+                    meta_out["catalog_at"],
+                    meta_out["count"],
+                    meta_out["unlinked_count"],
+                    meta_out["linked_groups"],
+                    meta_out["source"],
+                    meta_out["partial"],
+                    0,
+                    json.dumps(meta_out["meta_json"], ensure_ascii=False),
+                    ts,
+                ),
+            )
+            self._conn.commit()
+        return meta_out
+
+    def clc_get_meta(self, store_id: int) -> dict:
+        with _DB_LOCK:
+            row = self._conn.execute(
+                """SELECT store_id, catalog_at, count, unlinked_count, linked_groups,
+                          source, partial, stale, meta_json, updated_at
+                   FROM card_links_catalog_meta WHERE store_id=?""",
+                (int(store_id),),
+            ).fetchone()
+            if not row:
+                return {}
+            extra = {}
+            try:
+                extra = json.loads(row["meta_json"] or "{}")
+            except Exception:
+                extra = {}
+            return {
+                "store_id": int(row["store_id"]),
+                "catalog_at": str(row["catalog_at"] or ""),
+                "count": int(row["count"] or 0),
+                "unlinked_count": int(row["unlinked_count"] or 0),
+                "linked_groups": int(row["linked_groups"] or 0),
+                "source": str(row["source"] or "wb"),
+                "partial": bool(int(row["partial"] or 0)),
+                "stale": bool(int(row["stale"] or 0)),
+                "updated_at": str(row["updated_at"] or ""),
+                "extra": extra if isinstance(extra, dict) else {},
+            }
+
+    def clc_mark_stale(self, store_id: int, stale: bool = True) -> None:
+        with _DB_LOCK:
+            self._conn.execute(
+                """UPDATE card_links_catalog_meta SET stale=?, updated_at=?
+                   WHERE store_id=?""",
+                (1 if stale else 0, utc_now_iso(), int(store_id)),
+            )
+            self._conn.commit()
+
+    def clc_load_items(self, store_id: int) -> list[dict]:
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                """SELECT row_json FROM card_links_catalog_items
+                   WHERE store_id=? ORDER BY subject_name, brand, title""",
+                (int(store_id),),
+            )
+            out: list[dict] = []
+            for row in cur.fetchall():
+                try:
+                    out.append(json.loads(row["row_json"] or "{}"))
+                except Exception:
+                    pass
+            return out
+
+    def clc_load_groups(self, store_id: int) -> list[dict]:
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                """SELECT group_json FROM card_links_catalog_groups
+                   WHERE store_id=? ORDER BY linked DESC, item_count DESC""",
+                (int(store_id),),
+            )
+            out: list[dict] = []
+            for row in cur.fetchall():
+                try:
+                    out.append(json.loads(row["group_json"] or "{}"))
+                except Exception:
+                    pass
+            return out
+
+    def clc_load_catalog(self, store_id: int) -> dict:
+        """Каталог из кэша: items, groups, meta. Пустой meta → кэша нет."""
+        meta = self.clc_get_meta(store_id)
+        if not meta:
+            return {"items": [], "groups": [], "meta": {}}
+        return {
+            "items": self.clc_load_items(store_id),
+            "groups": self.clc_load_groups(store_id),
+            "meta": meta,
+        }
 
     # ---------- Packaging dims WB catalog cache ----------
     def packaging_dims_cache_meta(self, store_id: int) -> dict:

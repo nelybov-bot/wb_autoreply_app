@@ -3025,7 +3025,9 @@
   const MAX_LINK_ITEMS = 30;
   const CARD_LINKS_ACTION_COOLDOWN_MS = 3000;
   let cardLinksData = { items: [], groups: [], candidates: [], attach_suggestions: [], review_suggestions: [], combine_suggestions: [], ai_suggestions: [], ai_bundles: [], ai_meta: {}, catalog_meta: {} };
-  let cardLinksView = 'catalog';
+  let cardLinksView = 'singles';
+  /** @type {'list'|'suggest'} список несвязанных | предложения после «Подобрать» */
+  let cardLinksSinglesMode = 'list';
   let _cardLinksActionBusy = false;
   let _cardLinksCooldownUntil = 0;
   const cardLinksSelectedApply = new Set();
@@ -3082,21 +3084,8 @@
     renderCardLinksTable();
   }
 
-  const CARD_LINKS_MAX_PAGES_OPTS = {
-    wb: [
-      { v: 30, label: '3 000' },
-      { v: 60, label: '6 000' },
-      { v: 100, label: '10 000 (рекомендуется)' },
-      { v: 150, label: '15 000 (макс.)' },
-    ],
-    ozon: [
-      { v: 5, label: '5 000' },
-      { v: 15, label: '15 000 (рекомендуется)' },
-      { v: 30, label: '30 000' },
-      { v: 100, label: '100 000 (макс.)' },
-    ],
-  };
-  let _cardLinksMaxPagesByMp = { wb: 100, ozon: 15 };
+  const CARD_LINKS_WB_MAX_PAGES = 150; // 15 000 карточек
+  const CARD_LINKS_OZON_MAX_PAGES = 15; // ~15 000
   let _cardLinksCatalogSearch = '';
   const CARD_LINKS_WORK_FILTERS_KEY = 'card_links_work_filters';
   let _cardLinksWorkFilters = {
@@ -3154,46 +3143,21 @@
     document.querySelectorAll('.card-links-full-only').forEach((el) => {
       el.hidden = only;
     });
-    const maxPagesLbl = document.querySelector('.card-links-max-pages-label');
-    if (maxPagesLbl) maxPagesLbl.hidden = only;
     const desc = document.querySelector('#panel-card-links .panel-desc');
     if (desc) {
       desc.textContent = only
         ? 'Загрузите список артикулов — связки только между этими карточками'
-        : 'Загрузите каталог — связывайте по предложениям или вручную из каталога';
+        : 'Загрузка каталога до 15 000 карточек — связывайте из вкладок Одиночки / Каталог';
     }
     persistCardLinksScopeSettings();
   }
 
   function cardLinksMaxPages() {
-    const mp = cardLinksMarketplace();
-    const el = document.getElementById('card-links-max-pages');
-    if (el && el.value) {
-      const v = Number(el.value);
-      if (Number.isFinite(v) && v > 0) {
-        _cardLinksMaxPagesByMp[mp] = v;
-        return v;
-      }
-    }
-    return _cardLinksMaxPagesByMp[mp] || (mp === 'ozon' ? 30 : 100);
+    return cardLinksMarketplace() === 'ozon' ? CARD_LINKS_OZON_MAX_PAGES : CARD_LINKS_WB_MAX_PAGES;
   }
 
   function syncCardLinksMaxPagesSelect() {
-    const mp = cardLinksMarketplace();
-    const sel = document.getElementById('card-links-max-pages');
-    const cap = document.getElementById('card-links-max-pages-caption');
-    if (!sel) return;
-    const opts = CARD_LINKS_MAX_PAGES_OPTS[mp] || CARD_LINKS_MAX_PAGES_OPTS.wb;
-    const prev = _cardLinksMaxPagesByMp[mp] || opts.find((o) => /рекомендуется/.test(o.label))?.v || opts[0].v;
-    sel.innerHTML = opts.map((o) => `<option value="${o.v}">${escapeHtml(o.label)}</option>`).join('');
-    const has = opts.some((o) => o.v === prev);
-    sel.value = String(has ? prev : opts[0].v);
-    _cardLinksMaxPagesByMp[mp] = Number(sel.value);
-    if (cap) {
-      cap.textContent = mp === 'ozon'
-        ? 'Страниц каталога Ozon (×1000 карточек)'
-        : 'Страниц каталога WB (×100 карточек)';
-    }
+    /* глубина фиксирована: WB 15k / Ozon ~15k */
   }
   window.cardLinksMaxPages = cardLinksMaxPages;
 
@@ -3356,11 +3320,11 @@
   function syncCardLinksWorkFilterBar() {
     const bar = document.getElementById('card-links-work-filter');
     const hasData = (cardLinksData.items || []).length > 0;
-    const show = hasData && cardLinksView !== 'guide';
+    const show = hasData && cardLinksView !== 'guide' && cardLinksView !== 'master';
     if (bar) {
       bar.hidden = !show;
       if (show && bar.tagName === 'DETAILS') {
-        bar.open = cardLinksView === 'catalog' || cardLinksView === 'review';
+        bar.open = cardLinksView === 'catalog' || cardLinksView === 'review' || cardLinksIsSinglesListMode();
       }
     }
     if (!show) return;
@@ -3901,7 +3865,8 @@
   }
 
   function cardLinksAfterMergeHint() {
-    toast('Готово. Нажмите «Обновить» когда нужен актуальный каталог.', 'info');
+    if (cardLinksData.cache_meta) cardLinksData.cache_meta.stale = true;
+    toast('Готово. Каталог на диске устарел — нажмите «Обновить» или «Проверить одиночки» с «Обновить с WB».', 'info');
   }
 
   function cardLinksCatalogStatusSuffix(meta) {
@@ -3915,7 +3880,7 @@
         parts.push(`не найдено: ${m.missing_count}`);
       }
     } else if (m.truncated) {
-      parts.push(`загружено не всё (лимит ${m.max_pages || '?'} стр.) — увеличьте глубину`);
+      parts.push(`загружено не всё (лимит 15 000) — на WB больше карточек`);
     } else if (m.pages_fetched) {
       const pageSize = m.page_size || (cardLinksMarketplace() === 'ozon' ? 1000 : 100);
       parts.push(`${m.pages_fetched} стр. API ×${pageSize}`);
@@ -3930,6 +3895,56 @@
     return String(document.getElementById('card-links-marketplace')?.value || 'wb').trim();
   }
 
+  function cardLinksIsSinglesView() {
+    return cardLinksView === 'singles' || cardLinksView === 'candidates';
+  }
+
+  function cardLinksIsSinglesListMode() {
+    return cardLinksIsSinglesView() && cardLinksSinglesMode === 'list';
+  }
+
+  function cardLinksIsSinglesSuggestMode() {
+    return cardLinksIsSinglesView() && cardLinksSinglesMode === 'suggest';
+  }
+
+  function cardLinksUnlinkedItems() {
+    return (cardLinksData.items || []).filter((r) => !r.linked);
+  }
+
+  function syncCardLinksSinglesModeButtons() {
+    document.querySelectorAll('.card-links-singles-mode').forEach((btn) => {
+      btn.classList.toggle('active', btn.getAttribute('data-singles-mode') === cardLinksSinglesMode);
+    });
+  }
+
+  function setCardLinksSinglesMode(mode) {
+    cardLinksSinglesMode = mode === 'suggest' ? 'suggest' : 'list';
+    syncCardLinksSinglesModeButtons();
+  }
+
+  function syncCardLinksKpi() {
+    const kpi = document.getElementById('card-links-kpi');
+    const items = cardLinksData.items || [];
+    if (!kpi) return;
+    if (!items.length) {
+      kpi.hidden = true;
+      return;
+    }
+    kpi.hidden = false;
+    const unlinked = items.filter((r) => !r.linked).length;
+    const groups = (cardLinksData.groups || []).filter((g) => {
+      const id = String(g.group_id || '');
+      return id && id !== '__unlinked__' && Number(g.count || (g.items || []).length || 0) >= 2;
+    }).length;
+    const set = (id, v) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = String(v);
+    };
+    set('card-links-kpi-total-val', items.length);
+    set('card-links-kpi-unlinked-val', unlinked);
+    set('card-links-kpi-groups-val', groups);
+  }
+
   function syncCardLinksMarketplaceUI() {
     const mp = cardLinksMarketplace();
     const wbOnly = document.querySelectorAll('.card-links-wb-only');
@@ -3937,6 +3952,12 @@
     wbOnly.forEach(el => { el.hidden = mp !== 'wb'; });
     ozOnly.forEach(el => { el.hidden = mp !== 'ozon'; });
     syncCardLinksMaxPagesSelect();
+    if (mp !== 'wb' && cardLinksIsSinglesView()) {
+      cardLinksView = 'catalog';
+    } else if (mp === 'wb' && cardLinksView === 'catalog' && !(cardLinksData.items || []).length) {
+      cardLinksView = 'singles';
+      setCardLinksSinglesMode('list');
+    }
   }
 
   function syncCardLinksStoreSelect() {
@@ -4918,7 +4939,12 @@
     }
     return pool
       .filter((c) => cardLinksCandidatePassesWorkFilters(c))
-      .filter((c) => cardLinksCanBulkApplyCandidate(c));
+      .filter((c) => cardLinksCanBulkApplyCandidate(c))
+      .filter((c) => {
+        if (!cardLinksIsSinglesView()) return true;
+        const k = c.kind || '';
+        return k === 'new_link' || k === 'attach' || k === 'attach_batch';
+      });
   }
 
   function cardLinksPruneSelectionSets() {
@@ -5029,6 +5055,51 @@
   function syncCardLinksApplyBar() {
     const bar = document.getElementById('card-links-apply-bar');
     const label = document.getElementById('card-links-apply-label');
+    const singlesBar = document.getElementById('card-links-singles-bar');
+    const singlesLabel = document.getElementById('card-links-singles-label');
+    const applyRow = document.getElementById('card-links-singles-apply-row');
+    if (cardLinksIsSinglesView()) {
+      if (bar) bar.hidden = true;
+      if (!singlesBar || !singlesLabel) return;
+      singlesBar.hidden = false;
+      syncCardLinksSinglesModeButtons();
+      const unlinkedN = cardLinksUnlinkedItems().length;
+      const available = cardLinksBulkApplyCandidates();
+      const cands = [...cardLinksSelectedApply]
+        .map((id) => findCardLinksCandidate(id))
+        .filter((c) => c && cardLinksCanBulkApplyCandidate(c));
+      if (cardLinksIsSinglesListMode()) {
+        if (applyRow) applyRow.hidden = true;
+        if (!(cardLinksData.items || []).length) {
+          singlesLabel.textContent = 'Сначала загрузите каталог.';
+        } else if (!unlinkedN) {
+          singlesLabel.textContent = 'Все карточки уже в связках.';
+        } else {
+          singlesLabel.textContent = `${unlinkedN} без связки. «Подобрать связки» — предложения привязок (без отвязки уже связанных).`;
+        }
+        return;
+      }
+      if (applyRow) applyRow.hidden = false;
+      const poolN = cands.filter((c) => c.kind === 'attach_batch' || c.kind === 'attach').length;
+      const newN = cands.filter((c) => c.kind === 'new_link').length;
+      const parts = [];
+      if (poolN) parts.push(`${poolN} в связку`);
+      if (newN) parts.push(`${newN} новых`);
+      if (cands.length) {
+        singlesLabel.textContent = `Выбрано ${cands.length}${parts.length ? `: ${parts.join(', ')}` : ''}`;
+      } else if (available.length) {
+        singlesLabel.textContent = `${available.length} предложений — отметьте и «Применить выбранные»`;
+      } else {
+        singlesLabel.textContent = unlinkedN
+          ? `${unlinkedN} без связки · нажмите «Подобрать связки»`
+          : 'Нет предложений — сначала загрузите каталог или подберите связки.';
+      }
+      const applyBtn = document.getElementById('btn-card-links-apply-run-singles');
+      if (applyBtn) applyBtn.disabled = cands.length < 1;
+      return;
+    }
+    if (singlesBar) singlesBar.hidden = true;
+    if (applyRow) applyRow.hidden = true;
     if (!bar || !label) return;
     const available = cardLinksBulkApplyCandidates();
     if (cardLinksView !== 'candidates' || !available.length) {
@@ -5520,7 +5591,7 @@
   function syncCardLinksCheckAllState() {
     const checkAll = document.getElementById('card-links-check-all');
     if (!checkAll) return;
-    if (cardLinksView === 'candidates') {
+    if (cardLinksIsSinglesSuggestMode() || cardLinksView === 'candidates') {
       const available = cardLinksBulkApplyCandidates();
       const selected = available.filter((c) => cardLinksSelectedApply.has(String(c.candidate_id || '')));
       checkAll.disabled = !available.length;
@@ -5562,10 +5633,19 @@
     renderCardLinksGuide();
     if (tableWrap) tableWrap.hidden = cardLinksView === 'guide' || cardLinksView === 'master';
     const masterPanel = document.getElementById('card-links-master-panel');
-    if (masterPanel) masterPanel.hidden = cardLinksView !== 'master';
+    if (masterPanel) {
+      masterPanel.hidden = cardLinksView !== 'master';
+      if (cardLinksView !== 'master') {
+        masterPanel.setAttribute('hidden', '');
+      } else {
+        masterPanel.removeAttribute('hidden');
+      }
+    }
     if (!table) return;
-    table.classList.toggle('card-links--candidates', cardLinksView === 'review' || cardLinksView === 'ai');
-    table.classList.toggle('card-links--catalog', cardLinksView === 'catalog');
+    const suggestMode = cardLinksIsSinglesSuggestMode() || cardLinksView === 'review' || cardLinksView === 'ai';
+    const catalogLike = cardLinksView === 'catalog' || cardLinksIsSinglesListMode();
+    table.classList.toggle('card-links--candidates', suggestMode && !catalogLike);
+    table.classList.toggle('card-links--catalog', catalogLike);
     table.classList.toggle('card-links--ai', cardLinksView === 'ai');
     const thead = table.querySelector('thead');
     if (thead) thead.hidden = cardLinksView === 'guide';
@@ -5577,6 +5657,34 @@
     syncCardLinksAiBar();
     syncCardLinksAiBadge();
     syncCardLinksAiPagination();
+    syncCardLinksApplyBar();
+    syncCardLinksSinglesBadge();
+    syncCardLinksKpi();
+    syncCardLinksNextHint();
+  }
+
+  function syncCardLinksNextHint() {
+    const el = document.getElementById('card-links-next-hint');
+    if (!el) return;
+    el.hidden = true;
+    el.innerHTML = '';
+  }
+
+  function syncCardLinksSinglesBadge() {
+    const badge = document.getElementById('card-links-singles-badge');
+    if (!badge) return;
+    const unlinked = cardLinksUnlinkedItems().length;
+    const sugN = cardLinksCandidateGroups().filter((c) => {
+      const k = c.kind || '';
+      return k === 'new_link' || k === 'attach' || k === 'attach_batch';
+    }).length;
+    const n = cardLinksIsSinglesSuggestMode() && sugN ? sugN : unlinked;
+    if (n > 0) {
+      badge.textContent = String(n);
+      badge.hidden = false;
+    } else {
+      badge.hidden = true;
+    }
   }
 
   function cardLinkCandidateBadge(c) {
@@ -5632,6 +5740,17 @@
       return cardLinksAiBundlesOnPage();
     } else if (cardLinksView === 'review') {
       list = sortCardLinksCandidates(cardLinksReviewGroups());
+    } else if (cardLinksIsSinglesView()) {
+      if (cardLinksIsSinglesListMode()) {
+        list = [];
+      } else {
+        const attach = cardLinksData.attach_suggestions || [];
+        const fresh = (cardLinksData.candidates || []).filter((c) => {
+          const k = c.kind || '';
+          return k === 'new_link' || k === 'attach' || k === 'attach_batch';
+        });
+        list = sortCardLinksCandidates([...attach, ...fresh]);
+      }
     } else {
       list = cardLinksCandidateGroups();
     }
@@ -5812,8 +5931,10 @@
     const mpId = mp === 'wb' ? (r.nm_id || '—') : (r.sku || '—');
     const brand = cardLinkItemBrand(r) || '—';
     const category = cardLinkItemCategory(r, mp) || '—';
-    const group = r.link_group_label || (r._group && r._group.group_label) || meta.groupLabel || '—';
-    const linkedCls = r.linked ? ' linked' : '';
+    const group = r.linked
+      ? (r.link_group_label || (r._group && r._group.group_label) || meta.groupLabel || '—')
+      : 'Без связки';
+    const linkedCls = r.linked ? ' linked' : ' unlinked';
     const bundleKey = r.linked ? String(r.link_group_id || r.imt_id || r.model_name || '') : '';
     const rowKey = mp === 'wb' ? `nm:${r.nm_id || idx}` : `off:${r.offer_id || idx}`;
     const cand = meta.candidate || {};
@@ -5852,11 +5973,16 @@
     syncCardLinksTableMode();
     let html = '';
 
-    if (cardLinksView === 'catalog') {
-      const allRows = (cardLinksData.items || []).map(it => ({ item: it, meta: {} }));
+    if (cardLinksView === 'catalog' || cardLinksIsSinglesListMode()) {
+      const sourceItems = cardLinksIsSinglesListMode()
+        ? cardLinksUnlinkedItems()
+        : (cardLinksData.items || []);
+      const allRows = sourceItems.map(it => ({ item: it, meta: {} }));
       const rows = cardLinksCatalogFilterRows(allRows.map((r) => r.item)).map((it) => ({ item: it, meta: {} }));
-      if (!allRows.length) {
-        tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">Нет данных — нажмите «Загрузить».</td></tr>';
+      if (!(cardLinksData.items || []).length) {
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">Нет данных — нажмите «Загрузить каталог».</td></tr>';
+      } else if (cardLinksIsSinglesListMode() && !sourceItems.length) {
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">Все карточки уже в связках — одиночек нет.</td></tr>';
       } else if (!rows.length) {
         tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">Ничего не найдено — измените фильтры или поиск.</td></tr>';
       } else {
@@ -5864,7 +5990,7 @@
         let lastUnlinkedCat = '';
         for (const row of rows) {
           const it = row.item;
-          if (it.linked) {
+          if (it.linked && !cardLinksIsSinglesListMode()) {
             const bundleKey = String(it.link_group_id || it.imt_id || it.model_name || '');
             if (bundleKey && bundleKey !== lastBundle) {
               lastBundle = bundleKey;
@@ -5901,7 +6027,9 @@
             ? 'Нажмите «Запустить перепроверку» — список не обновляется сам.'
             : cardLinksView === 'ai'
               ? 'Нет связок на этой странице — смените страницу или сбросьте фильтры.'
-              : 'Нет данных.';
+              : cardLinksIsSinglesView()
+                ? 'Нет предложений. Вернитесь к «Список без связки» или нажмите «Подобрать связки».'
+                : 'Нет данных.';
           tbody.innerHTML = `<tr><td colspan="8" class="empty-cell">${emptyMsg}</td></tr>`;
         }
       } else {
@@ -6076,11 +6204,10 @@
       : (articlesOnly
         ? `Загрузка ${articles.split(/[,;\n\r\t]+/).filter((x) => x.trim()).length} артикулов…`
         : (mp === 'wb'
-          ? `Запрос к WB Content API… (до ${cardLinksMaxPages()} стр., может занять несколько минут)`
-          : `Запрос к Ozon… (до ${cardLinksMaxPages()} стр.)`));
+          ? `Запрос к WB Content API… (до 15 000 карточек, может занять несколько минут)`
+          : `Запрос к Ozon… (до ~15 000)`));
     if (!opts.quiet) setPanelLoading('card-links-loading', true, loadingText);
     if (!opts.quiet) setCardLinksStatus('');
-    const prevView = cardLinksView;
     try {
       const data = await api(`/card-links/${mp}/${storeId}/catalog?${qs.toString()}`, {
         timeoutMs: 600000,
@@ -6097,6 +6224,8 @@
           combine_suggestions: data.combine_suggestions || [],
           ai_suggestions: cardLinksData.ai_suggestions || [],
           catalog_meta: data.catalog_meta || {},
+          cache_meta: data.cache_meta || data.catalog_meta || {},
+          singles_meta: cardLinksData.singles_meta || {},
         };
       } else {
         cardLinksData.review_suggestions = data.review_suggestions || [];
@@ -6114,19 +6243,25 @@
         toast(nr ? `Найдено ${nr} перепривязок` : 'Перепривязок не найдено', nr ? 'info' : 'success');
       }
       syncCardLinksReviewBadge();
-      if (!opts.quiet && !opts.reviewOnly && prevView) {
-        cardLinksView = prevView;
+      if (!opts.quiet && !opts.reviewOnly) {
+        if (mp === 'wb') {
+          cardLinksView = 'singles';
+          setCardLinksSinglesMode('list');
+        } else {
+          cardLinksView = 'catalog';
+        }
       }
       document.querySelectorAll('.card-links-tab').forEach(btn => {
         btn.classList.toggle('active', btn.getAttribute('data-cl-view') === cardLinksView);
       });
       if (data.catalog_meta?.truncated) {
-        toast('Загружены не все карточки — увеличьте «Страниц каталога» в настройках загрузки', 'error');
+        toast('Загружены не все карточки (лимит 15 000)', 'error');
       } else if (data.catalog_meta?.missing_count) {
         toast(`Не найдено артикулов: ${data.catalog_meta.missing_count}`, 'error');
       }
       loadCardLinksWorkFilters();
       syncCardLinksWorkFilterBar();
+      syncCardLinksKpi();
       renderCardLinksTable();
     } catch (e) {
       const msg = (e && e.message) ? e.message : 'Ошибка загрузки';
@@ -6493,6 +6628,118 @@
     } finally {
       setPanelLoading('card-links-loading', false);
       _cardLinksActionBusy = false;
+    }
+  }
+
+  let _cardLinksSinglesPoll = null;
+
+  function stopCardLinksSinglesPoll() {
+    if (_cardLinksSinglesPoll) {
+      clearInterval(_cardLinksSinglesPoll);
+      _cardLinksSinglesPoll = null;
+    }
+  }
+
+  function applyCardLinksSinglesResult(result) {
+    const data = result || {};
+    cardLinksSelectedApply.clear();
+    cardLinksData.candidates = data.candidates || [];
+    cardLinksData.attach_suggestions = data.attach_suggestions || [];
+    cardLinksData.combine_suggestions = [];
+    cardLinksData.singles_meta = data.meta || {};
+    if (data.items && data.items.length) {
+      cardLinksData.items = data.items;
+      cardLinksData.groups = data.groups || cardLinksData.groups;
+    }
+    if (data.cache_meta) cardLinksData.cache_meta = data.cache_meta;
+    const att = (cardLinksData.attach_suggestions || []).length;
+    const neu = (cardLinksData.candidates || []).length;
+    const meta = cardLinksData.singles_meta || {};
+    const src = meta.source === 'wb' ? 'с WB' : 'из кэша';
+    setCardLinksStatus(
+      `Одиночки (${src}): ${meta.singles_total ?? '—'} без связки · `
+      + `${att} привязок · ${neu} новых · без предложения: ${meta.uncovered ?? 0}`,
+    );
+    toast(
+      att || neu
+        ? `Найдено: ${att} привязок к связкам, ${neu} новых`
+        : 'Подходящих одиночек не найдено',
+      att || neu ? 'info' : 'success',
+    );
+    cardLinksView = 'singles';
+    setCardLinksSinglesMode('suggest');
+    syncCardLinksSinglesBadge();
+    syncCardLinksKpi();
+    renderCardLinksTable();
+  }
+
+  async function loadCardLinksCheckSingles() {
+    if (cardLinksMarketplace() !== 'wb') {
+      toast('Проверка одиночек доступна только для WB', 'error');
+      return;
+    }
+    const storeId = Number(document.getElementById('card-links-store')?.value || 0);
+    if (!storeId) {
+      setCardLinksStatus('Выберите магазин.');
+      return;
+    }
+    stopCardLinksSinglesPoll();
+    const forceRefresh = !!document.getElementById('card-links-singles-force-refresh')?.checked;
+    cardLinksView = 'singles';
+    setCardLinksSinglesMode('suggest');
+    renderCardLinksTable();
+    const progressEl = document.getElementById('card-links-singles-progress');
+    const { tracker } = startLinearProgress(
+      progressEl,
+      forceRefresh ? 'Обновление каталога WB…' : 'Проверка одиночек…',
+      forceRefresh ? 180000 : 45000,
+    );
+    try {
+      const res = await api(`/card-links/wb/${storeId}/check-singles`, {
+        method: 'POST',
+        body: JSON.stringify({
+          force_refresh: forceRefresh,
+          max_pages: cardLinksMaxPages(),
+        }),
+        timeoutMs: 120000,
+      });
+      if (!res.task_id) throw new Error('Сервер не вернул task_id');
+      const taskId = res.task_id;
+      await new Promise((resolve, reject) => {
+        _cardLinksSinglesPoll = setInterval(async () => {
+          try {
+            const state = await api('/tasks/' + taskId);
+            const detail = (state.detail || '').trim();
+            const [cur, total] = state.progress || [0, 1];
+            const safeTotal = Math.max(Number(total) || 0, 1);
+            const safeCur = Math.max(0, Math.min(Number(cur) || 0, safeTotal));
+            const pct = Math.round((safeCur / safeTotal) * 100);
+            if (tracker) {
+              tracker.update(pct, detail || `Шаг ${safeCur}/${safeTotal}`);
+            }
+            if (state.status === 'done') {
+              stopCardLinksSinglesPoll();
+              applyCardLinksSinglesResult(state.result || {});
+              endLinearProgress(progressEl, tracker);
+              resolve();
+            } else if (state.status === 'error' || state.status === 'cancelled') {
+              stopCardLinksSinglesPoll();
+              endLinearProgress(progressEl, tracker, {
+                error: state.error || (state.status === 'cancelled' ? 'Остановлено' : 'Ошибка'),
+              });
+              reject(new Error(state.error || (state.status === 'cancelled' ? 'Остановлено' : 'Ошибка')));
+            }
+          } catch (e) {
+            stopCardLinksSinglesPoll();
+            endLinearProgress(progressEl, tracker, { error: (e && e.message) || 'Ошибка' });
+            reject(e);
+          }
+        }, 800);
+      });
+    } catch (e) {
+      stopCardLinksSinglesPoll();
+      endLinearProgress(progressEl, tracker, { error: (e && e.message) || 'Ошибка' });
+      toast((e && e.message) ? e.message : 'Ошибка проверки одиночек', 'error');
     }
   }
 
@@ -8713,6 +8960,38 @@
       cardLinksSelectedApply.clear();
       renderCardLinksTable();
     });
+    document.getElementById('btn-card-links-singles-check')?.addEventListener('click', () => { void loadCardLinksCheckSingles(); });
+    document.getElementById('btn-card-links-apply-run-singles')?.addEventListener('click', () => { void runBulkApplyActions('Одиночки'); });
+    document.getElementById('btn-card-links-apply-select-all-singles')?.addEventListener('click', () => { cardLinksSelectAllApply(); });
+    document.getElementById('btn-card-links-apply-clear-singles')?.addEventListener('click', () => {
+      cardLinksSelectedApply.clear();
+      renderCardLinksTable();
+    });
+    document.querySelectorAll('.card-links-singles-mode').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        setCardLinksSinglesMode(btn.getAttribute('data-singles-mode') || 'list');
+        renderCardLinksTable();
+      });
+    });
+    document.querySelectorAll('[data-cl-goto]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const goto = btn.getAttribute('data-cl-goto') || 'catalog';
+        if (goto === 'singles') {
+          if (cardLinksMarketplace() !== 'wb') {
+            toast('Одиночки только для WB', 'error');
+            return;
+          }
+          cardLinksView = 'singles';
+          setCardLinksSinglesMode('list');
+        } else {
+          cardLinksView = 'catalog';
+        }
+        document.querySelectorAll('.card-links-tab').forEach((b) => {
+          b.classList.toggle('active', b.getAttribute('data-cl-view') === cardLinksView);
+        });
+        renderCardLinksTable();
+      });
+    });
     document.getElementById('btn-card-links-review-apply')?.addEventListener('click', () => { void runBulkReviewActions(); });
     document.getElementById('btn-card-links-review-select-all')?.addEventListener('click', () => { cardLinksSelectAllReview(); });
     document.getElementById('btn-card-links-review-clear')?.addEventListener('click', () => {
@@ -8831,7 +9110,7 @@
     });
     document.getElementById('card-links-check-all')?.addEventListener('change', (e) => {
       const on = !!e.target.checked;
-      if (cardLinksView === 'candidates') {
+      if (cardLinksIsSinglesSuggestMode() || cardLinksView === 'candidates') {
         if (on) cardLinksSelectAllApply();
         else {
           cardLinksSelectedApply.clear();

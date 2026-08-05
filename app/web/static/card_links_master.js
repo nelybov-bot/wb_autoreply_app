@@ -337,7 +337,7 @@
           const result = t.result || {};
           if (result.step === 'load' && result.meta?.truncated) {
             setStats(
-              `Загружено ${result.meta?.count || result.coverage?.total || '?'} — не всё: лимит ${result.meta?.max_pages || '?'} стр. Увеличьте «Страниц каталога WB» сверху.`,
+              `Загружено ${result.meta?.count || result.coverage?.total || '?'} — не всё (лимит 15 000).`,
             );
           }
           onDone(null, result);
@@ -358,9 +358,7 @@
     if (typeof window.cardLinksMaxPages === 'function') {
       return window.cardLinksMaxPages();
     }
-    const el = document.getElementById('card-links-max-pages');
-    const v = Number(el?.value || 0);
-    return v > 0 ? v : 150;
+    return 150;
   }
 
   function taskErrorMessage(raw) {

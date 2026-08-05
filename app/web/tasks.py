@@ -413,6 +413,144 @@ async def run_card_links_ai_suggest(
     return task_id
 
 
+async def run_card_links_check_singles(
+    db: Any,
+    *,
+    store_id: int,
+    api_key: str,
+    force_refresh: bool = False,
+    max_pages: int = 150,
+) -> str:
+    """Проверка одиночек WB: кэш на диске или refresh с WB → suggest_wb_singles."""
+    from app.core.card_links import (
+        build_wb_catalog_payload,
+        fetch_wb_catalog,
+        suggest_wb_singles,
+    )
+    from app.core.net import HttpStatusError
+
+    sid = int(store_id)
+    task_id = _make_id()
+    try:
+        await store_locks.acquire([sid], "card_links", task_id, store_names=_store_names(db, [sid]))
+    except StoreBusyError:
+        await store_locks.release_all_for_owner(task_id)
+        raise
+
+    ctrl = await _init_task(task_id, "card_links_check_singles", "Подготовка…", 3)
+    async with _tasks_lock:
+        _tasks[task_id]["store_ids"] = [sid]
+
+    async def _set(cur: int, tot: int, detail: str) -> None:
+        async with _tasks_lock:
+            if task_id in _tasks and _tasks[task_id].get("status") == "running":
+                _tasks[task_id]["progress"] = [cur, max(tot, 1)]
+                _tasks[task_id]["detail"] = detail
+
+    async def _run() -> None:
+        try:
+            rows: list = []
+            groups: list = []
+            cache_meta: dict = {}
+            source = "cache"
+
+            await _set(0, 3, "Чтение кэша каталога…")
+            if ctrl.cancelled:
+                raise asyncio.CancelledError()
+
+            cached = db.clc_load_catalog(sid)
+            cache_meta = cached.get("meta") or {}
+            need_refresh = bool(force_refresh) or not cache_meta or not (cached.get("items") or [])
+
+            if need_refresh:
+                await _set(1, 3, "Загрузка каталога с WB…")
+                source = "wb"
+                rows_raw, catalog_meta = await fetch_wb_catalog(
+                    api_key,
+                    max_pages=max_pages,
+                    articles_only=False,
+                )
+                if ctrl.cancelled:
+                    raise asyncio.CancelledError()
+                payload = build_wb_catalog_payload(
+                    rows_raw,
+                    catalog_meta,
+                    store_id=sid,
+                    articles_only=False,
+                    suggestions="none",
+                )
+                rows = list(payload.get("items") or [])
+                groups = list(payload.get("groups") or [])
+                cache_meta = db.clc_save_catalog(
+                    sid,
+                    rows,
+                    groups,
+                    catalog_meta=catalog_meta,
+                    source="wb",
+                )
+            else:
+                await _set(1, 3, "Каталог из кэша…")
+                rows = list(cached.get("items") or [])
+                groups = list(cached.get("groups") or [])
+                source = "cache"
+
+            await _set(2, 3, "Проверка одиночек…")
+            if ctrl.cancelled:
+                raise asyncio.CancelledError()
+            result = suggest_wb_singles(rows, groups)
+            meta = dict(result.get("meta") or {})
+            meta["source"] = source
+            meta["cache_meta"] = cache_meta
+            meta["catalog_count"] = len(rows)
+            cands = list(result.get("candidates") or [])
+            attaches = list(result.get("attach_suggestions") or [])
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "done"
+                _tasks[task_id]["result"] = {
+                    "candidates": cands,
+                    "attach_suggestions": attaches,
+                    "combine_suggestions": [],
+                    "count": len(cands) + len(attaches),
+                    "meta": meta,
+                    "items": rows,
+                    "groups": groups,
+                    "cache_meta": cache_meta,
+                }
+                _tasks[task_id]["progress"] = [3, 3]
+                _tasks[task_id]["detail"] = (
+                    f"Готово · {len(attaches)} привязок · {len(cands)} новых · "
+                    f"одиночек {meta.get('singles_total', 0)}"
+                )
+            _mark_finished(task_id, "done")
+        except asyncio.CancelledError:
+            async with _tasks_lock:
+                if task_id in _tasks and _tasks[task_id].get("status") == "running":
+                    _tasks[task_id]["status"] = "cancelled"
+                    _tasks[task_id]["error"] = "Остановлено пользователем"
+            _mark_finished(task_id, "cancelled")
+        except StoreBusyError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+        except HttpStatusError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e.body or e)[:400]
+            _mark_finished(task_id, "error")
+        except Exception as e:
+            log.exception("card_links_check_singles task %s failed: %s", task_id, e)
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+        finally:
+            await store_locks.release_all_for_owner(task_id)
+
+    _handles[task_id] = asyncio.create_task(_run())
+    return task_id
+
+
 async def run_card_links_master_step(
     db: Any,
     *,

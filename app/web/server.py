@@ -105,6 +105,7 @@ from app.core.card_links import (
     suggest_combine_candidates,
     suggest_link_candidates,
     suggest_review_linked_groups,
+    suggest_wb_singles,
     sort_catalog_rows,
     wb_disconnect_cards,
     wb_merge_cards,
@@ -4159,6 +4160,11 @@ class CardLinksAiSuggestBody(BaseModel):
     options: Optional[CardLinksAiOptions] = None
 
 
+class CardLinksCheckSinglesBody(BaseModel):
+    force_refresh: bool = False
+    max_pages: int = 150
+
+
 class CardLinksAiPromptOut(BaseModel):
     marketplace: str
     prompt_text: str
@@ -4247,9 +4253,10 @@ async def api_card_links_wb_catalog(
     store_id: int,
     articles: Optional[str] = Query(None, description="Артикулы через запятую или с новой строки"),
     q: Optional[str] = Query(None, description="Поиск по названию/артикулу"),
-    max_pages: int = Query(100, ge=1, le=150),
+    max_pages: int = Query(150, ge=1, le=150),
     articles_only: bool = Query(False, description="Только карточки из списка артикулов"),
     suggestions: str = Query("none", description="none | review | all — вычисление предложений"),
+    from_cache: bool = Query(False, description="Вернуть каталог из дискового кэша без запроса к WB"),
     db: Database = Depends(get_db),
     _: UserRow = Depends(require_user),
 ):
@@ -4257,6 +4264,45 @@ async def api_card_links_wb_catalog(
     vendor_codes = parse_articles_csv(articles)
     if articles_only and not vendor_codes:
         raise HTTPException(400, "Укажите список артикулов продавца (vendor_code)")
+
+    # Всегда тянем до 15k (150 стр. ×100), меньше не отдаём в UI
+    max_pages = max(int(max_pages or 150), 150)
+    max_pages = min(max_pages, 150)
+
+    if from_cache and not articles_only:
+        cached = db.clc_load_catalog(store_id)
+        meta = cached.get("meta") or {}
+        if meta and cached.get("items") is not None:
+            rows = list(cached.get("items") or [])
+            groups = list(cached.get("groups") or [])
+            if not groups and rows:
+                groups = group_wb_rows(rows)
+                apply_link_status(rows, groups)
+            rows = sort_catalog_rows(rows, marketplace="wb")
+            payload = {
+                "store_id": store_id,
+                "marketplace": "wb",
+                "count": len(rows),
+                "unlinked_count": int(meta.get("unlinked_count") or sum(1 for r in rows if not r.get("linked"))),
+                "linked_groups": int(meta.get("linked_groups") or sum(1 for g in groups if g.get("linked"))),
+                "max_link_items": 30,
+                "items": rows,
+                "groups": groups,
+                "candidates": [],
+                "attach_suggestions": [],
+                "review_suggestions": [],
+                "combine_suggestions": [],
+                "catalog_meta": {
+                    **(meta.get("extra") or {}),
+                    "from_cache": True,
+                    "catalog_at": meta.get("catalog_at"),
+                    "stale": bool(meta.get("stale")),
+                    "source": meta.get("source") or "cache",
+                    "partial": bool(meta.get("partial")),
+                },
+                "cache_meta": meta,
+            }
+            return payload
 
     async def _load() -> dict:
         rows, catalog_meta = await fetch_wb_catalog(
@@ -4266,13 +4312,30 @@ async def api_card_links_wb_catalog(
             max_pages=max_pages,
             articles_only=articles_only,
         )
-        return build_wb_catalog_payload(
+        payload = build_wb_catalog_payload(
             rows,
             catalog_meta,
             store_id=store_id,
             articles_only=articles_only,
             suggestions=suggestions,
         )
+        if not articles_only:
+            try:
+                cache_meta = db.clc_save_catalog(
+                    store_id,
+                    payload.get("items") or [],
+                    payload.get("groups") or [],
+                    catalog_meta=catalog_meta,
+                    source="wb",
+                )
+                payload["cache_meta"] = cache_meta
+                cm = payload.get("catalog_meta") or {}
+                cm["from_cache"] = False
+                cm["catalog_at"] = cache_meta.get("catalog_at")
+                payload["catalog_meta"] = cm
+            except Exception as e:
+                log.warning("clc_save_catalog failed store=%s: %s", store_id, e)
+        return payload
 
     try:
         return await asyncio.wait_for(_load(), timeout=CARD_LINKS_CATALOG_TIMEOUT_SEC)
@@ -4283,6 +4346,36 @@ async def api_card_links_wb_catalog(
         ) from None
     except HttpStatusError as e:
         raise _card_links_http_error("wb", e) from e
+
+
+@app.get("/api/card-links/wb/{store_id}/catalog-cache")
+def api_card_links_wb_catalog_cache_meta(
+    store_id: int,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    _require_wb_store_for_chats(db, store_id)
+    meta = db.clc_get_meta(store_id)
+    return {"ok": True, "cache_meta": meta or None, "has_cache": bool(meta)}
+
+
+@app.post("/api/card-links/wb/{store_id}/check-singles")
+async def api_card_links_wb_check_singles(
+    store_id: int,
+    body: CardLinksCheckSinglesBody = CardLinksCheckSinglesBody(),
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    """Проверка несвязанных одиночек: new_link / attach без relocate."""
+    s = _require_wb_store_for_chats(db, store_id)
+    task_id = await web_tasks.run_card_links_check_singles(
+        db,
+        store_id=store_id,
+        api_key=s.api_key,
+        force_refresh=bool(body.force_refresh),
+        max_pages=max(150, min(int(body.max_pages or 150), 150)),
+    )
+    return {"task_id": task_id}
 
 
 @app.get("/api/card-links/ozon/{store_id}/catalog")
@@ -4348,6 +4441,10 @@ async def api_card_links_wb_merge(
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     try:
+        db.clc_mark_stale(store_id, True)
+    except Exception:
+        pass
+    try:
         db.add_audit_event(
             actor=user.username,
             action="wb_card_links_merge",
@@ -4365,7 +4462,7 @@ async def api_card_links_wb_merge(
             f"Развязано {disconnected} карточек, затем отправлено объединение в imtID {int(body.target_imt)}. "
             "Склейка может занять до нескольких часов."
         )
-    return {"ok": True, "result": result, "message": msg}
+    return {"ok": True, "result": result, "message": msg, "cache_stale": True}
 
 
 @app.post("/api/card-links/ozon/{store_id}/link")
@@ -4500,6 +4597,10 @@ async def api_card_links_wb_disconnect(
             502,
             f"WB: не удалось разъединить {result.get('failed')} из {len(nm_ids)} карточек",
         )
+    try:
+        db.clc_mark_stale(store_id, True)
+    except Exception:
+        pass
     try:
         db.add_audit_event(
             actor=user.username,
@@ -4680,7 +4781,7 @@ async def api_card_links_ozon_ai_suggest(
 
 
 class CardLinksMasterStepBody(BaseModel):
-    max_pages: int = 100
+    max_pages: int = 150
     bundle_ids: list[str] = []
 
 
@@ -4815,7 +4916,7 @@ async def api_card_links_master_step(
             step=step,
             api_key=s.api_key,
             openai_key=openai_key,
-            max_pages=min(int(body.max_pages or 100), 150),
+            max_pages=max(150, min(int(body.max_pages or 150), 150)),
             bundle_ids=bundle_ids,
         )
     except StoreBusyError as e:

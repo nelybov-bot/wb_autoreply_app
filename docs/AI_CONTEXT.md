@@ -181,9 +181,11 @@
 
 ### UI вкладки
 
-- **Предложения** (`candidates`) — combine + attach + new + ai
-- **Перепроверка** (`review`) — merge_groups, relocate
 - **Каталог** (`catalog`) — все карточки, фильтр, ручной merge
+- **Одиночки** (`singles`, только WB) — `suggest_wb_singles`: new_link + attach/attach_batch; без relocate
+- **ИИ** (`ai`) — bin-pack + OpenAI
+- **Перепроверка** (`review`) — merge_groups, relocate
+- **Мастер** / **Справка** — отдельно; мастер **не** показывается на других вкладках (`[hidden]` + CSS)
 
 ### API
 
@@ -191,6 +193,8 @@
 
 ```
 GET  /api/card-links/{wb|ozon}/{store_id}/catalog
+GET  /api/card-links/wb/{store_id}/catalog-cache
+POST /api/card-links/wb/{store_id}/check-singles
 POST /api/card-links/wb/{store_id}/merge
 POST /api/card-links/wb/{store_id}/disconnect
 POST /api/card-links/ozon/{store_id}/link
@@ -203,10 +207,11 @@ UI cooldown между merge-операциями: `CARD_LINKS_ACTION_COOLDOWN_M
 
 ### Важные функции Python
 
+- `suggest_wb_singles()` — проверка одиночек WB (кэш `clc_*`)
 - `group_attach_suggestions()` — **обязательна**; была сломана (тело после return) — исправлено в `73aefbc`
 - `suggest_attach_to_groups()` — использует `_item_matches_group_attach` (мягче чем review)
 - `sort_catalog_rows()` — сортировка на бэкенде
-- Frontend: `cardLinksSortCatalogRows()`, `sortCardLinksCandidates()`
+- Frontend: `cardLinksSortCatalogRows()`, `sortCardLinksCandidates()`, `loadCardLinksCheckSingles()`
 
 ## Аутентификация
 

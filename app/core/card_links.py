@@ -1431,6 +1431,349 @@ def group_attach_suggestions(suggestions: List[dict], *, marketplace: str) -> Li
     return out[:120]
 
 
+def _titles_strictly_similar(base_a: str, base_b: str) -> bool:
+    """Жёсткий порог «капец похожи» для новых связок из одиночек."""
+    if not base_a or not base_b:
+        return False
+    if base_a == base_b:
+        return True
+    shorter, longer = (base_a, base_b) if len(base_a) <= len(base_b) else (base_b, base_a)
+    if len(shorter) >= 8 and shorter in longer and len(shorter) >= int(len(longer) * 0.55):
+        return True
+    ta, tb = _title_tokens(base_a), _title_tokens(base_b)
+    if not ta or not tb:
+        return False
+    inter = ta & tb
+    if len(inter) < 2:
+        return False
+    smaller = min(len(ta), len(tb))
+    return len(inter) >= max(2, int((smaller + 1) // 2))
+
+
+def _atom_title_base(atom: List[dict]) -> str:
+    bases = [_title_base_key(it.get("title") or "") for it in atom]
+    bases = [b for b in bases if b]
+    if not bases:
+        return ""
+    return max(bases, key=len)
+
+
+def _atom_subject_key(atom: List[dict]) -> str:
+    it = atom[0] if atom else {}
+    sid = int(it.get("subject_id") or 0)
+    pid = int(it.get("parent_id") or 0)
+    return f"wb:{sid}:{pid}"
+
+
+def _atom_match_score_to_group(atom: List[dict], group: dict) -> float:
+    """0 = не подходит; выше — лучше совпадение названия с группой."""
+    if not atom or not group:
+        return 0.0
+    ref = (group.get("items") or [{}])[0]
+    a0 = atom[0]
+    if int(a0.get("subject_id") or 0) != int(group.get("subject_id") or ref.get("subject_id") or 0):
+        return 0.0
+    a_pid = int(a0.get("parent_id") or 0)
+    g_pid = int(group.get("parent_id") or ref.get("parent_id") or 0)
+    if a_pid and g_pid and a_pid != g_pid:
+        return 0.0
+    best = 0.0
+    for it in atom:
+        if not _item_matches_group_attach(it, group):
+            continue
+        u_base = _title_base_key(it.get("title") or "")
+        if not u_base:
+            continue
+        for g_it in (group.get("items") or [])[:12]:
+            g_base = _title_base_key(g_it.get("title") or "")
+            if not g_base:
+                continue
+            if u_base == g_base:
+                best = max(best, 100.0)
+            elif _titles_strictly_similar(u_base, g_base):
+                best = max(best, 80.0)
+            elif _titles_similar(u_base, g_base):
+                best = max(best, 55.0)
+            elif _titles_related_enough(u_base, g_base):
+                best = max(best, 40.0)
+            else:
+                best = max(best, 25.0)
+    return best
+
+
+def _best_attach_group_for_atoms(
+    atoms: List[List[dict]],
+    linked_groups: List[dict],
+) -> Optional[Tuple[dict, float]]:
+    """Лучшая существующая связка для кластера атомов (с свободными слотами)."""
+    best_g: Optional[dict] = None
+    best_score = 0.0
+    for g in linked_groups:
+        items = g.get("items") or []
+        free = MAX_LINK_ITEMS - len(items)
+        if free < 1:
+            continue
+        score = 0.0
+        for atom in atoms:
+            s = _atom_match_score_to_group(atom, g)
+            if s > 0:
+                score = max(score, s)
+        if score > best_score:
+            best_score = score
+            best_g = g
+    if best_g is None or best_score <= 0:
+        return None
+    return best_g, best_score
+
+
+def _cluster_atoms_strict(atoms: List[List[dict]]) -> List[List[List[dict]]]:
+    """Кластеры атомов с очень похожими названиями внутри одной категории WB."""
+    if not atoms:
+        return []
+    by_cat: Dict[str, List[List[dict]]] = {}
+    for atom in atoms:
+        by_cat.setdefault(_atom_subject_key(atom), []).append(atom)
+
+    clusters: List[List[List[dict]]] = []
+    for cat_atoms in by_cat.values():
+        n = len(cat_atoms)
+        if n == 1:
+            clusters.append(cat_atoms)
+            continue
+        parent = list(range(n))
+        bases = [_atom_title_base(a) for a in cat_atoms]
+
+        def _find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def _union(a: int, b: int) -> None:
+            ra, rb = _find(a), _find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        for i in range(n):
+            if not bases[i]:
+                continue
+            for j in range(i + 1, n):
+                if bases[j] and _titles_strictly_similar(bases[i], bases[j]):
+                    _union(i, j)
+
+        buckets: Dict[int, List[List[dict]]] = {}
+        for i in range(n):
+            buckets.setdefault(_find(i), []).append(cat_atoms[i])
+        clusters.extend(buckets.values())
+    return clusters
+
+
+def _flatten_atoms(atoms: List[List[dict]]) -> List[dict]:
+    out: List[dict] = []
+    seen: set[int] = set()
+    for atom in atoms:
+        for it in atom:
+            nid = int(it.get("nm_id") or 0)
+            if nid and nid in seen:
+                continue
+            if nid:
+                seen.add(nid)
+            out.append(it)
+    return out
+
+
+def _append_singles_new_link(
+    out: List[dict],
+    *,
+    seq: int,
+    items: List[dict],
+) -> int:
+    """new_link только из несвязанных nmID (без relocate/merge)."""
+    uniq: List[dict] = []
+    seen: set[int] = set()
+    for it in items:
+        if it.get("linked"):
+            continue
+        nid = int(it.get("nm_id") or 0)
+        if not nid or nid in seen:
+            continue
+        seen.add(nid)
+        uniq.append(it)
+    if len(uniq) < 2:
+        return seq
+    chunks = (
+        _facet_aware_pack_bins(uniq, marketplace="wb", max_size=MAX_LINK_ITEMS)
+        if len(uniq) > MAX_LINK_ITEMS
+        else [uniq]
+    )
+    for chunk in chunks:
+        if len(chunk) < 2:
+            continue
+        seq += 1
+        cat_label = _candidate_label(chunk, marketplace="wb")
+        sug_model = _suggested_model_name(chunk)
+        out.append(
+            {
+                "candidate_id": f"singles-new-wb-{seq}",
+                "kind": "new_link",
+                "marketplace": "wb",
+                "category_label": cat_label,
+                "subject_id": chunk[0].get("subject_id"),
+                "count": len(chunk),
+                "suggested_target_imt": _wb_target_imt(chunk),
+                "suggested_model_name": sug_model,
+                "hint": f"Одиночки → новая связка · {cat_label}",
+                "items": chunk,
+                "singles_check": True,
+            }
+        )
+    return seq
+
+
+def suggest_wb_singles(
+    rows: List[dict],
+    groups: List[dict],
+) -> Dict[str, Any]:
+    """
+    Проверка только несвязанных одиночек WB.
+    Возвращает new_link / attach / attach_batch — без relocate и merge_groups.
+    Фасовки 1/2/3 — неделимые атомы; attach батчится с лимитом свободных слотов.
+    """
+    singles = [r for r in rows if not r.get("linked")]
+    linked = _linked_groups(groups)
+    meta: Dict[str, Any] = {
+        "singles_total": len(singles),
+        "linked_groups": len(linked),
+        "atoms": 0,
+        "clusters": 0,
+        "attach_batches": 0,
+        "new_links": 0,
+        "uncovered": 0,
+    }
+    if len(singles) < 1:
+        return {"candidates": [], "attach_suggestions": [], "meta": meta}
+
+    atoms = _pack_atoms_from_items(singles, marketplace="wb")
+    meta["atoms"] = len(atoms)
+    clusters = _cluster_atoms_strict(atoms)
+    meta["clusters"] = len(clusters)
+
+    new_links: List[dict] = []
+    attaches: List[dict] = []
+    seq_new = 0
+    seq_att = 0
+    covered_nm: set[int] = set()
+
+    for cluster in clusters:
+        remaining = list(cluster)
+        match = _best_attach_group_for_atoms(remaining, linked)
+        if match:
+            target_g, _score = match
+            target_items = list(target_g.get("items") or [])
+            free = MAX_LINK_ITEMS - len(target_items)
+            if free > 0:
+                scored: List[Tuple[float, List[dict]]] = []
+                for atom in remaining:
+                    s = _atom_match_score_to_group(atom, target_g)
+                    if s > 0:
+                        scored.append((s, atom))
+                scored.sort(key=lambda x: (-x[0], _atom_title_base(x[1])))
+                taken_atoms: List[List[dict]] = []
+                taken_n = 0
+                leftover: List[List[dict]] = []
+                used_idx: set[int] = set()
+                for i, (s, atom) in enumerate(scored):
+                    need = len(atom)
+                    if need > free - taken_n:
+                        continue
+                    taken_atoms.append(atom)
+                    taken_n += need
+                    used_idx.add(i)
+                    if taken_n >= free:
+                        break
+                scored_atoms = [a for _, a in scored]
+                for i, atom in enumerate(scored_atoms):
+                    if i not in used_idx:
+                        leftover.append(atom)
+                # атомы кластера без match к этой группе
+                matched_ids = {id(a) for _, a in scored}
+                for atom in remaining:
+                    if id(atom) not in matched_ids:
+                        leftover.append(atom)
+
+                if taken_atoms:
+                    items = _flatten_atoms(taken_atoms)
+                    for it in items:
+                        nid = int(it.get("nm_id") or 0)
+                        if nid:
+                            covered_nm.add(nid)
+                    seq_att += 1
+                    cat_label = _candidate_label(items, marketplace="wb")
+                    label = str(target_g.get("group_label") or "")
+                    tgt_n = len(target_items)
+                    kind = "attach_batch" if len(items) > 1 else "attach"
+                    entry: Dict[str, Any] = {
+                        "candidate_id": f"singles-{kind}-wb-{seq_att}",
+                        "kind": kind,
+                        "marketplace": "wb",
+                        "category_label": cat_label,
+                        "count": len(items),
+                        "target_group_count": tgt_n,
+                        "target_group_id": target_g.get("group_id"),
+                        "target_group_label": label,
+                        "suggested_target_imt": int(target_g.get("group_id") or 0),
+                        "subject_id": items[0].get("subject_id"),
+                        "hint": (
+                            f"Добавить {len(items)} в «{label}» "
+                            f"({tgt_n}→{tgt_n + len(items)}, слотов {free})"
+                        ),
+                        "items": items,
+                        "sample_items": target_items[:3],
+                        "singles_check": True,
+                    }
+                    attaches.append(entry)
+                    meta["attach_batches"] += 1
+                remaining = leftover
+            # else: group full — all stay for new_link
+
+        leftover_items = _flatten_atoms(remaining)
+        leftover_items = [
+            it for it in leftover_items
+            if int(it.get("nm_id") or 0) not in covered_nm
+        ]
+        if len(leftover_items) >= 2:
+            before = len(new_links)
+            seq_new = _append_singles_new_link(new_links, seq=seq_new, items=leftover_items)
+            for c in new_links[before:]:
+                for it in c.get("items") or []:
+                    nid = int(it.get("nm_id") or 0)
+                    if nid:
+                        covered_nm.add(nid)
+            meta["new_links"] = len(new_links)
+
+    meta["uncovered"] = sum(
+        1 for r in singles if int(r.get("nm_id") or 0) not in covered_nm
+    )
+    attaches.sort(
+        key=lambda x: (
+            str(x.get("category_label") or "").lower(),
+            str(x.get("target_group_label") or "").lower(),
+            -(x.get("count") or 0),
+        )
+    )
+    new_links.sort(
+        key=lambda x: (
+            str(x.get("category_label") or "").lower(),
+            -(x.get("count") or 0),
+        )
+    )
+    return {
+        "candidates": new_links,
+        "attach_suggestions": attaches,
+        "meta": meta,
+    }
+
+
 def _titles_similar(base_a: str, base_b: str) -> bool:
     if not base_a or not base_b:
         return False

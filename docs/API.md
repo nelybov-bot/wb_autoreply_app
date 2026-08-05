@@ -195,8 +195,10 @@
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/api/card-links/wb/{store_id}/catalog` | Каталог WB + предложения |
+| GET | `/api/card-links/wb/{store_id}/catalog` | Каталог WB + предложения; после загрузки пишет кэш `clc_*` |
+| GET | `/api/card-links/wb/{store_id}/catalog-cache` | Метаданные дискового кэша каталога |
 | GET | `/api/card-links/ozon/{store_id}/catalog` | Каталог Ozon + предложения |
+| POST | `/api/card-links/wb/{store_id}/check-singles` | Проверка одиночек WB → `{ task_id }` |
 | POST | `/api/card-links/wb/{store_id}/merge` | Объединить карточки (imtID) |
 | POST | `/api/card-links/wb/{store_id}/disconnect` | Разъединить |
 | POST | `/api/card-links/ozon/{store_id}/link` | Связать по «Названию модели» |
@@ -213,12 +215,16 @@
 | PUT | `/api/card-links/ai-prompt/{marketplace}` | Сохранить промпт ИИ |
 
 Query-параметры каталога:
-- WB: `articles`, `q` (поиск), `max_pages` (default 100, max 150), `articles_only` (bool)
+- WB: `articles`, `q` (поиск), `max_pages` (default **150** = 15k, max 150), `articles_only` (bool), `from_cache` (bool — без запроса к WB)
 - Ozon: `articles`, `max_pages` (default 30, max 100), `articles_only` (bool)
+
+UI больше не даёт выбирать глубину — фронт всегда шлёт WB `max_pages=150`.
+
+`POST …/check-singles` body: `{ force_refresh?: bool, max_pages?: int }` — по умолчанию из кэша; результат задачи: `candidates` (new_link), `attach_suggestions` (attach/attach_batch), `meta`, без relocate.
 
 `articles_only=1` — загрузить только карточки из `articles`; предложения связок строятся только внутри этого списка (без перепроверки внешних групп Ozon/WB).
 
-Ответ каталога: `items`, `groups`, `candidates`, `attach_suggestions`, `combine_suggestions`, `review_suggestions`, `catalog_meta`, счётчики (`count`, `unlinked_count`, `linked_groups`, `max_link_items`).
+Ответ каталога: `items`, `groups`, `candidates`, `attach_suggestions`, `combine_suggestions`, `review_suggestions`, `catalog_meta`, `cache_meta`, счётчики (`count`, `unlinked_count`, `linked_groups`, `max_link_items`).
 
 ---
 
