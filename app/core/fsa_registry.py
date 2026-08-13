@@ -774,7 +774,9 @@ class FsaRegistryClient:
         for t in types_to_try:
             items = await self._search_items(t, number)
             if items:
-                record = self._item_to_record(t, items[0])
+                records = [self._item_to_record(t, it) for it in items]
+                active = [r for r in records if r.is_active()]
+                record = active[0] if active else records[0]
                 break
 
         if not record:

@@ -6056,3 +6056,52 @@ body.compliance-show-ozon-cols .compliance-col-ozon {
 .compliance-result .text-error {
   color: var(--danger, #c0392b);
 }
+
+.bulk-chars-result-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.bulk-chars-rows-fold {
+  margin: 8px 0 14px;
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+}
+
+.bulk-chars-rows-summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  user-select: none;
+}
+
+.bulk-chars-rows-summary::-webkit-details-marker {
+  display: none;
+}
+
+.bulk-chars-rows-summary::before {
+  content: "▸ ";
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.bulk-chars-rows-fold[open] > .bulk-chars-rows-summary::before {
+  transform: rotate(90deg);
+}
+
+.bulk-chars-rows-body {
+  max-height: min(420px, 55vh);
+  overflow: auto;
+  padding: 0 8px 10px;
+  border-top: 1px solid var(--border, #e5e5e5);
+}
+
+.bulk-chars-rows-body .items-table {
+  margin-top: 8px;
+}

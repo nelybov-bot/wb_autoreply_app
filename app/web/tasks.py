@@ -1641,3 +1641,149 @@ async def run_wb_bulk_chars_apply(
 
     _handles[task_id] = asyncio.create_task(_run())
     return task_id
+
+
+async def run_ozon_bulk_chars_apply(
+    db: Any,
+    *,
+    store_ids: list[int],
+    field: str,
+    value: str,
+    text: str = "",
+    offer_ids: Optional[list[str]] = None,
+    all_catalog: bool = False,
+    dry_run: bool = False,
+    only_if_different: bool = True,
+) -> str:
+    from app.core.net import HttpStatusError, UnauthorizedStoreError
+    from app.core.ozon_bulk_chars import (
+        apply_bulk_chars_multi_store,
+        estimate_ozon_bulk_steps,
+        normalize_field_key,
+    )
+    from app.core.wb_bulk_chars import parse_vendor_list_text
+
+    field_key = normalize_field_key(field)
+    if field_key not in ("tnved", "brand"):
+        raise ValueError("Укажите поле: ТН ВЭД или Бренд")
+    value_s = str(value or "").strip()
+    if not value_s:
+        raise ValueError("Укажите новое значение")
+
+    parse_warnings: list[str] = []
+    vendors: list[str] = list(offer_ids or [])
+    if text.strip():
+        parsed, warnings = parse_vendor_list_text(text)
+        parse_warnings.extend(warnings)
+        if parsed:
+            seen = {v.casefold() for v in vendors}
+            for v in parsed:
+                if v.casefold() not in seen:
+                    vendors.append(v)
+                    seen.add(v.casefold())
+
+    use_all = bool(all_catalog)
+    if not use_all and not vendors:
+        raise ValueError("Укажите артикулы или включите «Весь каталог»")
+
+    sids = sorted({int(x) for x in store_ids if int(x) > 0})
+    if not sids:
+        raise ValueError("Выберите хотя бы один магазин Ozon")
+
+    stores_payload: list[tuple[int, str, str, str]] = []
+    by_id = {s.id: s for s in db.list_stores()}
+    for sid in sids:
+        st = by_id.get(sid)
+        if not st or str(st.marketplace or "").lower() != "ozon":
+            raise ValueError(f"Магазин {sid} не найден или не Ozon")
+        cid = (getattr(st, "client_id", None) or "").strip()
+        key = (st.api_key or "").strip()
+        if not cid or not key:
+            raise ValueError(f"У магазина «{st.name}» нет Client-Id / API-ключа")
+        stores_payload.append((sid, st.name, cid, key))
+
+    task_id = _make_id()
+    try:
+        await store_locks.acquire(
+            sids, "ozon_bulk_chars", task_id,
+            store_names=_store_names(db, sids),
+        )
+    except StoreBusyError:
+        await store_locks.release_all_for_owner(task_id)
+        raise
+
+    n_items = 5000 if use_all else len(vendors)
+    label = "Проверка характеристик Ozon" if dry_run else "Массовое редактирование Ozon"
+    total_steps = estimate_ozon_bulk_steps(n_items, len(sids))
+    ctrl = await _init_task(task_id, "ozon_bulk_chars", label, total_steps)
+    async with _tasks_lock:
+        _tasks[task_id]["store_ids"] = sids
+        _tasks[task_id]["parse_warnings"] = parse_warnings
+
+    def _progress(cur: int, tot: int, detail: str) -> None:
+        if _tasks.get(task_id, {}).get("status") != "running":
+            return
+        safe_tot = max(int(tot or 0), 1)
+        safe_cur = max(0, min(int(cur or 0), safe_tot))
+
+        async def _set() -> None:
+            async with _tasks_lock:
+                if task_id in _tasks:
+                    _tasks[task_id]["progress"] = [safe_cur, safe_tot]
+                    _tasks[task_id]["detail"] = detail
+
+        asyncio.create_task(_set())
+
+    async def _run() -> None:
+        try:
+            result = await apply_bulk_chars_multi_store(
+                stores_payload,
+                field=field_key,
+                value=value_s,
+                offer_ids=None if use_all else vendors,
+                all_catalog=use_all,
+                dry_run=dry_run,
+                only_if_different=only_if_different,
+                progress_cb=_progress,
+                cancel=ctrl,
+            )
+            if parse_warnings:
+                result["parse_warnings"] = parse_warnings
+            sent = int(result.get("sent") or 0)
+            would = int(result.get("would_update") or 0)
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "done"
+                _tasks[task_id]["result"] = result
+                if dry_run:
+                    _tasks[task_id]["detail"] = f"К изменению: {would} карточек"
+                else:
+                    _tasks[task_id]["detail"] = f"Отправлено {sent} обновлений"
+                _tasks[task_id]["progress"] = [total_steps, total_steps]
+            _mark_finished(task_id, "done")
+        except asyncio.CancelledError:
+            async with _tasks_lock:
+                if task_id in _tasks and _tasks[task_id].get("status") == "running":
+                    _tasks[task_id]["status"] = "cancelled"
+            _mark_finished(task_id, "cancelled")
+            raise
+        except UnauthorizedStoreError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+        except HttpStatusError as e:
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e.body or e)[:400]
+            _mark_finished(task_id, "error")
+        except Exception as e:
+            log.exception("ozon_bulk_chars task %s failed: %s", task_id, e)
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+        finally:
+            await store_locks.release(sids, task_id)
+
+    _handles[task_id] = asyncio.create_task(_run())
+    return task_id

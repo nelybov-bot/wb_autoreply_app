@@ -686,6 +686,16 @@
           else if (prepared) toast(`К изменению: ${prepared} карточек`);
         },
       });
+      resumePanelTask('ozon-bulk-chars', {
+        label: 'Характеристики Ozon…',
+        onDone: (result) => {
+          renderOzonBulkCharsResult(result);
+          const sent = Number(result?.sent) || 0;
+          const would = Number(result?.would_update) || 0;
+          if (sent) toast(`Ozon: отправлено ${sent} обновлений`);
+          else if (would) toast(`Ozon: к изменению ${would} карточек`);
+        },
+      });
     }
     if (tabId === 'auto') loadAutoSchedulePanel();
     if (tabId === 'agent') loadAgentPanel();
@@ -782,7 +792,8 @@
   }
 
   function setNavTaskRunning(panelPrefix, running) {
-    const tabId = String(panelPrefix || '');
+    let tabId = String(panelPrefix || '');
+    if (tabId === 'ozon-bulk-chars') tabId = 'wb-bulk-chars';
     if (!tabId) return;
     document.querySelectorAll(`.si[data-tab="${tabId}"]`).forEach((el) => {
       if (!el.hasAttribute('data-title-base')) {
@@ -803,8 +814,9 @@
       || (panelPrefix === 'reviews' ? 'Отзывы…'
         : panelPrefix === 'questions' ? 'Вопросы…'
           : panelPrefix === 'wb-bulk-chars' ? 'Характеристики WB…'
-            : panelPrefix === 'packaging-dims' ? 'Габариты WB…'
-              : 'Выполняется…');
+            : panelPrefix === 'ozon-bulk-chars' ? 'Характеристики Ozon…'
+              : panelPrefix === 'packaging-dims' ? 'Габариты WB…'
+                : 'Выполняется…');
     try {
       const state = await api('/tasks/' + taskId);
       if (!state || !state.status) {
@@ -853,6 +865,17 @@
         if (sent) toast(`WB: отправлено ${sent} обновлений характеристик`);
         else if (prepared) toast(`К изменению: ${prepared} карточек`);
         else toast('Проверка характеристик завершена');
+      },
+    });
+    void resumePanelTask('ozon-bulk-chars', {
+      label: 'Характеристики Ozon…',
+      onDone: (result) => {
+        renderOzonBulkCharsResult(result);
+        const sent = Number(result?.sent) || 0;
+        const would = Number(result?.would_update) || 0;
+        if (sent) toast(`Ozon: отправлено ${sent} обновлений`);
+        else if (would) toast(`Ozon: к изменению ${would} карточек`);
+        else toast('Проверка Ozon завершена');
       },
     });
     void resumePanelTask('packaging-dims', {
@@ -8156,6 +8179,35 @@
 
   let wbBulkCharsParsedVendors = [];
 
+  function bulkCharsResultToolbarHtml() {
+    return '<div class="bulk-chars-result-toolbar">'
+      + '<button type="button" class="btn btn-secondary btn-sm" data-bulk-chars-hide>Скрыть отчёт</button>'
+      + '<span class="form-hint" style="margin:0">Сводка сверху; таблицу можно свернуть</span>'
+      + '</div>';
+  }
+
+  function bulkCharsCollapsibleTableHtml(tableHtml, { count, open = false, hint = '' } = {}) {
+    const n = Number(count) || 0;
+    const shouldOpen = open === true || (open !== false && n > 0 && n <= 12);
+    const openAttr = shouldOpen ? ' open' : '';
+    const hintPart = hint ? ` — ${escapeHtml(hint)}` : '';
+    return `<details class="bulk-chars-rows-fold"${openAttr}>`
+      + `<summary class="bulk-chars-rows-summary">Строки отчёта (${n})${hintPart}</summary>`
+      + `<div class="bulk-chars-rows-body">${tableHtml}</div>`
+      + '</details>';
+  }
+
+  function wireBulkCharsResultHide(box) {
+    if (!box || box._bulkCharsHideWired) return;
+    box._bulkCharsHideWired = true;
+    box.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-bulk-chars-hide]');
+      if (!btn || !box.contains(btn)) return;
+      box.hidden = true;
+      box.innerHTML = '';
+    });
+  }
+
   function syncWbBulkCharsListVisibility() {
     const all = !!document.getElementById('wb-bulk-chars-all-catalog')?.checked;
     const wrap = document.getElementById('wb-bulk-chars-list-wrap');
@@ -8175,7 +8227,8 @@
       box.hidden = true;
       return;
     }
-    const parts = [];
+    wireBulkCharsResultHide(box);
+    const parts = [bulkCharsResultToolbarHtml()];
     if (result.parse_warnings?.length) {
       parts.push(`<p class="form-hint text-warn">${escapeHtml(result.parse_warnings.join('; '))}</p>`);
     }
@@ -8197,19 +8250,26 @@
         + `</p>`);
       const rows = st.rows || [];
       if (rows.length) {
-        parts.push('<table class="items-table compliance-rows-table"><thead><tr>'
+        const shown = rows.slice(0, 200);
+        let table = '<table class="items-table compliance-rows-table"><thead><tr>'
           + '<th>Артикул</th><th>nmID</th><th>Поле</th><th>Было</th><th>Будет</th><th>Статус</th><th>Сообщение</th>'
-          + '</tr></thead><tbody>');
-        for (const r of rows.slice(0, 200)) {
-          parts.push(`<tr><td>${escapeHtml(r.vendor_code || '')}</td><td>${escapeHtml(String(r.nm_id || ''))}</td>`
+          + '</tr></thead><tbody>';
+        for (const r of shown) {
+          table += `<tr><td>${escapeHtml(r.vendor_code || '')}</td><td>${escapeHtml(String(r.nm_id || ''))}</td>`
             + `<td>${escapeHtml(r.char_name || '')}</td><td>${escapeHtml(r.current_value || '')}</td>`
             + `<td>${escapeHtml(r.new_value || '')}</td><td>${escapeHtml(r.status || '')}</td>`
-            + `<td>${escapeHtml(r.message || '')}</td></tr>`);
+            + `<td>${escapeHtml(r.message || '')}</td></tr>`;
         }
-        parts.push('</tbody></table>');
-        if ((st.rows_total || rows.length) > 200) {
-          parts.push(`<p class="form-hint">Показаны первые 200 из ${st.rows_total || rows.length}</p>`);
+        table += '</tbody></table>';
+        const totalRows = st.rows_total || rows.length;
+        if (totalRows > shown.length) {
+          table += `<p class="form-hint">Показаны первые ${shown.length} из ${totalRows}</p>`;
         }
+        parts.push(bulkCharsCollapsibleTableHtml(table, {
+          count: shown.length,
+          open: shown.length <= 12,
+          hint: totalRows > shown.length ? `из ${totalRows}` : '',
+        }));
       }
     }
     box.innerHTML = parts.join('');
@@ -8672,12 +8732,21 @@
 
   function loadWbBulkCharsPanel() {
     wireWbBulkCharsPanel();
+    wireOzonBulkCharsPanel();
     const wb = storesForMarketplace('wb');
     const prev = getAutoMpStoreIds('wb-bulk-chars-store-list');
     const selected = prev.length ? prev : wb.map((s) => s.id);
     renderAutoMpStoreList('wb-bulk-chars-store-list', 'wb', selected);
     syncWbBulkCharsListVisibility();
     void attachRunningWbBulkCharsTask({ silent: true });
+
+    const oz = storesForMarketplace('ozon');
+    const prevOz = getAutoMpStoreIds('ozon-bulk-chars-store-list');
+    const selectedOz = prevOz.length ? prevOz : oz.map((s) => s.id);
+    renderAutoMpStoreList('ozon-bulk-chars-store-list', 'ozon', selectedOz);
+    syncOzonBulkCharsListVisibility();
+    syncOzonBulkCharsPlaceholder();
+    void attachRunningOzonBulkCharsTask({ silent: true });
   }
 
   function wireWbBulkCharsPanel() {
@@ -8710,6 +8779,292 @@
       try {
         const text = await file.text();
         const ta = document.getElementById('wb-bulk-chars-text');
+        if (ta) ta.value = text;
+        toast('Файл загружен — нажмите «Разобрать список» или снимите «Весь каталог»');
+      } catch (err) {
+        toast(err.message || 'Не удалось прочитать файл', 'error');
+      }
+      e.target.value = '';
+    });
+  }
+
+  let ozonBulkCharsParsedOffers = [];
+
+  function syncOzonBulkCharsListVisibility() {
+    const all = !!document.getElementById('ozon-bulk-chars-all-catalog')?.checked;
+    const wrap = document.getElementById('ozon-bulk-chars-list-wrap');
+    if (wrap) wrap.hidden = all;
+  }
+
+  function syncOzonBulkCharsPlaceholder() {
+    const field = (document.getElementById('ozon-bulk-chars-field')?.value || 'tnved');
+    const valEl = document.getElementById('ozon-bulk-chars-value');
+    if (!valEl) return;
+    valEl.placeholder = field === 'brand' ? 'Например: Balea' : '3304990000';
+  }
+
+  function ozonBulkCharsSetStoreChecks(on) {
+    document.querySelectorAll('#ozon-bulk-chars-store-list input[type="checkbox"]').forEach((cb) => {
+      cb.checked = !!on;
+    });
+  }
+
+  function renderOzonBulkCharsResult(result) {
+    const box = document.getElementById('ozon-bulk-chars-result');
+    if (!box) return;
+    if (!result) {
+      box.hidden = true;
+      return;
+    }
+    wireBulkCharsResultHide(box);
+    const parts = [bulkCharsResultToolbarHtml()];
+    if (result.parse_warnings?.length) {
+      parts.push(`<p class="form-hint text-warn">${escapeHtml(result.parse_warnings.join('; '))}</p>`);
+    }
+    const fieldLabel = result.field_label || result.field || '';
+    parts.push(`<p class="form-hint"><strong>${escapeHtml(fieldLabel)}</strong> → <code>${escapeHtml(result.value || '')}</code>`
+      + `${result.dry_run ? ' · dry-run' : ''}</p>`);
+    parts.push(`<p>Всего ${result.total ?? 0}: к изменению ${result.would_update ?? result.updated ?? 0},`
+      + ` совпадает ${result.skipped_same ?? 0}, не найдено ${result.not_found ?? 0},`
+      + ` нет поля ${result.no_field ?? 0}, бренд не в справочнике ${result.brand_not_found ?? 0},`
+      + ` ошибок ${result.errors ?? 0}`
+      + `${result.sent ? `, отправлено ${result.sent}` : ''}</p>`);
+
+    const stores = result.stores || [];
+    for (const st of stores) {
+      if (st.error) {
+        parts.push(`<p class="form-hint text-error"><strong>${escapeHtml(st.store_name || '')}</strong>: ${escapeHtml(st.error)}</p>`);
+        continue;
+      }
+      parts.push(`<p><strong>${escapeHtml(st.store_name || '')}</strong> — ${escapeHtml(st.scope || '')}: `
+        + `к изменению ${st.would_update ?? st.updated ?? 0}, пропуск ${st.skipped_same ?? 0},`
+        + ` не найдено ${st.not_found ?? 0}, нет поля ${st.no_field ?? 0},`
+        + ` бренд ${st.brand_not_found ?? 0}`
+        + `${st.sent ? `, отправлено ${st.sent}` : ''}`
+        + `${st.truncated ? ' · <span class="text-warn">каталог усечён</span>' : ''}`
+        + `</p>`);
+      const rows = st.rows || [];
+      if (rows.length) {
+        const interesting = rows.filter((r) => !['skip_same'].includes(String(r.status || '')));
+        const useRows = interesting.length ? interesting : rows;
+        const shown = useRows.slice(0, 200);
+        let table = '<table class="items-table compliance-rows-table"><thead><tr>'
+          + '<th>offer_id</th><th>Поле</th><th>Было</th><th>Будет</th><th>Статус</th><th>Сообщение</th>'
+          + '</tr></thead><tbody>';
+        for (const r of shown) {
+          table += `<tr><td>${escapeHtml(r.offer_id || '')}</td>`
+            + `<td>${escapeHtml(r.char_name || '')}</td><td>${escapeHtml(r.current_value || '')}</td>`
+            + `<td>${escapeHtml(r.new_value || '')}</td><td>${escapeHtml(r.status || '')}</td>`
+            + `<td>${escapeHtml(r.message || '')}</td></tr>`;
+        }
+        table += '</tbody></table>';
+        if (interesting.length && interesting.length < rows.length) {
+          table += `<p class="form-hint">В таблице без «уже совпадает» (${rows.length - interesting.length} скрыто в сводке). `
+            + `Показаны ${shown.length} из ${interesting.length}.</p>`;
+        } else if (rows.length >= 200 || st.rows_truncated) {
+          table += '<p class="form-hint">Показаны первые строки отчёта</p>';
+        }
+        parts.push(bulkCharsCollapsibleTableHtml(table, {
+          count: shown.length,
+          open: shown.length <= 12,
+          hint: interesting.length && interesting.length < rows.length
+            ? 'без совпадающих'
+            : '',
+        }));
+      }
+    }
+    box.innerHTML = parts.join('');
+    box.hidden = false;
+  }
+
+  async function parseOzonBulkCharsList() {
+    const text = (document.getElementById('ozon-bulk-chars-text')?.value || '').trim();
+    if (!text) {
+      toast('Вставьте список артикулов', 'error');
+      return;
+    }
+    const btn = document.getElementById('btn-ozon-bulk-chars-parse');
+    try {
+      if (btn) btn.disabled = true;
+      const res = await api('/wb/bulk-chars/parse', { method: 'POST', body: JSON.stringify({ text }) });
+      ozonBulkCharsParsedOffers = (res.rows || []).map((r) => r.vendor_code).filter(Boolean);
+      if (res.warnings?.length) toast(res.warnings.join('; '), 'warn');
+      toast(`Разобрано артикулов: ${res.count || 0}`);
+    } catch (err) {
+      toast(err.message || 'Ошибка разбора', 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function setOzonBulkCharsActionBusy(busy) {
+    ['btn-ozon-bulk-chars-preview', 'btn-ozon-bulk-chars-apply'].forEach((id) => {
+      const b = document.getElementById(id);
+      if (b) b.disabled = !!busy;
+    });
+  }
+
+  function ozonBulkCharsPollHandlers(label) {
+    return {
+      label: label || 'Характеристики Ozon…',
+      onFinish: () => setOzonBulkCharsActionBusy(false),
+      onDone: (result) => {
+        setOzonBulkCharsActionBusy(false);
+        renderOzonBulkCharsResult(result);
+        const sent = Number(result?.sent) || 0;
+        const would = Number(result?.would_update) || 0;
+        if (sent) toast(`Ozon: отправлено ${sent} обновлений`);
+        else if (would) toast(`Ozon: к изменению ${would} карточек`);
+        else if (result?.dry_run) toast('Проверка Ozon завершена');
+        else toast('Готово — см. отчёт Ozon');
+      },
+    };
+  }
+
+  function attachOzonBulkCharsTask(taskId, label) {
+    if (!taskId) return;
+    setOzonBulkCharsActionBusy(true);
+    pollItemsTask(taskId, 'ozon-bulk-chars', ozonBulkCharsPollHandlers(label));
+  }
+
+  async function attachRunningOzonBulkCharsTask(opts = {}) {
+    const silent = !!opts.silent;
+    try {
+      const storeIds = getAutoMpStoreIds('ozon-bulk-chars-store-list');
+      const container = document.getElementById('progress-ozon-bulk-chars');
+      if (container && container._pollInterval) return true;
+      const res = await api('/tasks?status=running&action=ozon_bulk_chars&limit=20');
+      const tasks = res.tasks || [];
+      let hit = null;
+      if (storeIds.length) {
+        const want = new Set(storeIds.map(Number));
+        hit = tasks.find((t) => (t.store_ids || []).some((id) => want.has(Number(id)))) || null;
+      }
+      if (!hit) hit = tasks[0] || null;
+      if (hit?.task_id) {
+        attachOzonBulkCharsTask(hit.task_id, hit.detail || 'Характеристики Ozon…');
+        if (!silent) toast('Подключено к задаче характеристик Ozon');
+        return true;
+      }
+      const locks = await api('/store-locks');
+      const busy = (locks.locks || []).find((l) => l.operation === 'ozon_bulk_chars' && l.task_id);
+      if (busy?.task_id) {
+        attachOzonBulkCharsTask(busy.task_id, 'Характеристики Ozon…');
+        if (!silent) toast('Подключено к задаче характеристик Ozon');
+        return true;
+      }
+    } catch (_) { /* ignore */ }
+    return false;
+  }
+
+  async function stopOzonBulkCharsBusy() {
+    const storeIds = getAutoMpStoreIds('ozon-bulk-chars-store-list');
+    const activeId = getActiveTask('ozon-bulk-chars');
+    try {
+      if (activeId) {
+        try {
+          await api('/tasks/' + activeId + '/cancel', { method: 'POST', body: JSON.stringify({}) });
+        } catch (_) { /* may already be gone */ }
+      }
+      const res = await api('/store-locks/clear', {
+        method: 'POST',
+        body: JSON.stringify({ store_ids: storeIds }),
+      });
+      setActiveTask('ozon-bulk-chars', '');
+      setNavTaskRunning('wb-bulk-chars', false);
+      setOzonBulkCharsActionBusy(false);
+      const n = (res.released || []).length;
+      toast(n ? `Ozon: остановлено, снято блокировок: ${n}` : 'Ozon: блокировок не было');
+    } catch (err) {
+      toast(err.message || 'Не удалось остановить', 'error');
+    }
+  }
+
+  async function runOzonBulkCharsApply(dryRun) {
+    const storeIds = getAutoMpStoreIds('ozon-bulk-chars-store-list');
+    if (!storeIds.length) {
+      toast('Выберите магазин Ozon', 'error');
+      return;
+    }
+    const field = (document.getElementById('ozon-bulk-chars-field')?.value || '').trim();
+    const value = (document.getElementById('ozon-bulk-chars-value')?.value || '').trim();
+    if (!field || !value) {
+      toast('Укажите поле и значение', 'error');
+      return;
+    }
+    const allCatalog = !!document.getElementById('ozon-bulk-chars-all-catalog')?.checked;
+    const text = (document.getElementById('ozon-bulk-chars-text')?.value || '').trim();
+    if (!allCatalog && !text && !ozonBulkCharsParsedOffers.length) {
+      toast('Вставьте артикулы или включите «Весь каталог»', 'error');
+      return;
+    }
+    if (!dryRun) {
+      const scope = allCatalog ? 'весь каталог' : `${ozonBulkCharsParsedOffers.length || 'список'} артикулов`;
+      if (!confirm(`Заменить «${field === 'brand' ? 'Бренд' : 'ТН ВЭД'}» → «${value}» на Ozon (${scope})?`)) return;
+    }
+    const onlyDiff = !!document.getElementById('ozon-bulk-chars-only-diff')?.checked;
+    setOzonBulkCharsActionBusy(true);
+    try {
+      const res = await api('/ozon/bulk-chars/apply', {
+        method: 'POST',
+        body: JSON.stringify({
+          store_ids: storeIds,
+          field,
+          value,
+          text,
+          offer_ids: ozonBulkCharsParsedOffers,
+          all_catalog: allCatalog,
+          dry_run: !!dryRun,
+          only_if_different: onlyDiff,
+        }),
+      });
+      attachOzonBulkCharsTask(
+        res.task_id,
+        dryRun ? 'Проверка Ozon…' : 'Замена на Ozon…',
+      );
+    } catch (err) {
+      const tid = err.payload?.task_id;
+      if (err.status === 409 && tid) {
+        attachOzonBulkCharsTask(tid, err.payload?.operation === 'ozon_bulk_chars'
+          ? 'Характеристики Ozon…'
+          : 'Магазин занят…');
+        toast('Магазин занят — подключено к текущей задаче', 'warn');
+        return;
+      }
+      if (err.status === 409) {
+        const attached = await attachRunningOzonBulkCharsTask();
+        if (attached) return;
+      }
+      setOzonBulkCharsActionBusy(false);
+      toast(err.message || 'Ошибка запуска', 'error');
+    }
+  }
+
+  function wireOzonBulkCharsPanel() {
+    if (wireOzonBulkCharsPanel._done) return;
+    wireOzonBulkCharsPanel._done = true;
+    document.getElementById('ozon-bulk-chars-all-catalog')?.addEventListener('change', syncOzonBulkCharsListVisibility);
+    document.getElementById('ozon-bulk-chars-field')?.addEventListener('change', syncOzonBulkCharsPlaceholder);
+    document.getElementById('btn-ozon-bulk-chars-stores-all')?.addEventListener('click', () => ozonBulkCharsSetStoreChecks(true));
+    document.getElementById('btn-ozon-bulk-chars-stores-none')?.addEventListener('click', () => ozonBulkCharsSetStoreChecks(false));
+    document.getElementById('btn-ozon-bulk-chars-parse')?.addEventListener('click', () => { void parseOzonBulkCharsList(); });
+    document.getElementById('btn-ozon-bulk-chars-preview')?.addEventListener('click', () => { void runOzonBulkCharsApply(true); });
+    document.getElementById('btn-ozon-bulk-chars-apply')?.addEventListener('click', () => { void runOzonBulkCharsApply(false); });
+    document.getElementById('btn-ozon-bulk-chars-stop')?.addEventListener('click', () => { void stopOzonBulkCharsBusy(); });
+    document.querySelectorAll('[data-ozon-bulk-preset]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const p = btn.getAttribute('data-ozon-bulk-preset');
+        const fieldEl = document.getElementById('ozon-bulk-chars-field');
+        if (fieldEl && (p === 'tnved' || p === 'brand')) fieldEl.value = p;
+        syncOzonBulkCharsPlaceholder();
+      });
+    });
+    document.getElementById('ozon-bulk-chars-file')?.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const ta = document.getElementById('ozon-bulk-chars-text');
         if (ta) ta.value = text;
         toast('Файл загружен — нажмите «Разобрать список» или снимите «Весь каталог»');
       } catch (err) {

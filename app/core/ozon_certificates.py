@@ -67,6 +67,35 @@ def _iso_date(dmy: str) -> str:
     return ""
 
 
+def _date_key(dmy_or_iso: str) -> str:
+    iso = _iso_date(dmy_or_iso)
+    return iso[:10] if iso else ""
+
+
+def _cert_dates(cert: dict) -> Tuple[str, str]:
+    issue = _date_key(
+        cert.get("issue_date") or cert.get("issueDate") or cert.get("date_issue") or ""
+    )
+    expire = _date_key(
+        cert.get("expire_date") or cert.get("expireDate") or cert.get("date_expire") or ""
+    )
+    return issue, expire
+
+
+def _cert_needs_replace(
+    ozon_cert: dict,
+    *,
+    fsa_issue: str,
+    fsa_expire: str,
+) -> bool:
+    oz_issue, oz_expire = _cert_dates(ozon_cert)
+    if fsa_expire and oz_expire and oz_expire != fsa_expire:
+        return True
+    if fsa_issue and oz_issue and oz_issue != fsa_issue:
+        return True
+    return False
+
+
 def _type_entry_code(entry: dict) -> str:
     for key in ("value", "code", "type_code"):
         val = str(entry.get(key) or "").strip()
@@ -258,13 +287,13 @@ async def _map_offers_to_product_ids(
     return out
 
 
-async def _find_ozon_certificate_id(
+async def _find_ozon_certificate(
     client: OzonClient,
     doc_number: str,
-) -> int:
+) -> Optional[dict]:
     target = re.sub(r"\s+", "", str(doc_number or "").casefold())
     if not target:
-        return 0
+        return None
     for page in range(1, 21):
         certs = await client.product_certificate_list(page=page, page_size=100)
         if not certs:
@@ -272,11 +301,45 @@ async def _find_ozon_certificate_id(
         for c in certs:
             num = re.sub(r"\s+", "", str(c.get("number") or c.get("certificate_number") or "").casefold())
             if num and (num == target or target in num or num in target):
-                try:
-                    return int(c.get("certificate_id") or c.get("id") or 0)
-                except (TypeError, ValueError):
-                    continue
-    return 0
+                return c
+    return None
+
+
+async def _find_ozon_certificate_id(
+    client: OzonClient,
+    doc_number: str,
+) -> int:
+    cert = await _find_ozon_certificate(client, doc_number)
+    if not cert:
+        return 0
+    try:
+        return int(cert.get("certificate_id") or cert.get("id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _ensure_ozon_cert_dates(client: OzonClient, cert: dict) -> dict:
+    """Дополняет даты из /info, если в list их не было."""
+    oz_issue, oz_expire = _cert_dates(cert)
+    if oz_issue and oz_expire:
+        return cert
+    try:
+        cid = int(cert.get("certificate_id") or cert.get("id") or 0)
+    except (TypeError, ValueError):
+        return cert
+    if not cid:
+        return cert
+    try:
+        info = await client.product_certificate_info(cid)
+    except HttpStatusError:
+        return cert
+    if not isinstance(info, dict):
+        return cert
+    merged = dict(cert)
+    res = info.get("result") if isinstance(info.get("result"), dict) else info
+    if isinstance(res, dict):
+        merged.update(res)
+    return merged
 
 
 async def _resolve_ozon_certificate_id(
@@ -294,13 +357,36 @@ async def _resolve_ozon_certificate_id(
     if cached:
         return cached, "reused_batch", f"сертификат {cached} (из этой пачки)"
 
-    existing = await _find_ozon_certificate_id(client, row.doc_number)
-    if existing:
-        cert_cache[doc_key] = existing
-        return existing, "reused_ozon", f"сертификат {existing} уже в Ozon"
-
     issue = _iso_date(row.reg_date or (fsa.record.reg_date if fsa.record else ""))
     expire = _iso_date(row.valid_until or (fsa.record.end_date if fsa.record else ""))
+    fsa_issue_key = _date_key(row.reg_date or (fsa.record.reg_date if fsa.record else ""))
+    fsa_expire_key = _date_key(row.valid_until or (fsa.record.end_date if fsa.record else ""))
+
+    replaced_from = 0
+    existing_cert = await _find_ozon_certificate(client, row.doc_number)
+    if existing_cert:
+        existing_cert = await _ensure_ozon_cert_dates(client, existing_cert)
+        try:
+            existing_id = int(existing_cert.get("certificate_id") or existing_cert.get("id") or 0)
+        except (TypeError, ValueError):
+            existing_id = 0
+        if existing_id and not _cert_needs_replace(
+            existing_cert,
+            fsa_issue=fsa_issue_key,
+            fsa_expire=fsa_expire_key,
+        ):
+            cert_cache[doc_key] = existing_id
+            return existing_id, "reused_ozon", f"сертификат {existing_id} уже в Ozon"
+        if existing_id:
+            try:
+                await client.product_certificate_delete(existing_id)
+            except HttpStatusError as e:
+                return 0, "error", (
+                    f"Не удалось удалить устаревший сертификат {existing_id}: {str(e)[:200]}"
+                )
+            replaced_from = existing_id
+            cert_cache.pop(doc_key, None)
+
     if not issue:
         return 0, "error", "Нет даты регистрации для Ozon"
 
@@ -325,6 +411,8 @@ async def _resolve_ozon_certificate_id(
         return 0, "error", f"Ozon create: {note}"
 
     cert_cache[doc_key] = cert_id
+    if replaced_from:
+        return cert_id, "replaced_ozon", f"заменён сертификат {replaced_from} → {cert_id}"
     return cert_id, "created", f"создан сертификат {cert_id}"
 
 
@@ -497,18 +585,41 @@ async def apply_ozon_certificates_for_store(
 
             if dry_run:
                 if doc_key not in cert_cache:
-                    found = await _find_ozon_certificate_id(client, row.doc_number)
-                    if found:
-                        cert_cache[doc_key] = found
+                    existing_cert = await _find_ozon_certificate(client, row.doc_number)
+                    if existing_cert:
+                        existing_cert = await _ensure_ozon_cert_dates(client, existing_cert)
+                        try:
+                            found = int(existing_cert.get("certificate_id") or existing_cert.get("id") or 0)
+                        except (TypeError, ValueError):
+                            found = 0
+                        if found:
+                            cert_cache[doc_key] = found
                 existing = cert_cache.get(doc_key, 0)
                 n_same = len(doc_rows)
+                fsa_issue_key = _date_key(row.reg_date or (fsa.record.reg_date if fsa.record else ""))
+                fsa_expire_key = _date_key(row.valid_until or (fsa.record.end_date if fsa.record else ""))
                 if existing:
                     res.certificate_id = existing
                     res.status = "preview"
-                    res.message = (
-                        f"Привязка к существующему сертификату {existing}"
-                        + (f" (ещё {n_same - 1} товар(ов) с тем же номером)" if n_same > 1 else "")
+                    existing_cert = await _find_ozon_certificate(client, row.doc_number)
+                    needs_replace = bool(
+                        existing_cert
+                        and _cert_needs_replace(
+                            existing_cert,
+                            fsa_issue=fsa_issue_key,
+                            fsa_expire=fsa_expire_key,
+                        )
                     )
+                    if needs_replace:
+                        res.message = (
+                            f"Заменить сертификат {existing} (даты на Ozon не совпадают с ФСА)"
+                            + (f" (+{n_same - 1} товар(ов) с тем же номером)" if n_same > 1 else "")
+                        )
+                    else:
+                        res.message = (
+                            f"Привязка к существующему сертификату {existing}"
+                            + (f" (ещё {n_same - 1} товар(ов) с тем же номером)" if n_same > 1 else "")
+                        )
                 else:
                     issue = _iso_date(row.reg_date or (fsa.record.reg_date if fsa.record else ""))
                     res.status = "preview"

@@ -14,6 +14,7 @@ _OP_LABELS = {
     "card_links": "связки карточек",
     "wb_certificates": "сертификаты WB",
     "wb_bulk_chars": "характеристики WB",
+    "ozon_bulk_chars": "характеристики Ozon",
     "wb_card_drafts": "черновики WB",
     "ozon_certificates": "документы Ozon",
     "packaging_dims": "габариты WB",

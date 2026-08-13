@@ -62,6 +62,7 @@
 | T-043 | PWA offline mode улучшения | todo | `sw.js` есть, покрытие неизвестно |
 | T-044 | Desktop: паритет с web UI | todo | Desktop отстаёт по функциям |
 | T-045 | WB: уведомления о заблокированных карточках в Telegram | done | В отчётах + отдельный chat/интервал; `wb_banned_cards_*` |
+| T-046 | Ozon: массовая замена ТН ВЭД и бренда в «Характеристиках» | done | `ozon_bulk_chars`, `/api/ozon/bulk-chars/apply` |
 
 ---
 

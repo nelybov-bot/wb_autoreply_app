@@ -237,6 +237,7 @@ UI больше не даёт выбирать глубину — фронт в�
 | POST | `/api/packaging-dims/apply` | Замена габаритов на WB → `{ task_id }` |
 | POST | `/api/wb/bulk-chars/parse` | Разбор списка артикулов |
 | POST | `/api/wb/bulk-chars/apply` | Массовая подстановка характеристики. Body: `{ store_ids, char_name, char_value, text?, vendor_codes?, all_catalog?, dry_run?, only_if_different?, refresh_catalog? }` → `{ task_id }` |
+| POST | `/api/ozon/bulk-chars/apply` | Массовая замена ТН ВЭД / бренда на Ozon. Body: `{ store_ids, field: "tnved"|"brand", value, text?, offer_ids?, all_catalog?, dry_run?, only_if_different? }` → `{ task_id }` |
 
 Прогресс/отмена: `GET/POST /api/tasks/{id}` (+ `/cancel`). После F5 UI восстанавливает задачу из `localStorage`.
 

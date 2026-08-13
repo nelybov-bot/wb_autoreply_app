@@ -699,6 +699,38 @@ class OzonClient:
             return [x for x in res if isinstance(x, dict)]
         return []
 
+    async def search_attribute_values(
+        self,
+        *,
+        attribute_id: int,
+        description_category_id: int,
+        type_id: int,
+        value: str,
+        limit: int = 20,
+    ) -> List[dict]:
+        """POST /v1/description-category/attribute/values/search — поиск в справочнике (бренд и т.п.)."""
+        q = str(value or "").strip()
+        if not attribute_id or not description_category_id or not type_id or len(q) < 2:
+            return []
+        body = {
+            "attribute_id": int(attribute_id),
+            "description_category_id": int(description_category_id),
+            "type_id": int(type_id),
+            "value": q,
+            "limit": min(max(int(limit), 1), 100),
+        }
+        data = await self._request(
+            "POST",
+            "/v1/description-category/attribute/values/search",
+            json_body=body,
+        )
+        if not isinstance(data, dict):
+            return []
+        res = data.get("result")
+        if isinstance(res, list):
+            return [x for x in res if isinstance(x, dict)]
+        return []
+
     async def update_product_attributes(self, items: List[dict]) -> dict:
         """POST /v1/product/attributes/update — обновить атрибуты (склейка через «Название модели»)."""
         if not items:
@@ -821,5 +853,21 @@ class OzonClient:
             "product_id": [int(x) for x in product_ids if x],
         }
         data = await self._request("POST", "/v1/product/certificate/bind", json_body=body)
+        return data if isinstance(data, dict) else {}
+
+    async def product_certificate_info(self, certificate_id: int) -> dict:
+        """POST /v1/product/certificate/info — карточка сертификата в Ozon."""
+        if not certificate_id:
+            return {}
+        body = {"certificate_id": int(certificate_id)}
+        data = await self._request("POST", "/v1/product/certificate/info", json_body=body)
+        return data if isinstance(data, dict) else {}
+
+    async def product_certificate_delete(self, certificate_id: int) -> dict:
+        """POST /v1/product/certificate/delete — удалить сертификат из кабинета Ozon."""
+        if not certificate_id:
+            return {}
+        body = {"certificate_id": int(certificate_id)}
+        data = await self._request("POST", "/v1/product/certificate/delete", json_body=body)
         return data if isinstance(data, dict) else {}
 

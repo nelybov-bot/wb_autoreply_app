@@ -5012,6 +5012,17 @@ class WbBulkCharsApplyBody(BaseModel):
     refresh_catalog: bool = False
 
 
+class OzonBulkCharsApplyBody(BaseModel):
+    store_ids: list[int] = []
+    field: str = "tnved"  # tnved | brand
+    value: str = ""
+    text: str = ""
+    offer_ids: list[str] = []
+    all_catalog: bool = False
+    dry_run: bool = False
+    only_if_different: bool = True
+
+
 @app.get("/api/compliance/fsa-status")
 async def api_compliance_fsa_status(_: UserRow = Depends(require_user)):
     """Диагностика: прокси ФСА и доступность pub.fsa.gov.ru."""
@@ -5206,6 +5217,57 @@ async def api_wb_bulk_chars_apply(
                 "store_ids": body.store_ids,
                 "char_name": char_name,
                 "char_value": char_value,
+                "all_catalog": bool(body.all_catalog),
+                "dry_run": bool(body.dry_run),
+            },
+        )
+    except Exception:
+        pass
+    return {"task_id": task_id, "status": "running"}
+
+
+@app.post("/api/ozon/bulk-chars/apply")
+async def api_ozon_bulk_chars_apply(
+    body: OzonBulkCharsApplyBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    """Массовая замена ТН ВЭД / бренда в карточках Ozon."""
+    if not body.store_ids:
+        raise HTTPException(400, "Выберите хотя бы один магазин Ozon")
+    field = (body.field or "").strip()
+    value = (body.value or "").strip()
+    if not field:
+        raise HTTPException(400, "Укажите поле: ТН ВЭД или Бренд")
+    if not value:
+        raise HTTPException(400, "Укажите новое значение")
+    try:
+        offer_ids = [str(v).strip() for v in (body.offer_ids or []) if str(v).strip()]
+        task_id = await web_tasks.run_ozon_bulk_chars_apply(
+            db,
+            store_ids=body.store_ids,
+            field=field,
+            value=value,
+            text=(body.text or "").strip(),
+            offer_ids=offer_ids or None,
+            all_catalog=bool(body.all_catalog),
+            dry_run=bool(body.dry_run),
+            only_if_different=bool(body.only_if_different),
+        )
+    except StoreBusyError as e:
+        raise _http_store_busy(e) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="ozon_bulk_chars_apply",
+            item_type="ozon_bulk_chars",
+            result="started",
+            meta={
+                "store_ids": body.store_ids,
+                "field": field,
+                "value": value,
                 "all_catalog": bool(body.all_catalog),
                 "dry_run": bool(body.dry_run),
             },

@@ -12,7 +12,7 @@
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
-  <link rel="stylesheet" href="/static/styles.css?v=45">
+  <link rel="stylesheet" href="/static/styles.css?v=46">
   <link rel="stylesheet" href="/static/fx-widgets.css?v=5">
 </head>
 <body>
@@ -81,7 +81,7 @@
       <i class="ti ti-ruler-measure" aria-hidden="true"></i>
       <span class="si-label">Габариты</span>
     </div>
-    <div class="si" data-tab="wb-bulk-chars" title="Массовое редактирование характеристик WB" role="button" tabindex="0">
+    <div class="si" data-tab="wb-bulk-chars" title="Массовое редактирование характеристик WB и Ozon" role="button" tabindex="0">
       <i class="ti ti-forms" aria-hidden="true"></i>
       <span class="si-label">Характеристики</span>
     </div>
@@ -824,11 +824,11 @@
       </div>
     </section>
 
-    <!-- Массовое редактирование характеристик WB -->
+    <!-- Массовое редактирование характеристик WB / Ozon -->
     <section id="panel-wb-bulk-chars" class="panel">
       <div class="panel-toprow">
         <div>
-          <div class="panel-eyebrow">Wildberries</div>
+          <div class="panel-eyebrow">WB · Ozon</div>
           <div class="panel-heading">Массовое редактирование характеристик</div>
         </div>
       </div>
@@ -888,6 +888,64 @@
           <button type="button" class="btn btn-secondary" id="btn-wb-bulk-chars-stop" title="Остановить текущую задачу и снять блокировку магазина">Стоп / сбросить</button>
         </div>
         <div id="wb-bulk-chars-result" class="compliance-result" hidden></div>
+      </div>
+
+      <!-- Ozon: ТН ВЭД и бренд -->
+      <div class="form-card form-card-wide" style="margin-top:1.5rem">
+        <p class="form-hint" style="font-weight:600;margin-bottom:.5rem">Ozon — замена ТН ВЭД и бренда</p>
+        <p class="form-hint">Массово проставить <strong>Код ТН ВЭД ЕАЭС</strong> или <strong>Бренд</strong> через Seller API. Бренд ищется в справочнике Ozon по категории товара. Сначала «Проверить», затем «Применить на Ozon».</p>
+        <div class="wb-bulk-chars-fields">
+          <label class="wb-bulk-chars-field">
+            <span class="toolbar-label">Поле</span>
+            <select id="ozon-bulk-chars-field" class="select-md">
+              <option value="tnved">ТН ВЭД (код ЕАЭС)</option>
+              <option value="brand">Бренд</option>
+            </select>
+          </label>
+          <label class="wb-bulk-chars-field">
+            <span class="toolbar-label">Новое значение</span>
+            <input type="text" id="ozon-bulk-chars-value" class="input-md" value="" placeholder="3304990000 или название бренда">
+          </label>
+          <div class="wb-bulk-chars-presets">
+            <span class="toolbar-label">Быстро:</span>
+            <button type="button" class="btn btn-secondary btn-sm" data-ozon-bulk-preset="tnved">ТН ВЭД</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-ozon-bulk-preset="brand">Бренд</button>
+          </div>
+        </div>
+        <label class="packaging-dims-only-mismatch">
+          <input type="checkbox" id="ozon-bulk-chars-all-catalog" checked>
+          Весь каталог магазина
+        </label>
+        <label class="packaging-dims-only-mismatch">
+          <input type="checkbox" id="ozon-bulk-chars-only-diff" checked>
+          Только если значение отличается
+        </label>
+        <div class="compliance-input-block" id="ozon-bulk-chars-list-wrap" hidden>
+          <div class="compliance-input-toolbar">
+            <span class="toolbar-label">Артикулы offer_id (если не весь каталог)</span>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-bulk-chars-parse">Разобрать список</button>
+            <label class="btn btn-secondary btn-sm">
+              Файл
+              <input type="file" id="ozon-bulk-chars-file" accept=".csv,.txt,.tsv,text/plain" hidden>
+            </label>
+          </div>
+          <textarea id="ozon-bulk-chars-text" class="compliance-textarea" rows="8" placeholder="807773&#10;807774&#10;или колонка offer_id / sku"></textarea>
+        </div>
+        <div class="compliance-stores-block">
+          <div class="compliance-stores-toolbar">
+            <span class="toolbar-label">Магазины Ozon</span>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-bulk-chars-stores-all">Все</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-bulk-chars-stores-none">Снять</button>
+          </div>
+          <div id="ozon-bulk-chars-store-list" class="auto-store-list auto-store-list--compact"></div>
+        </div>
+        <div class="progress-container" id="progress-ozon-bulk-chars" hidden></div>
+        <div class="compliance-actions">
+          <button type="button" class="btn btn-secondary" id="btn-ozon-bulk-chars-preview">Проверить (dry-run)</button>
+          <button type="button" class="btn btn-primary" id="btn-ozon-bulk-chars-apply">Применить на Ozon</button>
+          <button type="button" class="btn btn-secondary" id="btn-ozon-bulk-chars-stop" title="Остановить текущую задачу и снять блокировку магазина">Стоп / сбросить</button>
+        </div>
+        <div id="ozon-bulk-chars-result" class="compliance-result" hidden></div>
       </div>
 
       <!-- Черновики WB: дозаполнение характеристик -->
@@ -1964,7 +2022,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=122"></script>
+  <script src="/static/app.js?v=124"></script>
   <script src="/static/card_links_master.js?v=9"></script>
 </body>
 </html>
