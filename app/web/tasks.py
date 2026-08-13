@@ -1647,11 +1647,12 @@ async def run_ozon_bulk_chars_apply(
     db: Any,
     *,
     store_ids: list[int],
-    field: str,
-    value: str,
+    field: str = "",
+    value: str = "",
     text: str = "",
     offer_ids: Optional[list[str]] = None,
     all_catalog: bool = False,
+    mode: str = "single",  # single | table
     dry_run: bool = False,
     only_if_different: bool = True,
 ) -> str:
@@ -1660,31 +1661,54 @@ async def run_ozon_bulk_chars_apply(
         apply_bulk_chars_multi_store,
         estimate_ozon_bulk_steps,
         normalize_field_key,
+        parse_ozon_chars_table,
     )
     from app.core.wb_bulk_chars import parse_vendor_list_text
 
-    field_key = normalize_field_key(field)
-    if field_key not in ("tnved", "brand"):
-        raise ValueError("Укажите поле: ТН ВЭД или Бренд")
-    value_s = str(value or "").strip()
-    if not value_s:
-        raise ValueError("Укажите новое значение")
+    mode_s = str(mode or "single").strip().lower()
+    if mode_s not in ("single", "table"):
+        mode_s = "single"
 
     parse_warnings: list[str] = []
+    per_offer: Optional[dict] = None
     vendors: list[str] = list(offer_ids or [])
-    if text.strip():
-        parsed, warnings = parse_vendor_list_text(text)
-        parse_warnings.extend(warnings)
-        if parsed:
-            seen = {v.casefold() for v in vendors}
-            for v in parsed:
-                if v.casefold() not in seen:
-                    vendors.append(v)
-                    seen.add(v.casefold())
+    field_key = ""
+    value_s = ""
+    use_all = False
 
-    use_all = bool(all_catalog)
-    if not use_all and not vendors:
-        raise ValueError("Укажите артикулы или включите «Весь каталог»")
+    if mode_s == "table":
+        rows, warnings = parse_ozon_chars_table(text)
+        parse_warnings.extend(warnings)
+        if not rows:
+            raise ValueError("Вставьте таблицу: артикул + бренд и/или ТН ВЭД")
+        per_offer = {
+            r["offer_id"]: {"brand": r.get("brand") or "", "tnved": r.get("tnved") or ""}
+            for r in rows
+        }
+        vendors = list(per_offer.keys())
+        n_items = len(vendors)
+        label = "Проверка таблицы Ozon" if dry_run else "Таблица брендов/ТН ВЭД Ozon"
+    else:
+        field_key = normalize_field_key(field)
+        if field_key not in ("tnved", "brand"):
+            raise ValueError("Укажите поле: ТН ВЭД или Бренд")
+        value_s = str(value or "").strip()
+        if not value_s:
+            raise ValueError("Укажите новое значение")
+        if text.strip():
+            parsed, warnings = parse_vendor_list_text(text)
+            parse_warnings.extend(warnings)
+            if parsed:
+                seen = {v.casefold() for v in vendors}
+                for v in parsed:
+                    if v.casefold() not in seen:
+                        vendors.append(v)
+                        seen.add(v.casefold())
+        use_all = bool(all_catalog)
+        if not use_all and not vendors:
+            raise ValueError("Укажите артикулы или включите «Весь каталог»")
+        n_items = 5000 if use_all else len(vendors)
+        label = "Проверка характеристик Ozon" if dry_run else "Массовое редактирование Ozon"
 
     sids = sorted({int(x) for x in store_ids if int(x) > 0})
     if not sids:
@@ -1712,8 +1736,6 @@ async def run_ozon_bulk_chars_apply(
         await store_locks.release_all_for_owner(task_id)
         raise
 
-    n_items = 5000 if use_all else len(vendors)
-    label = "Проверка характеристик Ozon" if dry_run else "Массовое редактирование Ozon"
     total_steps = estimate_ozon_bulk_steps(n_items, len(sids))
     ctrl = await _init_task(task_id, "ozon_bulk_chars", label, total_steps)
     async with _tasks_lock:
@@ -1742,6 +1764,7 @@ async def run_ozon_bulk_chars_apply(
                 value=value_s,
                 offer_ids=None if use_all else vendors,
                 all_catalog=use_all,
+                per_offer=per_offer,
                 dry_run=dry_run,
                 only_if_different=only_if_different,
                 progress_cb=_progress,
@@ -1755,7 +1778,7 @@ async def run_ozon_bulk_chars_apply(
                 _tasks[task_id]["status"] = "done"
                 _tasks[task_id]["result"] = result
                 if dry_run:
-                    _tasks[task_id]["detail"] = f"К изменению: {would} карточек"
+                    _tasks[task_id]["detail"] = f"К изменению: {would}"
                 else:
                     _tasks[task_id]["detail"] = f"Отправлено {sent} обновлений"
                 _tasks[task_id]["progress"] = [total_steps, total_steps]

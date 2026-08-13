@@ -84,6 +84,126 @@ def _norm_offer(s: str) -> str:
     return v
 
 
+_RE_SKU_HEADER = re.compile(r"sku|артикул|vendor|offer|offer_id", re.I)
+_RE_BRAND_HEADER = re.compile(r"^бренд$|^brand$", re.I)
+_RE_TNVED_HEADER = re.compile(
+    r"тн\s*вэд|tn_?ved|hs\s*code|код\s*тн|еаэс",
+    re.I,
+)
+
+
+def _split_table_line(line: str) -> List[str]:
+    if "\t" in line:
+        return [p.strip() for p in line.split("\t")]
+    if ";" in line:
+        return [p.strip() for p in line.split(";")]
+    if "," in line and re.search(r",\s*\S", line):
+        return [p.strip() for p in line.split(",")]
+    return [p.strip() for p in re.split(r"\s{2,}", line) if p.strip()]
+
+
+def parse_ozon_chars_table(text: str) -> Tuple[List[dict], List[str]]:
+    """Таблица: offer_id + бренд и/или ТН ВЭД (уникальные значения на артикул).
+
+    Заголовки (любой регистр): артикул/sku/offer_id, бренд/brand, тн вэд/tnved.
+    Без заголовка: 2 колонки = артикул + значение (нужен контекст снаружи),
+    3 колонки = артикул | бренд | тнвэд.
+    """
+    warnings: List[str] = []
+    lines = (text or "").splitlines()
+    if not any(ln.strip() for ln in lines):
+        return [], ["Пустая таблица"]
+
+    # Найти первую непустую строку
+    start = 0
+    while start < len(lines) and not lines[start].strip():
+        start += 1
+    if start >= len(lines):
+        return [], ["Пустая таблица"]
+
+    parts0 = _split_table_line(lines[start].strip())
+    sku_i = brand_i = tnved_i = -1
+    data_start = start
+    has_header = bool(parts0) and any(
+        _RE_SKU_HEADER.search(p) or _RE_BRAND_HEADER.search(p) or _RE_TNVED_HEADER.search(p)
+        for p in parts0
+    )
+    if has_header:
+        for i, p in enumerate(parts0):
+            if sku_i < 0 and _RE_SKU_HEADER.search(p):
+                sku_i = i
+            elif brand_i < 0 and _RE_BRAND_HEADER.search(p):
+                brand_i = i
+            elif tnved_i < 0 and _RE_TNVED_HEADER.search(p):
+                tnved_i = i
+        data_start = start + 1
+        if sku_i < 0:
+            sku_i = 0
+        if brand_i < 0 and tnved_i < 0:
+            # Заголовок только артикул — дальше одна колонка значений не определена
+            warnings.append("В заголовке нет колонок «Бренд» / «ТН ВЭД» — ожидайте колонки значений")
+    else:
+        # Без заголовка
+        sku_i = 0
+        if len(parts0) >= 3:
+            brand_i, tnved_i = 1, 2
+        elif len(parts0) == 2:
+            # Артикул + одно значение: эвристика — цифры → тнвэд, иначе бренд
+            second = parts0[1]
+            if re.fullmatch(r"[\d\s.\-]+", second or "") and len(normalize_tnved_value(second)) >= 8:
+                tnved_i = 1
+            else:
+                brand_i = 1
+        else:
+            return [], warnings or ["Нужны колонки: артикул и бренд и/или ТН ВЭД"]
+
+    rows: List[dict] = []
+    seen: Set[str] = set()
+    for line_no, raw in enumerate(lines[data_start:], start=data_start + 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = _split_table_line(line)
+        if not parts:
+            continue
+        oid = _norm_offer(parts[sku_i] if sku_i < len(parts) else parts[0])
+        if not oid:
+            warnings.append(f"Строка {line_no}: пустой артикул — пропущена")
+            continue
+        key = oid.casefold()
+        if key in seen:
+            warnings.append(f"Дубликат {oid} — оставлена первая строка")
+            continue
+        seen.add(key)
+
+        brand = ""
+        tnved = ""
+        if brand_i >= 0 and brand_i < len(parts):
+            brand = str(parts[brand_i] or "").strip()
+        if tnved_i >= 0 and tnved_i < len(parts):
+            tnved = normalize_tnved_value(parts[tnved_i])
+
+        if not brand and not tnved:
+            warnings.append(f"Строка {line_no} ({oid}): нет бренда и ТН ВЭД — пропущена")
+            continue
+        rows.append({"offer_id": oid, "brand": brand, "tnved": tnved})
+
+    if not rows and (text or "").strip():
+        return [], warnings or ["Не удалось разобрать ни одной строки"]
+    return rows, warnings
+
+
+def table_rows_to_api(rows: List[dict]) -> List[dict]:
+    out = []
+    for r in rows:
+        out.append({
+            "offer_id": r.get("offer_id") or "",
+            "brand": r.get("brand") or "",
+            "tnved": r.get("tnved") or "",
+        })
+    return out
+
+
 def _attr_id(a: dict) -> int:
     for key in ("id", "attribute_id", "attributeId"):
         try:
@@ -358,41 +478,62 @@ async def apply_bulk_chars_for_store(
     client_id: str,
     api_key: str,
     *,
-    field: str,
-    value: str,
+    field: str = "",
+    value: str = "",
     offer_ids: Optional[List[str]] = None,
     all_catalog: bool = False,
+    per_offer: Optional[Dict[str, Dict[str, str]]] = None,
     dry_run: bool = False,
     only_if_different: bool = True,
     progress_cb: Optional[ProgressCb] = None,
     cancel: Any = None,
     store_name: str = "",
 ) -> dict:
-    field_key = normalize_field_key(field)
-    if field_key not in ("tnved", "brand"):
-        raise ValueError("Укажите поле: ТН ВЭД или Бренд")
+    """Массовая замена.
 
-    raw_value = str(value or "").strip()
-    if not raw_value:
-        raise ValueError("Укажите новое значение")
+    Режим таблицы: ``per_offer`` = {offer_id: {brand?, tnved?}}.
+    Режим одно значение: ``field`` + ``value`` (+ offer_ids / all_catalog).
+    """
+    targets: Dict[str, Dict[str, str]] = {}
+    mode = "table" if per_offer else "single"
 
-    new_value = normalize_tnved_value(raw_value) if field_key == "tnved" else raw_value
-    if field_key == "tnved":
-        if not new_value:
+    if per_offer:
+        for oid_raw, vals in per_offer.items():
+            oid = _norm_offer(str(oid_raw or ""))
+            if not oid or not isinstance(vals, dict):
+                continue
+            brand = str(vals.get("brand") or "").strip()
+            tnved = normalize_tnved_value(str(vals.get("tnved") or ""))
+            if not brand and not tnved:
+                continue
+            targets[oid] = {"brand": brand, "tnved": tnved}
+        if not targets:
+            raise ValueError("В таблице нет строк с брендом или ТН ВЭД")
+        field_key = "table"
+        label = "Бренд / ТН ВЭД"
+        new_value = ""
+        codes = list(targets.keys())
+    else:
+        field_key = normalize_field_key(field)
+        if field_key not in ("tnved", "brand"):
+            raise ValueError("Укажите поле: ТН ВЭД или Бренд")
+        raw_value = str(value or "").strip()
+        if not raw_value:
+            raise ValueError("Укажите новое значение")
+        new_value = normalize_tnved_value(raw_value) if field_key == "tnved" else raw_value
+        if field_key == "tnved" and not new_value:
             raise ValueError("Код ТН ВЭД должен содержать цифры")
-        if len(new_value) not in (8, 10):
-            # Ozon обычно ждёт 10 знаков; 8 — иногда встречается в старых данных
-            log.warning("tnved length %s for value %s", len(new_value), new_value)
+        label = field_label(field_key)
+        codes = list(dict.fromkeys(_norm_offer(v) for v in (offer_ids or []) if _norm_offer(v)))
 
     _raise_if_cancelled(cancel)
     client = OzonClient(client_id, api_key, timeout_s=120.0)
-    codes = list(dict.fromkeys(_norm_offer(v) for v in (offer_ids or []) if _norm_offer(v)))
 
     if progress_cb:
         progress_cb(0, 1, f"{store_name or 'Ozon'}: список товаров…")
 
     list_meta: dict = {}
-    if all_catalog or not codes:
+    if mode == "single" and (all_catalog or not codes):
         listed = await client.list_products_all(
             max_pages=_CATALOG_MAX_PAGES,
             meta_out=list_meta,
@@ -405,13 +546,18 @@ async def apply_bulk_chars_for_store(
         scope_label = f"весь каталог ({len(codes)})"
         if list_meta.get("truncated"):
             scope_label += ", усечён"
+        for oid in codes:
+            targets[oid] = {field_key: new_value}
     else:
+        if mode == "single":
+            for oid in codes:
+                targets[oid] = {field_key: new_value}
         listed = await client.list_products_all(
             max_pages=5,
             offer_ids=codes,
             meta_out=list_meta,
         )
-        scope_label = f"список ({len(codes)} арт.)"
+        scope_label = f"таблица ({len(codes)} арт.)" if mode == "table" else f"список ({len(codes)} арт.)"
 
     _raise_if_cancelled(cancel)
     meta_by_offer = await _fetch_products_meta(
@@ -420,16 +566,18 @@ async def apply_bulk_chars_for_store(
 
     results: List[dict] = []
     updates: List[dict] = []
+    # offer_id → list of result row indices that belong to this update item
+    pending_by_offer: Dict[str, List[int]] = {}
     skipped = 0
     not_found = 0
     no_field = 0
     brand_miss = 0
-    label = field_label(field_key)
     total = max(len(codes), 1)
 
     for step, oid in enumerate(codes, start=1):
         if step % 25 == 0:
             _raise_if_cancelled(cancel)
+        want = targets.get(oid) or {}
         meta = meta_by_offer.get(oid)
         if not meta:
             not_found += 1
@@ -438,7 +586,7 @@ async def apply_bulk_chars_for_store(
                 "status": "not_found",
                 "message": "Артикул не найден в каталоге Ozon",
                 "current_value": "",
-                "new_value": new_value,
+                "new_value": want.get("brand") or want.get("tnved") or new_value,
                 "char_name": label,
             })
             continue
@@ -449,80 +597,92 @@ async def apply_bulk_chars_for_store(
             int(meta.get("description_category_id") or 0),
             int(meta.get("type_id") or 0),
         )
-        attr_id, attr_name = _resolve_attr_id(
-            field_key, names=names, brand_ids=brand_ids, attrs=attrs,
-        )
-        if not attr_id:
-            no_field += 1
-            results.append({
-                "offer_id": oid,
-                "status": "no_field",
-                "message": f"Поле «{label}» не найдено в категории",
-                "current_value": "",
-                "new_value": new_value,
-                "char_name": label,
-            })
-            continue
+        attr_payloads: List[dict] = []
+        row_idxs: List[int] = []
 
-        current = _current_value(attrs, attr_id)
-        dict_id: Optional[int] = None
-        send_value = new_value
-        if field_key == "brand":
-            dict_id, matched, err = await _resolve_brand_dictionary(
-                client,
-                attribute_id=attr_id,
-                description_category_id=int(meta.get("description_category_id") or 0),
-                type_id=int(meta.get("type_id") or 0),
-                brand_name=new_value,
+        for fk in ("brand", "tnved"):
+            val = str(want.get(fk) or "").strip()
+            if not val:
+                continue
+            if fk == "tnved":
+                val = normalize_tnved_value(val)
+                if not val:
+                    continue
+            fl = field_label(fk)
+            attr_id, attr_name = _resolve_attr_id(
+                fk, names=names, brand_ids=brand_ids, attrs=attrs,
             )
-            if err or not dict_id:
-                brand_miss += 1
+            if not attr_id:
+                no_field += 1
                 results.append({
                     "offer_id": oid,
-                    "status": "brand_not_found",
-                    "message": err or "Бренд не найден",
-                    "current_value": current,
-                    "new_value": new_value,
-                    "char_name": attr_name or label,
+                    "status": "no_field",
+                    "message": f"Поле «{fl}» не найдено в категории",
+                    "current_value": "",
+                    "new_value": val,
+                    "char_name": fl,
                 })
                 continue
-            send_value = matched or new_value
 
-        if only_if_different and current and current.casefold() == send_value.casefold():
-            skipped += 1
+            current = _current_value(attrs, attr_id)
+            dict_id: Optional[int] = None
+            send_value = val
+            if fk == "brand":
+                dict_id, matched, err = await _resolve_brand_dictionary(
+                    client,
+                    attribute_id=attr_id,
+                    description_category_id=int(meta.get("description_category_id") or 0),
+                    type_id=int(meta.get("type_id") or 0),
+                    brand_name=val,
+                )
+                if err or not dict_id:
+                    brand_miss += 1
+                    results.append({
+                        "offer_id": oid,
+                        "status": "brand_not_found",
+                        "message": err or "Бренд не найден",
+                        "current_value": current,
+                        "new_value": val,
+                        "char_name": attr_name or fl,
+                    })
+                    continue
+                send_value = matched or val
+
+            if only_if_different and current and current.casefold() == send_value.casefold():
+                skipped += 1
+                results.append({
+                    "offer_id": oid,
+                    "status": "skip_same",
+                    "message": "Уже совпадает",
+                    "current_value": current,
+                    "new_value": send_value,
+                    "char_name": attr_name or fl,
+                })
+                continue
+
+            if fk == "brand" and dict_id:
+                value_payload = {"dictionary_value_id": int(dict_id), "value": send_value}
+            else:
+                value_payload = {"dictionary_value_id": 0, "value": send_value}
+            attr_payloads.append({"id": int(attr_id), "values": [value_payload]})
+            row_idxs.append(len(results))
             results.append({
                 "offer_id": oid,
-                "status": "skip_same",
-                "message": "Уже совпадает",
+                "status": "pending" if not dry_run else "would_update",
+                "message": "Будет обновлено" if dry_run else "В очереди",
                 "current_value": current,
                 "new_value": send_value,
-                "char_name": attr_name or label,
+                "char_name": attr_name or fl,
             })
-            continue
 
-        value_payload: dict
-        if field_key == "brand" and dict_id:
-            value_payload = {"dictionary_value_id": int(dict_id), "value": send_value}
-        else:
-            value_payload = {"dictionary_value_id": 0, "value": send_value}
+        if attr_payloads:
+            item_body: dict = {"offer_id": oid, "attributes": attr_payloads}
+            pid = int(meta.get("product_id") or 0)
+            if pid:
+                item_body["product_id"] = pid
+            updates.append(item_body)
+            pending_by_offer[oid] = row_idxs
 
-        item_body: dict = {
-            "offer_id": oid,
-            "attributes": [{"id": int(attr_id), "values": [value_payload]}],
-        }
-        pid = int(meta.get("product_id") or 0)
-        if pid:
-            item_body["product_id"] = pid
-
-        updates.append(item_body)
-        results.append({
-            "offer_id": oid,
-            "status": "pending" if not dry_run else "would_update",
-            "message": "Будет обновлено" if dry_run else "В очереди",
-            "current_value": current,
-            "new_value": send_value,
-            "char_name": attr_name or label,
-        })
         if progress_cb and step % 20 == 0:
             progress_cb(step, total, f"Проверка {step}/{total}")
 
@@ -532,34 +692,32 @@ async def apply_bulk_chars_for_store(
         for i in range(0, len(updates), _UPDATE_BATCH):
             _raise_if_cancelled(cancel)
             batch = updates[i : i + _UPDATE_BATCH]
+            batch_oids = {str(u.get("offer_id") or "") for u in batch}
             try:
                 await client.update_product_attributes(batch)
                 sent += len(batch)
-                for row in results:
-                    if row.get("status") == "pending" and any(
-                        u.get("offer_id") == row.get("offer_id") for u in batch
-                    ):
-                        row["status"] = "updated"
-                        row["message"] = "Отправлено на Ozon"
+                for oid in batch_oids:
+                    for idx in pending_by_offer.get(oid) or []:
+                        if 0 <= idx < len(results) and results[idx].get("status") == "pending":
+                            results[idx]["status"] = "updated"
+                            results[idx]["message"] = "Отправлено на Ozon"
             except HttpStatusError as e:
                 errors += len(batch)
                 msg = f"Ozon HTTP {e.status}: {str(e)[:180]}"
-                for row in results:
-                    if row.get("status") == "pending" and any(
-                        u.get("offer_id") == row.get("offer_id") for u in batch
-                    ):
-                        row["status"] = "error"
-                        row["message"] = msg
+                for oid in batch_oids:
+                    for idx in pending_by_offer.get(oid) or []:
+                        if 0 <= idx < len(results) and results[idx].get("status") == "pending":
+                            results[idx]["status"] = "error"
+                            results[idx]["message"] = msg
                 log.warning("ozon bulk chars batch failed: %s", msg)
             except Exception as e:
                 errors += len(batch)
                 msg = str(e)[:200]
-                for row in results:
-                    if row.get("status") == "pending" and any(
-                        u.get("offer_id") == row.get("offer_id") for u in batch
-                    ):
-                        row["status"] = "error"
-                        row["message"] = msg
+                for oid in batch_oids:
+                    for idx in pending_by_offer.get(oid) or []:
+                        if 0 <= idx < len(results) and results[idx].get("status") == "pending":
+                            results[idx]["status"] = "error"
+                            results[idx]["message"] = msg
                 log.exception("ozon bulk chars batch: %s", e)
             if progress_cb:
                 progress_cb(
@@ -574,6 +732,7 @@ async def apply_bulk_chars_for_store(
     updated = sum(1 for r in results if r.get("status") == "updated")
     return {
         "store_name": store_name,
+        "mode": mode,
         "field": field_key,
         "field_label": label,
         "value": new_value,
@@ -597,10 +756,11 @@ async def apply_bulk_chars_for_store(
 async def apply_bulk_chars_multi_store(
     stores: List[Tuple[int, str, str, str]],
     *,
-    field: str,
-    value: str,
+    field: str = "",
+    value: str = "",
     offer_ids: Optional[List[str]] = None,
     all_catalog: bool = False,
+    per_offer: Optional[Dict[str, Dict[str, str]]] = None,
     dry_run: bool = False,
     only_if_different: bool = True,
     progress_cb: Optional[ProgressCb] = None,
@@ -609,13 +769,13 @@ async def apply_bulk_chars_multi_store(
     """stores: (store_id, name, client_id, api_key)."""
     parts: List[dict] = []
     n_stores = max(len(stores), 1)
+    mode = "table" if per_offer else "single"
     for idx, (sid, name, cid, key) in enumerate(stores):
         _raise_if_cancelled(cancel)
 
         def _cb(done: int, total: int, detail: str, _i: int = idx) -> None:
             if not progress_cb:
                 return
-            # Суммируем прогресс магазинов грубо: каждый магазин — свой диапазон.
             progress_cb(
                 _i * 10_000 + int(done),
                 n_stores * 10_000 + max(int(total), 1),
@@ -630,6 +790,7 @@ async def apply_bulk_chars_multi_store(
                 value=value,
                 offer_ids=offer_ids,
                 all_catalog=all_catalog,
+                per_offer=per_offer,
                 dry_run=dry_run,
                 only_if_different=only_if_different,
                 progress_cb=_cb,
@@ -645,8 +806,9 @@ async def apply_bulk_chars_multi_store(
             parts.append({
                 "store_id": sid,
                 "store_name": name,
-                "field": normalize_field_key(field),
-                "field_label": field_label(normalize_field_key(field)),
+                "mode": mode,
+                "field": normalize_field_key(field) if not per_offer else "table",
+                "field_label": "Бренд / ТН ВЭД" if per_offer else field_label(normalize_field_key(field)),
                 "value": str(value or "").strip(),
                 "dry_run": dry_run,
                 "error": str(e)[:300],
@@ -667,8 +829,9 @@ async def apply_bulk_chars_multi_store(
 
     return {
         "dry_run": dry_run,
-        "field": normalize_field_key(field),
-        "field_label": field_label(normalize_field_key(field)),
+        "mode": mode,
+        "field": "table" if per_offer else normalize_field_key(field),
+        "field_label": "Бренд / ТН ВЭД" if per_offer else field_label(normalize_field_key(field)),
         "value": str(value or "").strip(),
         "stores": parts,
         "total": _sum("total"),
