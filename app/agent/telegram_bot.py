@@ -14,12 +14,18 @@ from app.agent.tools import AgentContext
 from app.core.telegram_notify import (
     normalize_telegram_bot_token,
     normalize_telegram_chat_id,
+    resolve_telegram_chat_id,
     send_telegram_message,
     telegram_answer_callback_query,
     telegram_edit_message_reply_markup,
     telegram_get_updates,
     telegram_send_chat_action,
     verify_telegram_bot_token,
+)
+from app.core.avito_notify import (
+    lookup_tg_reply_target,
+    notify_enabled as avito_notify_enabled,
+    send_avito_reply_from_telegram,
 )
 from app.db import Database, UserRow
 
@@ -272,7 +278,7 @@ async def _reply_agent(
     body = strip_leaked_json((text or "").strip()) or "—"
     html_body = html if html is not None else format_agent_telegram_reply(body, needs_confirm=needs_confirm)
     markup = _CONFIRM_KEYBOARD if needs_confirm else None
-    ok, err = await send_telegram_message(
+    ok, err, _ = await send_telegram_message(
         token,
         chat_id,
         html_body,
@@ -281,7 +287,7 @@ async def _reply_agent(
         db=db,
     )
     if not ok:
-        ok2, err2 = await send_telegram_message(
+        ok2, err2, _ = await send_telegram_message(
             token,
             chat_id,
             body,
@@ -345,6 +351,79 @@ async def _process_agent_input(
     )
 
 
+def _avito_reply_chat_allowed(db: Database, chat_id: object) -> bool:
+    """Ответы на Avito-алерты — в чате Avito или в основном Telegram-чате."""
+    allowed: set[str] = set()
+    for raw in (
+        resolve_telegram_chat_id(db, "avito"),
+        (db.get_setting("telegram_chat_id") or "").strip(),
+        (db.get_setting("avito_notify_telegram_chat_id") or "").strip(),
+    ):
+        if not raw:
+            continue
+        cid = normalize_telegram_chat_id(raw)
+        if cid != "":
+            allowed.add(str(cid))
+    return str(normalize_telegram_chat_id(chat_id)) in allowed
+
+
+async def _try_handle_avito_reply(db: Database, message: dict) -> bool:
+    """
+    Если это reply на уведомление Avito — отправить текст в Avito.
+    Возвращает True, если сообщение обработано (не отдавать агенту).
+    """
+    reply = message.get("reply_to_message")
+    if not isinstance(reply, dict):
+        return False
+    text = (message.get("text") or "").strip()
+    if not text:
+        return False
+    chat = message.get("chat") or {}
+    chat_id = chat.get("id")
+    if chat_id is None:
+        return False
+    if not _avito_reply_chat_allowed(db, chat_id):
+        return False
+
+    reply_mid = reply.get("message_id")
+    target = lookup_tg_reply_target(db, tg_chat_id=chat_id, tg_message_id=reply_mid)
+    if not target:
+        # Иногда Telegram в группах отдаёт reply без нашего map (старое сообщение) —
+        # тогда не перехватываем, пусть идёт агенту.
+        return False
+
+    token = normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or "")
+    store_id = int(target.get("store_id") or 0)
+    avito_chat = str(target.get("avito_chat_id") or "").strip()
+    item = escape_tg(str(target.get("item") or "").strip() or "чат Avito")
+
+    ok, err = await send_avito_reply_from_telegram(
+        db,
+        store_id=store_id,
+        avito_chat_id=avito_chat,
+        text=text,
+    )
+    if ok:
+        await send_telegram_message(
+            token,
+            chat_id,
+            f"✅ <b>Отправлено в Avito</b>\n📦 {item}",
+            parse_mode="HTML",
+            reply_to_message_id=message.get("message_id"),
+            db=db,
+        )
+    else:
+        await send_telegram_message(
+            token,
+            chat_id,
+            f"❌ Не удалось отправить в Avito: {escape_tg(err)}",
+            parse_mode="HTML",
+            reply_to_message_id=message.get("message_id"),
+            db=db,
+        )
+    return True
+
+
 async def _handle_message(db: Database, message: dict) -> None:
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
@@ -356,6 +435,13 @@ async def _handle_message(db: Database, message: dict) -> None:
     token = normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or "")
     if not token:
         return
+
+    # Reply на алерт Avito — до агента (работает даже без AI-агента).
+    try:
+        if await _try_handle_avito_reply(db, message):
+            return
+    except Exception:
+        log.exception("avito telegram reply handler failed")
 
     text = (message.get("text") or "").strip()
     low = text.lower()
@@ -459,7 +545,7 @@ async def _process_update(db: Database, update: dict) -> None:
 
 
 async def telegram_agent_loop() -> None:
-    """Фоновый long polling Telegram Bot API."""
+    """Фоновый long polling Telegram Bot API (агент + ответы в Avito)."""
     log.info("Telegram agent loop started")
     idle_sleep = 5.0
     while True:
@@ -468,7 +554,10 @@ async def telegram_agent_loop() -> None:
                 await asyncio.sleep(idle_sleep)
                 continue
             db = _get_db_fn()
-            if not telegram_agent_enabled(db):
+            agent_on = telegram_agent_enabled(db)
+            avito_on = avito_notify_enabled(db)
+            # Нужен polling, если включён агент или уведомления Avito (для reply → Avito).
+            if not agent_on and not avito_on:
                 await asyncio.sleep(idle_sleep)
                 continue
             token = normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or "")

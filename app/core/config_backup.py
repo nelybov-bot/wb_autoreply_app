@@ -22,6 +22,7 @@ RUNTIME_SETTING_KEYS = frozenset({
     "wb_banned_cards_last_snapshot",
     "avito_notify_last_check",
     "avito_notify_seen_json",
+    "avito_tg_reply_map_json",
     "telegram_agent_update_offset",
 })
 

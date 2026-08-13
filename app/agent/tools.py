@@ -245,7 +245,7 @@ async def _tool_telegram_broadcast(ctx: AgentContext, args: dict[str, Any]) -> d
     sent = 0
     errors: list[str] = []
     for cid in chat_ids:
-        ok, err = await send_telegram_message(token, cid, text, db=ctx.db)
+        ok, err, _ = await send_telegram_message(token, cid, text, db=ctx.db)
         if ok:
             sent += 1
         else:

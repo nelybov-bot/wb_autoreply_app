@@ -252,6 +252,27 @@ class AvitoClient:
             return [m for m in data if isinstance(m, dict)]
         return []
 
+    async def send_text_message(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        user_id: Optional[int] = None,
+    ) -> dict:
+        uid = int(user_id) if user_id else await self.resolve_user_id()
+        cid = (chat_id or "").strip()
+        body = (text or "").strip()
+        if not cid or not body:
+            raise HttpStatusError(400, "нужны chat_id и текст")
+        if len(body) > 1000:
+            body = body[:997] + "…"
+        data = await self._request(
+            "POST",
+            f"/messenger/v1/accounts/{uid}/chats/{cid}/messages",
+            json_body={"type": "text", "message": {"text": body}},
+        )
+        return data if isinstance(data, dict) else {"ok": True}
+
     async def subscribe_webhook(self, url: str) -> dict:
         data = await self._request(
             "POST",

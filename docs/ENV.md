@@ -72,6 +72,7 @@ API `GET /api/settings` возвращает секреты **замаскиро
 | `avito_messages_notify_enabled` | `1` / пусто — уведомления о входящих сообщениях (default вкл.) |
 | `avito_notify_seen_json` | Служебный JSON seen order/message ids |
 | `avito_notify_last_check` | Служебная метка последнего опроса |
+| `avito_tg_reply_map_json` | Связка Telegram message_id → чат Avito (для ответа reply) |
 
 ### Проверка карточек (`card_check.py`)
 

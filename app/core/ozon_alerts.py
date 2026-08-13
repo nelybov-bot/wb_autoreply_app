@@ -857,7 +857,7 @@ async def _send_ozon_alert_telegram(
         consequence=compact.get("consequence", ""),
         alert_category=alert_category,
     )
-    ok, _ = await send_telegram_message(token, chat_tg, body, parse_mode=parse_mode, db=db)
+    ok, _, _ = await send_telegram_message(token, chat_tg, body, parse_mode=parse_mode, db=db)
     if ok:
         db.mark_ozon_important_alert_telegram_sent(alert_id)
     else:

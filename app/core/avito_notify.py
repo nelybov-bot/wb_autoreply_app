@@ -26,7 +26,7 @@ from .avito_client import (
     order_total_rub,
 )
 from .net import HttpStatusError
-from .telegram_notify import escape_tg_html, send_telegram_message
+from .telegram_notify import escape_tg_html, normalize_telegram_chat_id, send_telegram_message
 
 log = logging.getLogger("avito_notify")
 
@@ -36,6 +36,7 @@ SETTING_MESSAGES = "avito_messages_notify_enabled"
 SETTING_CHAT_ID = "avito_notify_telegram_chat_id"
 SETTING_SEEN = "avito_notify_seen_json"
 SETTING_LAST_CHECK = "avito_notify_last_check"
+SETTING_REPLY_MAP = "avito_tg_reply_map_json"
 
 # Новые заказы, требующие внимания продавца.
 ORDER_WATCH_STATUSES = ("on_confirmation", "ready_to_ship")
@@ -46,6 +47,7 @@ ORDERS_LOOKBACK_SEC = 14 * 24 * 3600
 # Сколько id держим в seen-словарях на магазин.
 _MAX_SEEN_ORDERS = 400
 _MAX_SEEN_MESSAGES = 600
+_MAX_REPLY_MAP = 250
 
 POLL_SECONDS = 90
 
@@ -242,8 +244,75 @@ def format_chat_message(
         f"👤 {buyer_s}",
         "",
         body,
+        "",
+        "<i>↩️ Ответьте на это сообщение — уйдёт покупателю в Avito</i>",
     ]
     return "\n".join(lines)
+
+
+def _reply_map_key(tg_chat_id: Any, tg_message_id: Any) -> str:
+    return f"{normalize_telegram_chat_id(tg_chat_id)}:{int(tg_message_id)}"
+
+
+def _load_reply_map(db: Database) -> dict[str, Any]:
+    raw = (db.get_setting(SETTING_REPLY_MAP) or "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_reply_map(db: Database, data: dict[str, Any]) -> None:
+    # Оставляем последние N ключей (порядок вставки).
+    if len(data) > _MAX_REPLY_MAP:
+        keys = list(data.keys())[-_MAX_REPLY_MAP:]
+        data = {k: data[k] for k in keys}
+    db.set_setting(SETTING_REPLY_MAP, json.dumps(data, ensure_ascii=False))
+
+
+def remember_tg_reply_target(
+    db: Database,
+    *,
+    tg_chat_id: Any,
+    tg_message_id: Any,
+    store_id: int,
+    avito_chat_id: str,
+    item_title: str = "",
+) -> None:
+    if tg_message_id is None or not avito_chat_id:
+        return
+    try:
+        mid = int(tg_message_id)
+    except (TypeError, ValueError):
+        return
+    data = _load_reply_map(db)
+    data[_reply_map_key(tg_chat_id, mid)] = {
+        "store_id": int(store_id),
+        "avito_chat_id": str(avito_chat_id),
+        "item": (item_title or "")[:120],
+        "ts": int(time.time()),
+    }
+    _save_reply_map(db, data)
+
+
+def lookup_tg_reply_target(
+    db: Database,
+    *,
+    tg_chat_id: Any,
+    tg_message_id: Any,
+) -> Optional[dict[str, Any]]:
+    if tg_message_id is None:
+        return None
+    try:
+        mid = int(tg_message_id)
+    except (TypeError, ValueError):
+        return None
+    data = _load_reply_map(db)
+    row = data.get(_reply_map_key(tg_chat_id, mid))
+    return row if isinstance(row, dict) else None
 
 
 async def _send(
@@ -251,7 +320,7 @@ async def _send(
     bot_token: str,
     chat_id: str,
     text: str,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, Optional[int]]:
     return await send_telegram_message(
         bot_token,
         chat_id,
@@ -259,6 +328,44 @@ async def _send(
         parse_mode="HTML",
         db=db,
     )
+
+
+async def send_avito_reply_from_telegram(
+    db: Database,
+    *,
+    store_id: int,
+    avito_chat_id: str,
+    text: str,
+) -> tuple[bool, str]:
+    """Отправка текста в чат Avito от имени магазина."""
+    body = (text or "").strip()
+    if not body:
+        return False, "пустой текст"
+    stores = [s for s in db.list_stores() if int(s.id) == int(store_id)]
+    if not stores:
+        return False, "магазин Avito не найден"
+    store = stores[0]
+    if (store.marketplace or "").strip().lower() != "avito":
+        return False, "магазин не Avito"
+    if not store.active:
+        return False, "магазин выключен"
+    client = _client_for_store(store)
+    try:
+        await _ensure_user_id(db, store, client)
+        await client.send_text_message(
+            avito_chat_id,
+            body,
+            user_id=store.business_id,
+        )
+        return True, ""
+    except HttpStatusError as e:
+        hint = ""
+        if e.status == 402:
+            hint = " (нужна подписка Avito с API мессенджера)"
+        return False, f"Avito HTTP {e.status}{hint}: {str(e.body)[:160]}"
+    except Exception as e:
+        log.exception("avito reply send failed store=%s chat=%s", store_id, avito_chat_id)
+        return False, str(e)[:180]
 
 
 async def poll_store_orders(
@@ -303,7 +410,7 @@ async def poll_store_orders(
         known.add(oid)
         if notify and bucket.get("seeded"):
             text = format_order_message(store.name or f"#{store.id}", order)
-            ok, err = await _send(db, bot_token, chat_id, text)
+            ok, err, _ = await _send(db, bot_token, chat_id, text)
             if ok:
                 sent += 1
             else:
@@ -395,9 +502,17 @@ async def poll_store_messages(
                 lm,
                 our_user_id=store.business_id,
             )
-            ok, err = await _send(db, bot_token, chat_id, text)
+            ok, err, tg_mid = await _send(db, bot_token, chat_id, text)
             if ok:
                 sent += 1
+                remember_tg_reply_target(
+                    db,
+                    tg_chat_id=chat_id,
+                    tg_message_id=tg_mid,
+                    store_id=int(store.id),
+                    avito_chat_id=cid,
+                    item_title=chat_item_title(chat),
+                )
             else:
                 log.warning("avito msg tg fail store=%s chat=%s: %s", store.id, cid, err)
 

@@ -1674,7 +1674,7 @@ async def _send_wb_banned_cards_report(
 
     if delta:
         urgent_body = format_banned_delta_message(delta)
-        ok, tg_err = await send_telegram_message(
+        ok, tg_err, _ = await send_telegram_message(
             token, chat_id, urgent_body, parse_mode="HTML", db=db
         )
         if not ok:
@@ -1709,7 +1709,7 @@ async def _send_wb_banned_cards_report(
 
     if need_digest:
         body = format_banned_cards_message(summary)
-        ok, tg_err = await send_telegram_message(
+        ok, tg_err, _ = await send_telegram_message(
             token, chat_id, body, parse_mode="HTML", db=db
         )
         if not ok:

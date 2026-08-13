@@ -222,7 +222,7 @@ async def test_telegram_delivery(
     cid = normalize_telegram_chat_id(chat_id)
     if not cid:
         return False, "chat_id не задан", bot
-    sent_ok, sent_err = await send_telegram_message(
+    sent_ok, sent_err, _ = await send_telegram_message(
         bot_token, chat_id, text, parse_mode=TELEGRAM_PARSE_MODE, db=db
     )
     if not sent_ok:
@@ -274,30 +274,33 @@ async def send_telegram_message(
     *,
     parse_mode: Optional[str] = None,
     reply_markup: Optional[dict] = None,
+    reply_to_message_id: Optional[int] = None,
     db=None,
-) -> Tuple[bool, str]:
+) -> Tuple[bool, str, Optional[int]]:
     """
-    Отправка в Telegram. Возвращает (успех, описание ошибки).
+    Отправка в Telegram. Возвращает (успех, описание ошибки, message_id).
     Telegram Bot API часто отвечает HTTP 200 с ok=false — проверяем поле ok в JSON.
     """
     token = normalize_telegram_bot_token(bot_token)
     cid = normalize_telegram_chat_id(chat_id)
     body = (text or "").strip()
     if not token or not cid or not body:
-        return False, "не заданы токен, chat_id или текст"
+        return False, "не заданы токен, chat_id или текст", None
     if not is_plausible_telegram_token(token):
         return (
             False,
             "неверный формат токена (ожидается 123456789:AAH... от @BotFather)",
+            None,
         )
     url = TELEGRAM_API.format(token=token)
     chunks = [
         body[i : i + TELEGRAM_MAX_MESSAGE_LEN]
         for i in range(0, len(body), TELEGRAM_MAX_MESSAGE_LEN)
     ]
+    last_message_id: Optional[int] = None
     try:
         async with aiohttp.ClientSession() as session:
-            for chunk in chunks:
+            for chunk_i, chunk in enumerate(chunks):
                 sent = False
                 err = ""
                 for attempt in range(2):
@@ -308,8 +311,13 @@ async def send_telegram_message(
                     }
                     if parse_mode:
                         payload["parse_mode"] = parse_mode
-                    if reply_markup:
+                    if reply_markup and chunk_i == 0:
                         payload["reply_markup"] = reply_markup
+                    if reply_to_message_id is not None and chunk_i == 0:
+                        try:
+                            payload["reply_to_message_id"] = int(reply_to_message_id)
+                        except (TypeError, ValueError):
+                            pass
                     async with session.post(
                         url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
                     ) as resp:
@@ -320,10 +328,16 @@ async def send_telegram_message(
                             if resp.status != 200:
                                 err = f"HTTP {resp.status}: {raw[:200]}"
                                 log.warning("Telegram sendMessage failed: %s", err)
-                                return False, err
-                            return False, "неверный ответ Telegram"
+                                return False, err, None
+                            return False, "неверный ответ Telegram", None
                         if isinstance(data, dict) and data.get("ok"):
                             sent = True
+                            result = data.get("result") if isinstance(data.get("result"), dict) else {}
+                            mid = result.get("message_id")
+                            try:
+                                last_message_id = int(mid) if mid is not None else last_message_id
+                            except (TypeError, ValueError):
+                                pass
                             break
                         err = describe_telegram_api_error(int(resp.status), data)
                         migrated = telegram_migrate_chat_id(data) if isinstance(data, dict) else None
@@ -344,13 +358,13 @@ async def send_telegram_message(
                             cid,
                             err[:240],
                         )
-                        return False, err
+                        return False, err, None
                 if not sent:
-                    return False, err or "не удалось отправить в Telegram"
-        return True, ""
+                    return False, err or "не удалось отправить в Telegram", None
+        return True, "", last_message_id
     except Exception as e:
         log.exception("Telegram send_telegram_message: %s", e)
-        return False, str(e)
+        return False, str(e), None
 
 
 async def telegram_get_updates(
@@ -542,9 +556,10 @@ async def send_activity_report(
         include_card_errors=include_card_errors,
         banned_cards_summary=banned_cards_summary,
     )
-    return await send_telegram_message(
+    ok, err, _ = await send_telegram_message(
         bot_token, chat_id, body, parse_mode=TELEGRAM_PARSE_MODE, db=db
     )
+    return ok, err
 
 
 async def send_review_to_chat(
@@ -573,4 +588,5 @@ async def send_review_to_chat(
     parts.append("<b>Отзыв:</b>")
     parts.append(tg_blockquote(text))
     body = "\n".join(parts)
-    return await send_telegram_message(token, cid, body, parse_mode=TELEGRAM_PARSE_MODE, db=db)
+    ok, err, _ = await send_telegram_message(token, cid, body, parse_mode=TELEGRAM_PARSE_MODE, db=db)
+    return ok, err

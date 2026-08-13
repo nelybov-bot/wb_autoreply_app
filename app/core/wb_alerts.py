@@ -305,7 +305,7 @@ async def _send_wb_alert_telegram(
         action_needed=parsed["action_needed"],
         telegram_title=parsed.get("telegram_title", ""),
     )
-    ok, _ = await send_telegram_message(token, chat_tg, body, parse_mode=parse_mode, db=db)
+    ok, _, _ = await send_telegram_message(token, chat_tg, body, parse_mode=parse_mode, db=db)
     if ok:
         db.mark_wb_portal_alert_telegram_sent(alert_id)
     else:
