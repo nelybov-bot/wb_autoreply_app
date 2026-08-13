@@ -2606,6 +2606,7 @@ body.theme-dark .action-card {
 .mp-pill.mp-wb { background: linear-gradient(135deg, #b347ff 0%, #7c3aed 100%); }
 .mp-pill.mp-yam { background: linear-gradient(135deg, #ff5c3a 0%, #e11d48 100%); }
 .mp-pill.mp-ozon { background: linear-gradient(135deg, #3b82f6 0%, #005bff 100%); }
+.mp-pill.mp-avito { background: linear-gradient(135deg, #00aaff 0%, #0080cc 100%); }
 .auto-task-groups { display: grid; gap: 14px; }
 .auto-task-group {
   display: flex;

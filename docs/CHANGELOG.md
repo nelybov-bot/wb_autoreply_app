@@ -5,13 +5,23 @@
 
 ---
 
+## 2026-08-13 — Avito: заказы и сообщения → Telegram
+
+- Магазин `marketplace=avito` (client_id + client_secret) в «Магазины»
+- `avito_client.py` — OAuth client_credentials, заказы, чаты
+- `avito_notify.py` — опрос ~каждые 90 с; первый прогон seed без спама
+- Настройки Telegram: вкл/выкл, отдельно заказы/сообщения, свой chat_id
+- API: `POST /api/telegram/avito-notify-now`
+- `app.js?v=126`, `styles.css?v=47`
+
 ## 2026-08-13 — Ozon: массовая замена ТН ВЭД и бренда
 
 - Панель «Характеристики»: блок Ozon (ТН ВЭД / Бренд), dry-run и применение
+- Режим **таблица**: артикул → свой бренд и/или ТН ВЭД (`/api/ozon/bulk-chars/parse`)
 - `ozon_bulk_chars.py` + `POST /api/ozon/bulk-chars/apply`
 - Бренд — поиск в справочнике категории (`attribute/values/search`)
 - Отчёт WB/Ozon: «Скрыть отчёт», сворачиваемая таблица; Ozon без строк «уже совпадает»
-- `app.js?v=124`, `styles.css?v=46`
+- `app.js?v=125`, `styles.css?v=46`
 
 ## 2026-08-12 — ФСА: приоритет действующей записи при поиске
 

@@ -12,7 +12,7 @@
   <link rel="shortcut icon" href="/static/icon.svg">
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
-  <link rel="stylesheet" href="/static/styles.css?v=46">
+  <link rel="stylesheet" href="/static/styles.css?v=47">
   <link rel="stylesheet" href="/static/fx-widgets.css?v=5">
 </head>
 <body>
@@ -201,6 +201,7 @@
                 <option value="wb">Wildberries</option>
                 <option value="yam">Яндекс.Маркет</option>
                 <option value="ozon">Ozon</option>
+                <option value="avito">Avito</option>
               </select>
             </div>
             <div class="form-group">
@@ -208,7 +209,7 @@
               <input type="text" name="name" required placeholder="Мой магазин">
             </div>
             <div class="form-group">
-              <label>API-ключ</label>
+              <label id="label-api-key">API-ключ</label>
               <input type="password" name="api_key" required placeholder="••••••••">
             </div>
             <div class="form-group" id="wrap-business-id" style="display: none;">
@@ -216,7 +217,7 @@
               <input type="number" name="business_id" placeholder="12345">
             </div>
             <div class="form-group" id="wrap-client-id" style="display: none;">
-              <label>Client ID (Ozon)</label>
+              <label id="label-client-id">Client ID (Ozon)</label>
               <input type="text" name="client_id" placeholder="client-id">
             </div>
             <div class="form-group">
@@ -893,8 +894,17 @@
       <!-- Ozon: ТН ВЭД и бренд -->
       <div class="form-card form-card-wide" style="margin-top:1.5rem">
         <p class="form-hint" style="font-weight:600;margin-bottom:.5rem">Ozon — замена ТН ВЭД и бренда</p>
-        <p class="form-hint">Массово проставить <strong>Код ТН ВЭД ЕАЭС</strong> или <strong>Бренд</strong> через Seller API. Бренд ищется в справочнике Ozon по категории товара. Сначала «Проверить», затем «Применить на Ozon».</p>
+        <p class="form-hint">Можно проставить <strong>одно значение всем</strong> или вставить <strong>таблицу</strong>, где у каждого артикула свой бренд и/или ТН ВЭД. Бренд ищется в справочнике Ozon. Сначала «Проверить», затем «Применить».</p>
         <div class="wb-bulk-chars-fields">
+          <label class="wb-bulk-chars-field">
+            <span class="toolbar-label">Режим</span>
+            <select id="ozon-bulk-chars-mode" class="select-md">
+              <option value="table" selected>Таблица: артикул → бренд / ТН ВЭД</option>
+              <option value="single">Одно значение на всех</option>
+            </select>
+          </label>
+        </div>
+        <div id="ozon-bulk-chars-single-fields" class="wb-bulk-chars-fields" hidden>
           <label class="wb-bulk-chars-field">
             <span class="toolbar-label">Поле</span>
             <select id="ozon-bulk-chars-field" class="select-md">
@@ -912,24 +922,25 @@
             <button type="button" class="btn btn-secondary btn-sm" data-ozon-bulk-preset="brand">Бренд</button>
           </div>
         </div>
-        <label class="packaging-dims-only-mismatch">
-          <input type="checkbox" id="ozon-bulk-chars-all-catalog" checked>
+        <label class="packaging-dims-only-mismatch" id="ozon-bulk-chars-all-wrap" hidden>
+          <input type="checkbox" id="ozon-bulk-chars-all-catalog">
           Весь каталог магазина
         </label>
         <label class="packaging-dims-only-mismatch">
           <input type="checkbox" id="ozon-bulk-chars-only-diff" checked>
           Только если значение отличается
         </label>
-        <div class="compliance-input-block" id="ozon-bulk-chars-list-wrap" hidden>
+        <div class="compliance-input-block" id="ozon-bulk-chars-list-wrap">
           <div class="compliance-input-toolbar">
-            <span class="toolbar-label">Артикулы offer_id (если не весь каталог)</span>
-            <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-bulk-chars-parse">Разобрать список</button>
+            <span class="toolbar-label" id="ozon-bulk-chars-list-label">Таблица (артикул + бренд и/или ТН ВЭД)</span>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-bulk-chars-parse">Разобрать</button>
             <label class="btn btn-secondary btn-sm">
               Файл
               <input type="file" id="ozon-bulk-chars-file" accept=".csv,.txt,.tsv,text/plain" hidden>
             </label>
           </div>
-          <textarea id="ozon-bulk-chars-text" class="compliance-textarea" rows="8" placeholder="807773&#10;807774&#10;или колонка offer_id / sku"></textarea>
+          <textarea id="ozon-bulk-chars-text" class="compliance-textarea" rows="10" placeholder="offer_id&#9;бренд&#9;тн вэд&#10;807773&#9;Balea&#9;3304990000&#10;807774&#9;Labello&#9;3304100000"></textarea>
+          <div id="ozon-bulk-chars-parse-preview" class="form-hint" hidden></div>
         </div>
         <div class="compliance-stores-block">
           <div class="compliance-stores-toolbar">
@@ -1526,6 +1537,11 @@
             <input type="text" id="setting-wb_banned_cards_telegram_chat_id" placeholder="необязательно — иначе основной / отчёты">
             <div class="form-hint">Отдельная беседа, куда уходит только число заблокированных (включая 0). В сводный отчёт блок тоже добавляется.</div>
           </div>
+          <div class="form-group">
+            <label>Чат для Avito (заказы и сообщения)</label>
+            <input type="text" id="setting-avito_notify_telegram_chat_id" placeholder="необязательно — иначе основной ID чата">
+            <div class="form-hint">Беседа для новых заказов и входящих сообщений Avito. Магазин добавляется в «Магазины» (client_id + client_secret).</div>
+          </div>
 
           <h3 class="settings-subhead">AI-ассистент в Telegram</h3>
             <p class="form-hint">Пишите боту в указанном чате — те же команды, что во вкладке AI. <b>В группе</b> обращайтесь через @бот или ответ на его сообщение.</p>
@@ -1553,6 +1569,9 @@
             <div class="toggle-row"><span class="toggle-label">Ошибки карточек в отчёте</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-card_check_include_in_periodic_report" checked><span class="switch-track"></span></label></div>
             <div class="toggle-row"><span class="toggle-label">Заблокированные карточки WB в сводном отчёте</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_banned_cards_in_report" checked><span class="switch-track"></span></label></div>
             <div class="toggle-row"><span class="toggle-label">Отдельные уведомления: заблокированные WB <em class="toggle-hint">обязательно для авто</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_banned_cards_enabled"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Уведомления Avito <em class="toggle-hint">заказы + сообщения, опрос ~1.5 мин</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_notify_enabled"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Avito: новые заказы</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_orders_notify_enabled" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Avito: входящие сообщения</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_messages_notify_enabled" checked><span class="switch-track"></span></label></div>
           </div>
           <div class="form-group">
             <label>Период отчёта</label>
@@ -1599,6 +1618,7 @@
             <button type="button" class="btn btn-secondary" id="btn-telegram-test">Проверить бота</button>
             <button type="button" class="btn btn-secondary" id="btn-telegram-report-now">Отправить отчёт сейчас</button>
             <button type="button" class="btn btn-secondary" id="btn-telegram-wb-banned-now">Заблокированные WB сейчас</button>
+            <button type="button" class="btn btn-secondary" id="btn-telegram-avito-now">Avito сейчас</button>
           </div>
         </div>
 
@@ -2003,11 +2023,11 @@
           <input type="password" name="api_key" placeholder="оставьте пустым, чтобы не менять">
         </div>
         <div class="form-group" id="wrap-edit-business-id" style="display: none;">
-          <label>Business ID</label>
+          <label id="label-edit-business-id">Business ID</label>
           <input type="number" name="business_id">
         </div>
         <div class="form-group" id="wrap-edit-client-id" style="display: none;">
-          <label>Client ID</label>
+          <label id="label-edit-client-id">Client ID</label>
           <input type="text" name="client_id">
         </div>
         <div class="form-group">
@@ -2022,7 +2042,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=124"></script>
+  <script src="/static/app.js?v=126"></script>
   <script src="/static/card_links_master.js?v=9"></script>
 </body>
 </html>

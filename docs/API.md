@@ -103,6 +103,7 @@
 | POST | `/api/telegram/test` | `view_settings` | Тестовое сообщение в чат |
 | POST | `/api/telegram/report-now` | `view_settings` | Отправить периодический отчёт сейчас |
 | POST | `/api/telegram/wb-banned-cards-now` | `view_settings` | Сводка заблокированных карточек WB во все магазины → Telegram (включая 0) |
+| POST | `/api/telegram/avito-notify-now` | `view_settings` | Опрос заказов/сообщений Avito → Telegram (новые после seed) |
 
 ---
 
@@ -237,7 +238,8 @@ UI больше не даёт выбирать глубину — фронт в�
 | POST | `/api/packaging-dims/apply` | Замена габаритов на WB → `{ task_id }` |
 | POST | `/api/wb/bulk-chars/parse` | Разбор списка артикулов |
 | POST | `/api/wb/bulk-chars/apply` | Массовая подстановка характеристики. Body: `{ store_ids, char_name, char_value, text?, vendor_codes?, all_catalog?, dry_run?, only_if_different?, refresh_catalog? }` → `{ task_id }` |
-| POST | `/api/ozon/bulk-chars/apply` | Массовая замена ТН ВЭД / бренда на Ozon. Body: `{ store_ids, field: "tnved"|"brand", value, text?, offer_ids?, all_catalog?, dry_run?, only_if_different? }` → `{ task_id }` |
+| POST | `/api/ozon/bulk-chars/apply` | Массовая замена ТН ВЭД / бренда на Ozon. Body: `{ store_ids, mode?: "single"|"table", field?, value?, text?, offer_ids?, all_catalog?, dry_run?, only_if_different? }` → `{ task_id }`. Режим `table`: колонки артикул + бренд и/или ТН ВЭД (уникальные значения на строку). |
+| POST | `/api/ozon/bulk-chars/parse` | Разбор таблицы артикул/бренд/ТН ВЭД. Body: `{ text }` → `{ rows, warnings, count }` |
 
 Прогресс/отмена: `GET/POST /api/tasks/{id}` (+ `/cancel`). После F5 UI восстанавливает задачу из `localStorage`.
 

@@ -1376,6 +1376,27 @@ class Database:
             self._conn.commit()
             return int(cur.lastrowid)
 
+    def upsert_store_avito(
+        self,
+        name: str,
+        api_key: str,
+        client_id: str,
+        active: bool = True,
+        *,
+        user_id: Optional[int] = None,
+    ) -> int:
+        """Avito: client_id + client_secret(api_key); business_id = Avito user_id (кэш)."""
+        key_clean = (api_key or "").strip().replace("\n", "").replace("\r", "").replace(" ", "")
+        client_clean = (client_id or "").strip().replace("\n", "").replace("\r", "").replace(" ", "")
+        bid = str(int(user_id)) if user_id is not None else None
+        with _DB_LOCK:
+            cur = self._conn.execute(
+                "INSERT INTO stores(marketplace,name,api_key,client_id,business_id,active) VALUES('avito',?,?,?,?,?)",
+                (name, key_clean, client_clean, bid, 1 if active else 0),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+
     def update_store(
         self,
         store_id: int,

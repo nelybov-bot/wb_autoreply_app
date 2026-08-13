@@ -85,6 +85,7 @@ wb_autoreply_app/
 |--------|------------|
 | Wildberries API | Отзывы, вопросы, чаты, Content API (связки) |
 | Ozon Seller API | Отзывы, вопросы, чаты, акции, каталог |
+| Avito Business API | Заказы и сообщения → Telegram (этап 1) |
 | Яндекс.Маркет | Частичная поддержка (`yam_client.py`) |
 | OpenAI API | Генерация ответов, AI-агент, card-links AI |
 | Telegram Bot API | Отчёты, алерты, агент |

@@ -1266,7 +1266,15 @@
   function marketplaceExtra() {
     const m = document.querySelector('#form-store select[name="marketplace"]').value;
     document.getElementById('wrap-business-id').style.display = m === 'yam' ? 'block' : 'none';
-    document.getElementById('wrap-client-id').style.display = m === 'ozon' ? 'block' : 'none';
+    document.getElementById('wrap-client-id').style.display = (m === 'ozon' || m === 'avito') ? 'block' : 'none';
+    const labelKey = document.getElementById('label-api-key');
+    const labelCid = document.getElementById('label-client-id');
+    if (labelKey) {
+      labelKey.textContent = m === 'avito' ? 'Client Secret (Avito)' : 'API-ключ';
+    }
+    if (labelCid) {
+      labelCid.textContent = m === 'avito' ? 'Client ID (Avito)' : 'Client ID (Ozon)';
+    }
   }
 
   document.querySelector('#form-store select[name="marketplace"]').addEventListener('change', marketplaceExtra);
@@ -1281,11 +1289,12 @@
       active: fd.get('active') === 'on',
     };
     if (body.marketplace === 'yam') body.business_id = parseInt(fd.get('business_id'), 10) || null;
-    if (body.marketplace === 'ozon') body.client_id = fd.get('client_id') || null;
+    if (body.marketplace === 'ozon' || body.marketplace === 'avito') body.client_id = fd.get('client_id') || null;
     try {
       await api('/stores', { method: 'POST', body: JSON.stringify(body) });
       toast('Магазин добавлен');
       e.target.reset();
+      marketplaceExtra();
       await reloadStoresIntoSelects();
     } catch (err) {
       toast(err.message, 'error');
@@ -1294,8 +1303,8 @@
 
   function mpPillHtml(marketplace) {
     const mp = String(marketplace || '').toLowerCase();
-    const labels = { wb: 'WB', yam: 'ЯМ', ozon: 'Ozon' };
-    const cls = mp === 'wb' ? 'mp-wb' : mp === 'yam' ? 'mp-yam' : mp === 'ozon' ? 'mp-ozon' : '';
+    const labels = { wb: 'WB', yam: 'ЯМ', ozon: 'Ozon', avito: 'Avito' };
+    const cls = mp === 'wb' ? 'mp-wb' : mp === 'yam' ? 'mp-yam' : mp === 'ozon' ? 'mp-ozon' : mp === 'avito' ? 'mp-avito' : '';
     const label = labels[mp] || escapeHtml(marketplace);
     return `<span class="mp-pill ${cls}">${label}</span>`;
   }
@@ -1359,7 +1368,17 @@
     const wrapB = document.getElementById('wrap-edit-business-id');
     const wrapC = document.getElementById('wrap-edit-client-id');
     wrapB.style.display = s.marketplace === 'yam' ? 'block' : 'none';
-    wrapC.style.display = s.marketplace === 'ozon' ? 'block' : 'none';
+    wrapC.style.display = (s.marketplace === 'ozon' || s.marketplace === 'avito') ? 'block' : 'none';
+    const labelEditCid = document.getElementById('label-edit-client-id');
+    if (labelEditCid) {
+      labelEditCid.textContent = s.marketplace === 'avito' ? 'Client ID (Avito)' : 'Client ID';
+    }
+    const keyLabel = form.querySelectorAll('.form-group')[1]?.querySelector('label');
+    if (keyLabel) {
+      keyLabel.textContent = s.marketplace === 'avito'
+        ? 'Client Secret (оставьте пустым, чтобы не менять)'
+        : 'API-ключ';
+    }
     const bid = form.querySelector('[name="business_id"]');
     const cid = form.querySelector('[name="client_id"]');
     if (bid) bid.value = s.business_id ?? '';
@@ -1379,7 +1398,7 @@
     const key = fd.get('api_key');
     if (key) body.api_key = key;
     if (s && s.marketplace === 'yam') body.business_id = parseInt(fd.get('business_id'), 10) || null;
-    if (s && s.marketplace === 'ozon') body.client_id = fd.get('client_id') || null;
+    if (s && (s.marketplace === 'ozon' || s.marketplace === 'avito')) body.client_id = fd.get('client_id') || null;
     try {
       await api(`/stores/${storeId}`, { method: 'PATCH', body: JSON.stringify(body) });
       toast('Магазин обновлён');
@@ -8744,8 +8763,7 @@
     const prevOz = getAutoMpStoreIds('ozon-bulk-chars-store-list');
     const selectedOz = prevOz.length ? prevOz : oz.map((s) => s.id);
     renderAutoMpStoreList('ozon-bulk-chars-store-list', 'ozon', selectedOz);
-    syncOzonBulkCharsListVisibility();
-    syncOzonBulkCharsPlaceholder();
+    syncOzonBulkCharsModeUI();
     void attachRunningOzonBulkCharsTask({ silent: true });
   }
 
@@ -8789,8 +8807,43 @@
   }
 
   let ozonBulkCharsParsedOffers = [];
+  let ozonBulkCharsParsedRows = [];
+
+  function ozonBulkCharsMode() {
+    return (document.getElementById('ozon-bulk-chars-mode')?.value || 'table').trim();
+  }
+
+  function syncOzonBulkCharsModeUI() {
+    const mode = ozonBulkCharsMode();
+    const isTable = mode === 'table';
+    const single = document.getElementById('ozon-bulk-chars-single-fields');
+    const allWrap = document.getElementById('ozon-bulk-chars-all-wrap');
+    const listWrap = document.getElementById('ozon-bulk-chars-list-wrap');
+    const listLabel = document.getElementById('ozon-bulk-chars-list-label');
+    const ta = document.getElementById('ozon-bulk-chars-text');
+    if (single) single.hidden = isTable;
+    if (allWrap) allWrap.hidden = isTable;
+    if (listWrap) {
+      if (isTable) listWrap.hidden = false;
+      else syncOzonBulkCharsListVisibility();
+    }
+    if (listLabel) {
+      listLabel.textContent = isTable
+        ? 'Таблица (артикул + бренд и/или ТН ВЭД)'
+        : 'Артикулы offer_id (если не весь каталог)';
+    }
+    if (ta && isTable && !(ta.value || '').trim()) {
+      ta.placeholder = 'offer_id\tбренд\tтн вэд\n807773\tBalea\t3304990000\n807774\tLabello\t3304100000';
+    }
+    syncOzonBulkCharsPlaceholder();
+  }
 
   function syncOzonBulkCharsListVisibility() {
+    if (ozonBulkCharsMode() === 'table') {
+      const wrap = document.getElementById('ozon-bulk-chars-list-wrap');
+      if (wrap) wrap.hidden = false;
+      return;
+    }
     const all = !!document.getElementById('ozon-bulk-chars-all-catalog')?.checked;
     const wrap = document.getElementById('ozon-bulk-chars-list-wrap');
     if (wrap) wrap.hidden = all;
@@ -8822,8 +8875,10 @@
       parts.push(`<p class="form-hint text-warn">${escapeHtml(result.parse_warnings.join('; '))}</p>`);
     }
     const fieldLabel = result.field_label || result.field || '';
-    parts.push(`<p class="form-hint"><strong>${escapeHtml(fieldLabel)}</strong> → <code>${escapeHtml(result.value || '')}</code>`
-      + `${result.dry_run ? ' · dry-run' : ''}</p>`);
+    const modeLabel = result.mode === 'table' ? 'таблица' : 'одно значение';
+    parts.push(`<p class="form-hint"><strong>${escapeHtml(fieldLabel)}</strong>`
+      + (result.mode === 'table' ? '' : ` → <code>${escapeHtml(result.value || '')}</code>`)
+      + ` · ${modeLabel}${result.dry_run ? ' · dry-run' : ''}</p>`);
     parts.push(`<p>Всего ${result.total ?? 0}: к изменению ${result.would_update ?? result.updated ?? 0},`
       + ` совпадает ${result.skipped_same ?? 0}, не найдено ${result.not_found ?? 0},`
       + ` нет поля ${result.no_field ?? 0}, бренд не в справочнике ${result.brand_not_found ?? 0},`
@@ -8880,16 +8935,42 @@
   async function parseOzonBulkCharsList() {
     const text = (document.getElementById('ozon-bulk-chars-text')?.value || '').trim();
     if (!text) {
-      toast('Вставьте список артикулов', 'error');
+      toast('Вставьте таблицу или список артикулов', 'error');
       return;
     }
     const btn = document.getElementById('btn-ozon-bulk-chars-parse');
+    const preview = document.getElementById('ozon-bulk-chars-parse-preview');
+    const mode = ozonBulkCharsMode();
     try {
       if (btn) btn.disabled = true;
-      const res = await api('/wb/bulk-chars/parse', { method: 'POST', body: JSON.stringify({ text }) });
-      ozonBulkCharsParsedOffers = (res.rows || []).map((r) => r.vendor_code).filter(Boolean);
-      if (res.warnings?.length) toast(res.warnings.join('; '), 'warn');
-      toast(`Разобрано артикулов: ${res.count || 0}`);
+      if (mode === 'table') {
+        const res = await api('/ozon/bulk-chars/parse', { method: 'POST', body: JSON.stringify({ text }) });
+        ozonBulkCharsParsedRows = res.rows || [];
+        ozonBulkCharsParsedOffers = ozonBulkCharsParsedRows.map((r) => r.offer_id).filter(Boolean);
+        if (res.warnings?.length) toast(res.warnings.slice(0, 3).join('; '), 'warn');
+        if (preview) {
+          const sample = ozonBulkCharsParsedRows.slice(0, 5).map((r) => {
+            const bits = [r.offer_id];
+            if (r.brand) bits.push(`бренд=${r.brand}`);
+            if (r.tnved) bits.push(`тнвэд=${r.tnved}`);
+            return bits.join(' · ');
+          });
+          preview.hidden = false;
+          preview.textContent = `Разобрано ${res.count || 0} строк`
+            + (sample.length ? `: ${sample.join('; ')}${(res.count || 0) > 5 ? '…' : ''}` : '');
+        }
+        toast(`Разобрано строк: ${res.count || 0}`);
+      } else {
+        const res = await api('/wb/bulk-chars/parse', { method: 'POST', body: JSON.stringify({ text }) });
+        ozonBulkCharsParsedOffers = (res.rows || []).map((r) => r.vendor_code).filter(Boolean);
+        ozonBulkCharsParsedRows = [];
+        if (preview) {
+          preview.hidden = false;
+          preview.textContent = `Разобрано артикулов: ${res.count || 0}`;
+        }
+        if (res.warnings?.length) toast(res.warnings.join('; '), 'warn');
+        toast(`Разобрано артикулов: ${res.count || 0}`);
+      }
     } catch (err) {
       toast(err.message || 'Ошибка разбора', 'error');
     } finally {
@@ -8914,7 +8995,7 @@
         const sent = Number(result?.sent) || 0;
         const would = Number(result?.would_update) || 0;
         if (sent) toast(`Ozon: отправлено ${sent} обновлений`);
-        else if (would) toast(`Ozon: к изменению ${would} карточек`);
+        else if (would) toast(`Ozon: к изменению ${would}`);
         else if (result?.dry_run) toast('Проверка Ozon завершена');
         else toast('Готово — см. отчёт Ozon');
       },
@@ -8986,33 +9067,48 @@
       toast('Выберите магазин Ozon', 'error');
       return;
     }
+    const mode = ozonBulkCharsMode();
+    const text = (document.getElementById('ozon-bulk-chars-text')?.value || '').trim();
     const field = (document.getElementById('ozon-bulk-chars-field')?.value || '').trim();
     const value = (document.getElementById('ozon-bulk-chars-value')?.value || '').trim();
-    if (!field || !value) {
-      toast('Укажите поле и значение', 'error');
-      return;
-    }
-    const allCatalog = !!document.getElementById('ozon-bulk-chars-all-catalog')?.checked;
-    const text = (document.getElementById('ozon-bulk-chars-text')?.value || '').trim();
-    if (!allCatalog && !text && !ozonBulkCharsParsedOffers.length) {
-      toast('Вставьте артикулы или включите «Весь каталог»', 'error');
-      return;
-    }
-    if (!dryRun) {
-      const scope = allCatalog ? 'весь каталог' : `${ozonBulkCharsParsedOffers.length || 'список'} артикулов`;
-      if (!confirm(`Заменить «${field === 'brand' ? 'Бренд' : 'ТН ВЭД'}» → «${value}» на Ozon (${scope})?`)) return;
-    }
+    const allCatalog = mode === 'single' && !!document.getElementById('ozon-bulk-chars-all-catalog')?.checked;
     const onlyDiff = !!document.getElementById('ozon-bulk-chars-only-diff')?.checked;
+
+    if (mode === 'table') {
+      if (!text && !ozonBulkCharsParsedRows.length) {
+        toast('Вставьте таблицу: артикул + бренд и/или ТН ВЭД', 'error');
+        return;
+      }
+      if (!dryRun) {
+        const n = ozonBulkCharsParsedRows.length || 'строки';
+        if (!confirm(`Применить таблицу на Ozon (${n})? У каждого артикула — свой бренд/ТН ВЭД.`)) return;
+      }
+    } else {
+      if (!field || !value) {
+        toast('Укажите поле и значение', 'error');
+        return;
+      }
+      if (!allCatalog && !text && !ozonBulkCharsParsedOffers.length) {
+        toast('Вставьте артикулы или включите «Весь каталог»', 'error');
+        return;
+      }
+      if (!dryRun) {
+        const scope = allCatalog ? 'весь каталог' : `${ozonBulkCharsParsedOffers.length || 'список'} артикулов`;
+        if (!confirm(`Заменить «${field === 'brand' ? 'Бренд' : 'ТН ВЭД'}» → «${value}» на Ozon (${scope})?`)) return;
+      }
+    }
+
     setOzonBulkCharsActionBusy(true);
     try {
       const res = await api('/ozon/bulk-chars/apply', {
         method: 'POST',
         body: JSON.stringify({
           store_ids: storeIds,
+          mode,
           field,
           value,
           text,
-          offer_ids: ozonBulkCharsParsedOffers,
+          offer_ids: mode === 'table' ? [] : ozonBulkCharsParsedOffers,
           all_catalog: allCatalog,
           dry_run: !!dryRun,
           only_if_different: onlyDiff,
@@ -9043,6 +9139,7 @@
   function wireOzonBulkCharsPanel() {
     if (wireOzonBulkCharsPanel._done) return;
     wireOzonBulkCharsPanel._done = true;
+    document.getElementById('ozon-bulk-chars-mode')?.addEventListener('change', syncOzonBulkCharsModeUI);
     document.getElementById('ozon-bulk-chars-all-catalog')?.addEventListener('change', syncOzonBulkCharsListVisibility);
     document.getElementById('ozon-bulk-chars-field')?.addEventListener('change', syncOzonBulkCharsPlaceholder);
     document.getElementById('btn-ozon-bulk-chars-stores-all')?.addEventListener('click', () => ozonBulkCharsSetStoreChecks(true));
@@ -9066,12 +9163,13 @@
         const text = await file.text();
         const ta = document.getElementById('ozon-bulk-chars-text');
         if (ta) ta.value = text;
-        toast('Файл загружен — нажмите «Разобрать список» или снимите «Весь каталог»');
+        toast('Файл загружен — нажмите «Разобрать»');
       } catch (err) {
         toast(err.message || 'Не удалось прочитать файл', 'error');
       }
       e.target.value = '';
     });
+    syncOzonBulkCharsModeUI();
   }
 
   function wireCardLinksPanel() {
@@ -10088,6 +10186,7 @@
         'telegram_report_chat_id',
         'telegram_card_error_chat_id',
         'wb_banned_cards_telegram_chat_id',
+        'avito_notify_telegram_chat_id',
         'telegram_agent_chat_id',
         'telegram_agent_user_id',
         'buyer_chat_reply_from_date',
@@ -10116,6 +10215,12 @@
       if (bannedEnabled) bannedEnabled.checked = String(data.wb_banned_cards_enabled || '0') === '1';
       const bannedInReport = document.getElementById('setting-wb_banned_cards_in_report');
       if (bannedInReport) bannedInReport.checked = String(data.wb_banned_cards_in_report || '1') !== '0';
+      const avitoEnabled = document.getElementById('setting-avito_notify_enabled');
+      if (avitoEnabled) avitoEnabled.checked = String(data.avito_notify_enabled || '0') === '1';
+      const avitoOrders = document.getElementById('setting-avito_orders_notify_enabled');
+      if (avitoOrders) avitoOrders.checked = String(data.avito_orders_notify_enabled || '1') !== '0';
+      const avitoMsgs = document.getElementById('setting-avito_messages_notify_enabled');
+      if (avitoMsgs) avitoMsgs.checked = String(data.avito_messages_notify_enabled || '1') !== '0';
       const tgAgent = document.getElementById('setting-telegram_agent_enabled');
       if (tgAgent) tgAgent.checked = String(data.telegram_agent_enabled || '0') === '1';
       const cardEnabled = document.getElementById('setting-card_check_enabled');
@@ -10503,6 +10608,10 @@
       wb_banned_cards_enabled: document.getElementById('setting-wb_banned_cards_enabled')?.checked ? '1' : '0',
       wb_banned_cards_in_report: document.getElementById('setting-wb_banned_cards_in_report')?.checked ? '1' : '0',
       wb_banned_cards_telegram_chat_id: document.getElementById('setting-wb_banned_cards_telegram_chat_id')?.value || '',
+      avito_notify_enabled: document.getElementById('setting-avito_notify_enabled')?.checked ? '1' : '0',
+      avito_orders_notify_enabled: document.getElementById('setting-avito_orders_notify_enabled')?.checked ? '1' : '0',
+      avito_messages_notify_enabled: document.getElementById('setting-avito_messages_notify_enabled')?.checked ? '1' : '0',
+      avito_notify_telegram_chat_id: document.getElementById('setting-avito_notify_telegram_chat_id')?.value || '',
       telegram_agent_enabled: document.getElementById('setting-telegram_agent_enabled')?.checked ? '1' : '0',
       telegram_agent_chat_id: document.getElementById('setting-telegram_agent_chat_id')?.value || '',
       telegram_agent_user_id: document.getElementById('setting-telegram_agent_user_id')?.value || '',
@@ -10607,6 +10716,24 @@
         toast(err.message, 'error');
       } finally {
         btnWbBannedNow.disabled = false;
+      }
+    });
+  }
+
+  const btnAvitoNow = document.getElementById('btn-telegram-avito-now');
+  if (btnAvitoNow) {
+    btnAvitoNow.addEventListener('click', async () => {
+      btnAvitoNow.disabled = true;
+      try {
+        const res = await api('/telegram/avito-notify-now', { method: 'POST' });
+        toast(
+          `Avito: магазинов ${res.stores ?? 0}, заказов отправлено ${res.orders_sent ?? 0}, `
+          + `сообщений ${res.messages_sent ?? 0}`,
+        );
+      } catch (err) {
+        toast(err.message, 'error');
+      } finally {
+        btnAvitoNow.disabled = false;
       }
     });
   }

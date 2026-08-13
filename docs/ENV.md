@@ -66,6 +66,12 @@ API `GET /api/settings` возвращает секреты **замаскиро
 | `wb_banned_cards_last_slot` | Служебный ключ слота `YYYY-MM-DD|HH` (09/15/21 МСК) |
 | `wb_banned_cards_last_check` | Служебная метка последнего live-опроса (раз в час) |
 | `wb_banned_cards_last_snapshot` | JSON последнего снимка counts (срочные алерты) |
+| `avito_notify_enabled` | `1` — опрос заказов/сообщений Avito → Telegram |
+| `avito_notify_telegram_chat_id` | Отдельный чат (пустой = основной `telegram_chat_id`) |
+| `avito_orders_notify_enabled` | `1` / пусто — уведомления о новых заказах (default вкл.) |
+| `avito_messages_notify_enabled` | `1` / пусто — уведомления о входящих сообщениях (default вкл.) |
+| `avito_notify_seen_json` | Служебный JSON seen order/message ids |
+| `avito_notify_last_check` | Служебная метка последнего опроса |
 
 ### Проверка карточек (`card_check.py`)
 

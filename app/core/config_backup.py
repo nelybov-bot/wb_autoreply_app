@@ -20,6 +20,8 @@ RUNTIME_SETTING_KEYS = frozenset({
     "wb_banned_cards_last_slot",
     "wb_banned_cards_last_check",
     "wb_banned_cards_last_snapshot",
+    "avito_notify_last_check",
+    "avito_notify_seen_json",
     "telegram_agent_update_offset",
 })
 
@@ -53,6 +55,10 @@ SETTING_KEYS = (
     "wb_banned_cards_enabled",
     "wb_banned_cards_telegram_chat_id",
     "wb_banned_cards_in_report",
+    "avito_notify_enabled",
+    "avito_notify_telegram_chat_id",
+    "avito_orders_notify_enabled",
+    "avito_messages_notify_enabled",
     "theme",
     "buyer_chat_reply_from_date",
     "buyer_chat_auto_max_age_days",
@@ -245,7 +251,7 @@ def _upsert_store_from_backup(db: Database, row: dict) -> tuple[str, bool]:
     name = (row.get("name") or "").strip()
     api_key = (row.get("api_key") or "").strip()
     active = bool(row.get("active", True))
-    if mp not in ("wb", "yam", "ozon") or not name:
+    if mp not in ("wb", "yam", "ozon", "avito") or not name:
         raise ValueError(f"Некорректный магазин: {row!r}")
     key = store_key(mp, name)
     existing = {store_key(s.marketplace, s.name): s for s in db.list_stores()}
@@ -271,11 +277,21 @@ def _upsert_store_from_backup(db: Database, row: dict) -> tuple[str, bool]:
         if bid is None or bid == "":
             raise ValueError(f"Для Яндекс.Маркета нужен business_id: {name}")
         db.upsert_store_yam(name, api_key, int(bid), active)
-    else:
+    elif mp == "ozon":
         client_id = (row.get("client_id") or "").strip()
         if not client_id:
             raise ValueError(f"Для Ozon нужен client_id: {name}")
         db.upsert_store_ozon(name, api_key, client_id, active)
+    else:
+        client_id = (row.get("client_id") or "").strip()
+        if not client_id or not api_key:
+            raise ValueError(f"Для Avito нужны client_id и client_secret: {name}")
+        uid = row.get("business_id")
+        try:
+            uid_i = int(uid) if uid not in (None, "") else None
+        except (TypeError, ValueError):
+            uid_i = None
+        db.upsert_store_avito(name, api_key, client_id, active, user_id=uid_i)
     return key, True
 
 

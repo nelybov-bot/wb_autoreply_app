@@ -219,6 +219,7 @@ def _configured_telegram_chat_ids(db: Database) -> list[str]:
         "ozon_alerts_telegram_chat_id",
         "wb_alerts_telegram_chat_id",
         "wb_banned_cards_telegram_chat_id",
+        "avito_notify_telegram_chat_id",
         "telegram_agent_chat_id",
     ):
         raw = (db.get_setting(key) or "").strip()

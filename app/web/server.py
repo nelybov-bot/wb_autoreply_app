@@ -159,6 +159,15 @@ from app.core.wb_banned_cards import (
     save_snapshot,
     snapshot_as_report_summary,
 )
+from app.core.avito_notify import (
+    POLL_SECONDS as AVITO_POLL_SECONDS,
+    SETTING_CHAT_ID as AVITO_NOTIFY_CHAT_ID,
+    SETTING_ENABLED as AVITO_NOTIFY_ENABLED,
+    SETTING_MESSAGES as AVITO_MESSAGES_NOTIFY_ENABLED,
+    SETTING_ORDERS as AVITO_ORDERS_NOTIFY_ENABLED,
+    notify_enabled as avito_notify_enabled,
+    run_avito_notify_cycle,
+)
 from app.core.ozon_alerts import (
     DEFAULT_TELEGRAM_TEMPLATE as DEFAULT_OZON_ALERT_TELEGRAM_TEMPLATE,
     SETTING_ENABLED as OZON_ALERTS_ENABLED,
@@ -404,7 +413,7 @@ class StoreOut(BaseModel):
 
 
 class StoreCreate(BaseModel):
-    marketplace: str  # wb | yam | ozon
+    marketplace: str  # wb | yam | ozon | avito
     name: str
     api_key: str
     active: bool = True
@@ -569,11 +578,15 @@ _ozon_chat_list_cache: dict[int, tuple[float, list, Optional[str]]] = {}
 _scheduler_task: Optional[asyncio.Task] = None
 _telegram_report_task: Optional[asyncio.Task] = None
 _wb_banned_cards_task: Optional[asyncio.Task] = None
+_avito_notify_task: Optional[asyncio.Task] = None
 _tg_report_fail_until: float = 0.0
 _tg_report_fail_token: str = ""
 _wb_banned_fail_until: float = 0.0
 _wb_banned_fail_token: str = ""
 _wb_banned_skip_log_until: float = 0.0
+_avito_fail_until: float = 0.0
+_avito_fail_token: str = ""
+_avito_skip_log_until: float = 0.0
 _scheduler_seen: set[str] = set()
 _auto_run_task: Optional[asyncio.Task] = None
 _interval_skip_logged: bool = False
@@ -1834,6 +1847,93 @@ async def _wb_banned_cards_loop() -> None:
         await asyncio.sleep(60)
 
 
+async def _run_avito_notify(*, manual: bool = False) -> dict:
+    global _avito_fail_until, _avito_fail_token
+    db = get_db()
+    token = normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or "")
+    chat_id = resolve_telegram_chat_id(db, "avito")
+    if not token or not chat_id:
+        raise HTTPException(400, "Нужны токен Telegram-бота и chat_id (Avito или основной)")
+    now_ts = time.time()
+    if not manual and now_ts < _avito_fail_until and token == _avito_fail_token:
+        return {"ok": False, "skipped": True, "reason": "cooldown after telegram error"}
+    try:
+        result = await run_avito_notify_cycle(
+            db,
+            bot_token=token,
+            chat_id=chat_id,
+            force_notify=False,
+        )
+        _avito_fail_until = 0.0
+        _avito_fail_token = ""
+        log.info(
+            "avito_notify done manual=%s stores=%s orders=%s messages=%s",
+            manual,
+            result.get("stores"),
+            result.get("orders_sent"),
+            result.get("messages_sent"),
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("avito_notify failed")
+        raise HTTPException(500, str(e)[:300]) from e
+
+
+async def _maybe_run_avito_notify() -> None:
+    global _avito_skip_log_until, _avito_fail_until, _avito_fail_token
+    db = get_db()
+    if not avito_notify_enabled(db):
+        now = time.time()
+        if now >= _avito_skip_log_until:
+            log.warning(
+                "avito_notify: автоцикл выключен — включите «Уведомления Avito» в Настройки → Telegram"
+            )
+            _avito_skip_log_until = now + 3600
+        return
+    token = normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or "")
+    chat_id = resolve_telegram_chat_id(db, "avito")
+    if not token or not chat_id:
+        now = time.time()
+        if now >= _avito_skip_log_until:
+            log.warning(
+                "avito_notify: нет токена бота или chat_id — автоуведомления не отправляются"
+            )
+            _avito_skip_log_until = now + 3600
+        return
+    stores = [
+        s
+        for s in db.list_stores()
+        if (s.marketplace or "").strip().lower() == "avito" and bool(s.active)
+    ]
+    if not stores:
+        return
+    try:
+        await _run_avito_notify(manual=False)
+    except HTTPException as e:
+        detail = str(e.detail or "")
+        if "404" in detail or "неверный токен" in detail.lower() or "not found" in detail.lower():
+            _avito_fail_until = time.time() + 1800
+            _avito_fail_token = token
+            log.warning("avito_notify: %s (повтор не раньше чем через 30 мин)", detail)
+        else:
+            log.warning("avito_notify: %s", detail)
+    except Exception:
+        log.exception("avito_notify: unexpected failure")
+
+
+async def _avito_notify_loop() -> None:
+    while True:
+        try:
+            await _maybe_run_avito_notify()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("avito notify loop failed")
+        await asyncio.sleep(AVITO_POLL_SECONDS)
+
+
 async def _auto_scheduler_loop() -> None:
     global _scheduler_seen, _auto_run_task, _interval_skip_logged
     while True:
@@ -2345,8 +2445,20 @@ def api_create_store(body: StoreCreate, db: Database = Depends(get_db), _: UserR
         if not (body.client_id or "").strip():
             raise HTTPException(400, "client_id обязателен для Ozon")
         sid = db.upsert_store_ozon(body.name, body.api_key, body.client_id, body.active)
+    elif body.marketplace == "avito":
+        if not (body.client_id or "").strip():
+            raise HTTPException(400, "client_id обязателен для Avito")
+        if not (body.api_key or "").strip():
+            raise HTTPException(400, "client_secret (API-ключ) обязателен для Avito")
+        sid = db.upsert_store_avito(
+            body.name,
+            body.api_key,
+            body.client_id,
+            body.active,
+            user_id=body.business_id,
+        )
     else:
-        raise HTTPException(400, "marketplace должен быть wb, yam или ozon")
+        raise HTTPException(400, "marketplace должен быть wb, yam, ozon или avito")
     stores = [s for s in db.list_stores() if s.id == sid]
     if not stores:
         raise HTTPException(500, "Магазин не найден после создания")
@@ -2494,6 +2606,10 @@ def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(requir
         WB_BANNED_CARDS_ENABLED,
         WB_BANNED_CARDS_CHAT_ID,
         WB_BANNED_CARDS_IN_REPORT,
+        AVITO_NOTIFY_ENABLED,
+        AVITO_NOTIFY_CHAT_ID,
+        AVITO_ORDERS_NOTIFY_ENABLED,
+        AVITO_MESSAGES_NOTIFY_ENABLED,
         "telegram_agent_enabled",
         "telegram_agent_chat_id",
         "telegram_agent_user_id",
@@ -2582,6 +2698,15 @@ async def api_telegram_wb_banned_cards_now(
 ):
     """Сразу посчитать заблокированные карточки WB и отправить в беседку (включая 0)."""
     return await _send_wb_banned_cards_report(db, manual=True)
+
+
+@app.post("/api/telegram/avito-notify-now")
+async def api_telegram_avito_notify_now(
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_permission("view_settings")),
+):
+    """Сразу опросить заказы/чаты Avito и отправить новые уведомления в беседку."""
+    return await _run_avito_notify(manual=True)
 
 
 @app.get("/api/auto-schedule")
@@ -5014,13 +5139,18 @@ class WbBulkCharsApplyBody(BaseModel):
 
 class OzonBulkCharsApplyBody(BaseModel):
     store_ids: list[int] = []
-    field: str = "tnved"  # tnved | brand
+    mode: str = "single"  # single | table
+    field: str = "tnved"  # tnved | brand (для single)
     value: str = ""
     text: str = ""
     offer_ids: list[str] = []
     all_catalog: bool = False
     dry_run: bool = False
     only_if_different: bool = True
+
+
+class OzonBulkCharsParseBody(BaseModel):
+    text: str = ""
 
 
 @app.get("/api/compliance/fsa-status")
@@ -5226,29 +5356,55 @@ async def api_wb_bulk_chars_apply(
     return {"task_id": task_id, "status": "running"}
 
 
+@app.post("/api/ozon/bulk-chars/parse")
+def api_ozon_bulk_chars_parse(
+    body: OzonBulkCharsParseBody,
+    _: UserRow = Depends(require_user),
+):
+    """Разбор таблицы: артикул + бренд и/или ТН ВЭД."""
+    from app.core.ozon_bulk_chars import parse_ozon_chars_table, table_rows_to_api
+
+    text = (body.text or "").strip()
+    if not text:
+        return {"rows": [], "warnings": [], "count": 0}
+    rows, warnings = parse_ozon_chars_table(text)
+    return {
+        "rows": table_rows_to_api(rows),
+        "warnings": warnings,
+        "count": len(rows),
+    }
+
+
 @app.post("/api/ozon/bulk-chars/apply")
 async def api_ozon_bulk_chars_apply(
     body: OzonBulkCharsApplyBody,
     db: Database = Depends(get_db),
     user: UserRow = Depends(require_user),
 ):
-    """Массовая замена ТН ВЭД / бренда в карточках Ozon."""
+    """Массовая замена ТН ВЭД / бренда в карточках Ozon (одно значение или таблица)."""
     if not body.store_ids:
         raise HTTPException(400, "Выберите хотя бы один магазин Ozon")
+    mode = (body.mode or "single").strip().lower()
     field = (body.field or "").strip()
     value = (body.value or "").strip()
-    if not field:
-        raise HTTPException(400, "Укажите поле: ТН ВЭД или Бренд")
-    if not value:
-        raise HTTPException(400, "Укажите новое значение")
+    text = (body.text or "").strip()
+    if mode == "table":
+        if not text:
+            raise HTTPException(400, "Вставьте таблицу: артикул + бренд и/или ТН ВЭД")
+    else:
+        if not field:
+            raise HTTPException(400, "Укажите поле: ТН ВЭД или Бренд")
+        if not value:
+            raise HTTPException(400, "Укажите новое значение")
     try:
         offer_ids = [str(v).strip() for v in (body.offer_ids or []) if str(v).strip()]
         task_id = await web_tasks.run_ozon_bulk_chars_apply(
             db,
             store_ids=body.store_ids,
+            mode=mode,
             field=field,
             value=value,
-            text=(body.text or "").strip(),
+            text=text,
             offer_ids=offer_ids or None,
             all_catalog=bool(body.all_catalog),
             dry_run=bool(body.dry_run),
@@ -5266,9 +5422,10 @@ async def api_ozon_bulk_chars_apply(
             result="started",
             meta={
                 "store_ids": body.store_ids,
+                "mode": mode,
                 "field": field,
-                "value": value,
-                "all_catalog": bool(body.all_catalog),
+                "value": value if mode != "table" else "",
+                "all_catalog": bool(body.all_catalog) if mode != "table" else False,
                 "dry_run": bool(body.dry_run),
             },
         )
@@ -5580,7 +5737,7 @@ def api_log_tail(db: Database = Depends(get_db), _: UserRow = Depends(require_pe
 
 @app.on_event("startup")
 async def _startup_scheduler():
-    global _scheduler_task, _telegram_report_task, _wb_banned_cards_task
+    global _scheduler_task, _telegram_report_task, _wb_banned_cards_task, _avito_notify_task
     # После инициализации uvicorn — ещё раз, чтобы формат логов не затирался дефолтом воркера
     setup_logging(LOG_PATH)
     try:
@@ -5597,6 +5754,9 @@ async def _startup_scheduler():
     if _wb_banned_cards_task is None or _wb_banned_cards_task.done():
         _wb_banned_cards_task = asyncio.create_task(_wb_banned_cards_loop())
         log.info("WB banned cards scheduler started (MSK)")
+    if _avito_notify_task is None or _avito_notify_task.done():
+        _avito_notify_task = asyncio.create_task(_avito_notify_loop())
+        log.info("Avito notify scheduler started")
     start_telegram_agent_task()
     log.info("Telegram agent polling started")
     try:
@@ -5616,7 +5776,7 @@ async def _startup_scheduler():
 
 @app.on_event("shutdown")
 async def _shutdown_scheduler():
-    global _scheduler_task, _telegram_report_task, _wb_banned_cards_task, _auto_run_task
+    global _scheduler_task, _telegram_report_task, _wb_banned_cards_task, _avito_notify_task, _auto_run_task
     await stop_telegram_agent_task()
     await web_tasks.cancel_all_running()
     if _auto_run_task and not _auto_run_task.done():
@@ -5647,6 +5807,13 @@ async def _shutdown_scheduler():
         except Exception:
             pass
     _wb_banned_cards_task = None
+    if _avito_notify_task and not _avito_notify_task.done():
+        _avito_notify_task.cancel()
+        try:
+            await _avito_notify_task
+        except Exception:
+            pass
+    _avito_notify_task = None
 
 
 # ---------- Static SPA & PWA ----------
