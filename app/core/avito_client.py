@@ -309,7 +309,9 @@ def order_total_rub(order: dict) -> str:
     for key in ("total", "price"):
         if prices.get(key) is not None:
             try:
-                return f"{float(prices[key]):.0f} ₽"
+                n = float(prices[key])
+                s = f"{n:,.0f}".replace(",", " ")
+                return f"{s} ₽"
             except (TypeError, ValueError):
                 return f"{prices[key]} ₽"
     return "—"
@@ -379,3 +381,67 @@ def chat_item_title(chat: dict) -> str:
         return str(title).strip()
     item = chat.get("item") if isinstance(chat.get("item"), dict) else {}
     return str(item.get("title") or "").strip() or "—"
+
+
+def chat_buyer_name(
+    chat: dict,
+    *,
+    author_id: Any = None,
+    our_user_id: Optional[int] = None,
+) -> str:
+    """Имя собеседника из users чата (без сырого ID)."""
+    users = chat.get("users")
+    if not isinstance(users, list):
+        return ""
+
+    def _name_of(u: dict) -> str:
+        for key in ("name", "public_name", "username"):
+            val = u.get(key)
+            if val and str(val).strip():
+                return str(val).strip()
+        profile = u.get("public_user_profile") or u.get("profile")
+        if isinstance(profile, dict):
+            for key in ("name", "public_name", "username"):
+                val = profile.get(key)
+                if val and str(val).strip():
+                    return str(val).strip()
+        return ""
+
+    want: Optional[int] = None
+    try:
+        if author_id is not None:
+            want = int(author_id)
+    except (TypeError, ValueError):
+        want = None
+
+    our: Optional[int] = None
+    try:
+        if our_user_id is not None:
+            our = int(our_user_id)
+    except (TypeError, ValueError):
+        our = None
+
+    if want is not None:
+        for u in users:
+            if not isinstance(u, dict):
+                continue
+            try:
+                uid = int(u.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if uid == want:
+                return _name_of(u)
+
+    for u in users:
+        if not isinstance(u, dict):
+            continue
+        try:
+            uid = int(u.get("id"))
+        except (TypeError, ValueError):
+            uid = None
+        if our is not None and uid == our:
+            continue
+        name = _name_of(u)
+        if name:
+            return name
+    return ""

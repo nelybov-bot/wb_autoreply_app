@@ -15,6 +15,7 @@ from app.db import Database, Store
 
 from .avito_client import (
     AvitoClient,
+    chat_buyer_name,
     chat_id_of,
     chat_item_title,
     chat_last_message,
@@ -145,39 +146,104 @@ async def _ensure_user_id(db: Database, store: Store, client: AvitoClient) -> in
     return int(uid)
 
 
+_ORDER_STATUS_RU = {
+    "on_confirmation": "ожидает подтверждения",
+    "ready_to_ship": "ждёт отправки",
+    "in_transit": "в пути",
+    "canceled": "отменён",
+    "cancelled": "отменён",
+    "delivered": "доставлен",
+    "on_return": "на возврате",
+    "in_dispute": "открыт спор",
+    "closed": "закрыт",
+    "confirming": "ожидает подтверждения",
+}
+
+
+def _order_status_ru(raw: str) -> str:
+    key = (raw or "").strip().lower()
+    return _ORDER_STATUS_RU.get(key) or (raw.strip() if raw else "—")
+
+
+def _fmt_created_short(raw: str) -> str:
+    """2026-08-13T15:40:00Z → 13.08 15:40 (как есть, без TZ-магии)."""
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    try:
+        # RFC3339 / ISO
+        body = s.replace("Z", "+00:00")
+        # обрежем микросекунды если мешают
+        if "." in body and "+" in body[body.find("T"):]:
+            pass
+        from datetime import datetime
+
+        dt = datetime.fromisoformat(body)
+        return dt.strftime("%d.%m %H:%M")
+    except Exception:
+        return s[:16].replace("T", " ")
+
+
 def format_order_message(store_name: str, order: dict) -> str:
     oid = escape_tg_html(order_display_id(order) or "?")
-    status = escape_tg_html(str(order.get("status") or "—"))
+    status = escape_tg_html(_order_status_ru(str(order.get("status") or "")))
     titles = escape_tg_html(order_item_titles(order))
     total = escape_tg_html(order_total_rub(order))
-    created = escape_tg_html(str(order.get("createdAt") or "—"))
+    created = _fmt_created_short(str(order.get("createdAt") or ""))
     store = escape_tg_html(store_name or "Avito")
-    return (
-        f"<b>Avito · новый заказ</b>\n"
-        f"Магазин: <b>{store}</b>\n"
-        f"Заказ: <code>{oid}</code>\n"
-        f"Статус: {status}\n"
-        f"Сумма: {total}\n"
-        f"Товары: {titles}\n"
-        f"Создан: {created}"
-    )
+    lines = [
+        "🛒 <b>Новый заказ · Avito</b>",
+        f"🏪 <b>{store}</b>",
+        "",
+        f"📦 {titles}",
+        f"💰 <b>{total}</b>",
+        f"📌 {status}",
+    ]
+    if created:
+        lines.append(f"🕒 {escape_tg_html(created)}")
+    lines.append(f"🧾 № <code>{oid}</code>")
+    return "\n".join(lines)
 
 
-def format_chat_message(store_name: str, chat: dict, msg: dict) -> str:
+def format_chat_message(
+    store_name: str,
+    chat: dict,
+    msg: dict,
+    *,
+    our_user_id: Optional[int] = None,
+) -> str:
     store = escape_tg_html(store_name or "Avito")
-    cid = escape_tg_html(chat_id_of(chat) or "?")
     item = escape_tg_html(chat_item_title(chat))
-    preview = escape_tg_html(message_text_preview(msg) or "—")
-    author = msg.get("author_id") or msg.get("authorId")
-    author_s = escape_tg_html(str(author) if author is not None else "—")
-    return (
-        f"<b>Avito · новое сообщение</b>\n"
-        f"Магазин: <b>{store}</b>\n"
-        f"Чат: <code>{cid}</code>\n"
-        f"Объявление: {item}\n"
-        f"От: {author_s}\n"
-        f"Текст: {preview}"
-    )
+    preview_raw = message_text_preview(msg) or "—"
+    preview = escape_tg_html(preview_raw)
+    author = msg.get("author_id")
+    if author is None:
+        author = msg.get("authorId")
+    buyer = chat_buyer_name(chat, author_id=author, our_user_id=our_user_id)
+    buyer_s = escape_tg_html(buyer) if buyer else "Покупатель"
+
+    mtype = str(msg.get("type") or "").strip().lower()
+    if mtype == "image":
+        body = "🖼 <i>фото</i>"
+    elif mtype == "voice":
+        body = "🎤 <i>голосовое</i>"
+    elif mtype == "call":
+        body = "📞 <i>звонок</i>"
+    elif mtype in ("text", "") or preview_raw not in ("—",):
+        body = f"💬 «<b>{preview}</b>»"
+    else:
+        body = f"💬 {preview}"
+
+    lines = [
+        "✉️ <b>Новое сообщение · Avito</b>",
+        f"🏪 <b>{store}</b>",
+        "",
+        f"📦 {item}",
+        f"👤 {buyer_s}",
+        "",
+        body,
+    ]
+    return "\n".join(lines)
 
 
 async def _send(
@@ -323,7 +389,12 @@ async def poll_store_messages(
         except (TypeError, ValueError):
             pass
         if notify and bucket.get("seeded"):
-            text = format_chat_message(store.name or f"#{store.id}", chat, lm)
+            text = format_chat_message(
+                store.name or f"#{store.id}",
+                chat,
+                lm,
+                our_user_id=store.business_id,
+            )
             ok, err = await _send(db, bot_token, chat_id, text)
             if ok:
                 sent += 1
