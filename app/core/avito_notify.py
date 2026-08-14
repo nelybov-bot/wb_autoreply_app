@@ -6,6 +6,7 @@ Avito → Telegram: новые заказы и входящие сообщени
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -48,6 +49,8 @@ ORDERS_LOOKBACK_SEC = 14 * 24 * 3600
 _MAX_SEEN_ORDERS = 400
 _MAX_SEEN_MESSAGES = 600
 _MAX_REPLY_MAP = 250
+_MAX_NEW_MSGS_PER_CHAT = 10
+_MSG_FETCH_LIMIT = 20
 
 POLL_SECONDS = 90
 
@@ -111,6 +114,88 @@ def _trim_dict(d: dict, limit: int) -> dict:
     # Оставляем последние по порядку вставки (Py3.7+).
     keys = list(d.keys())[-limit:]
     return {k: d[k] for k in keys}
+
+
+def _msg_author_id(msg: dict) -> Optional[int]:
+    raw = msg.get("author_id")
+    if raw is None:
+        raw = msg.get("authorId")
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _stable_message_id(chat_id: str, msg: dict) -> str:
+    mid = message_id_of(msg)
+    if mid:
+        return mid
+    created = msg.get("created") or msg.get("created_at") or ""
+    return f"{chat_id}:{created}:{message_text_preview(msg, max_len=40)}"
+
+
+def _is_incoming_buyer_message(msg: dict, our_user_id: Optional[int]) -> bool:
+    if not isinstance(msg, dict):
+        return False
+    mtype = str(msg.get("type") or "").strip().lower()
+    if mtype in ("system", "deleted"):
+        return False
+    direction = str(msg.get("direction") or "").strip().lower()
+    if direction in ("out", "outgoing"):
+        return False
+    author = _msg_author_id(msg)
+    try:
+        if our_user_id is not None and author is not None and int(author) == int(our_user_id):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return True
+
+
+def _newest_first(msgs: list[dict]) -> list[dict]:
+    if len(msgs) < 2:
+        return list(msgs)
+    c0 = msgs[0].get("created") or msgs[0].get("created_at") or 0
+    c1 = msgs[-1].get("created") or msgs[-1].get("created_at") or 0
+    try:
+        n0, n1 = int(c0), int(c1)
+    except (TypeError, ValueError):
+        return list(msgs)
+    if n0 and n1 and n0 < n1:
+        return list(reversed(msgs))
+    return list(msgs)
+
+
+def _active_reply_chats(db: Database, store_id: int) -> set[str]:
+    out: set[str] = set()
+    for row in _load_reply_map(db).values():
+        if not isinstance(row, dict):
+            continue
+        try:
+            if int(row.get("store_id") or 0) != int(store_id):
+                continue
+        except (TypeError, ValueError):
+            continue
+        cid = str(row.get("avito_chat_id") or "").strip()
+        if cid:
+            out.add(cid)
+    return out
+
+
+def _mark_chat_seen(db: Database, store_id: int, avito_chat_id: str, message_id: str) -> None:
+    cid = (avito_chat_id or "").strip()
+    mid = (message_id or "").strip()
+    if not cid or not mid:
+        return
+    seen = _load_seen(db)
+    bucket = _store_bucket(seen, int(store_id))
+    msg_map = bucket.get("messages")
+    if not isinstance(msg_map, dict):
+        msg_map = {}
+        bucket["messages"] = msg_map
+    msg_map[cid] = mid
+    bucket["messages"] = _trim_dict(msg_map, _MAX_SEEN_MESSAGES)
+    _save_seen(db, seen)
 
 
 def _avito_stores(db: Database) -> list[Store]:
@@ -352,11 +437,14 @@ async def send_avito_reply_from_telegram(
     client = _client_for_store(store)
     try:
         await _ensure_user_id(db, store, client)
-        await client.send_text_message(
+        data = await client.send_text_message(
             avito_chat_id,
             body,
             user_id=store.business_id,
         )
+        mid = message_id_of(data) if isinstance(data, dict) else ""
+        if mid:
+            _mark_chat_seen(db, int(store.id), avito_chat_id, mid)
         return True, ""
     except HttpStatusError as e:
         hint = ""
@@ -446,7 +534,8 @@ async def poll_store_messages(
     client = _client_for_store(store)
     try:
         await _ensure_user_id(db, store, client)
-        chats = await client.list_chats(unread_only=True, limit=50)
+        recent = await client.list_chats(unread_only=False, limit=50)
+        unread = await client.list_chats(unread_only=True, limit=50)
     except HttpStatusError as e:
         hint = ""
         if e.status == 402:
@@ -461,60 +550,83 @@ async def poll_store_messages(
         log.exception("avito chats store=%s", store.id)
         return {"store_id": int(store.id), "ok": False, "error": str(e)[:180], "new": 0}
 
+    by_id: dict[str, dict] = {}
+    for row in (recent or []) + (unread or []):
+        cid = chat_id_of(row)
+        if cid:
+            by_id[cid] = row
+    active_replies = _active_reply_chats(db, int(store.id))
+    for cid in active_replies:
+        by_id.setdefault(cid, {"id": cid})
+
+    our_uid = store.business_id
     sent = 0
     discovered = 0
-    for chat in chats:
-        cid = chat_id_of(chat)
-        if not cid:
-            continue
-        lm = chat_last_message(chat)
-        if not lm:
-            # Fallback: подтянуть последние сообщения.
-            try:
-                msgs = await client.list_chat_messages(cid, limit=5)
-            except Exception:
-                msgs = []
-            lm = msgs[0] if msgs else None
-        if not lm:
-            continue
-        mid = message_id_of(lm)
-        if not mid:
-            # Стабильный ключ по времени + превью.
-            mid = f"{cid}:{lm.get('created') or lm.get('created_at') or message_text_preview(lm, max_len=40)}"
+
+    for cid, chat in by_id.items():
         prev = str(msg_map.get(cid) or "")
-        if prev == mid:
+        known = cid in msg_map or cid in active_replies
+        msgs: list[dict] = []
+        if known:
+            try:
+                msgs = _newest_first(await client.list_chat_messages(cid, limit=_MSG_FETCH_LIMIT))
+            except Exception:
+                log.warning("avito messages fetch failed store=%s chat=%s", store.id, cid, exc_info=True)
+                msgs = []
+        if not msgs:
+            lm = chat_last_message(chat)
+            if lm:
+                msgs = [lm]
+
+        if not msgs:
             continue
-        discovered += 1
-        msg_map[cid] = mid
-        # Не уведомляем о своих исходящих: author_id == наш user_id.
-        author = lm.get("author_id")
-        if author is None:
-            author = lm.get("authorId")
-        try:
-            if store.business_id and author is not None and int(author) == int(store.business_id):
-                continue
-        except (TypeError, ValueError):
-            pass
+
+        newest_id = _stable_message_id(cid, msgs[0])
+        new_incoming: list[dict] = []
+        for m in msgs:
+            mid = _stable_message_id(cid, m)
+            if prev and mid == prev:
+                break
+            if _is_incoming_buyer_message(m, our_uid):
+                new_incoming.append(m)
+
+        # Новые входящие собраны newest-first → шлём от старых к новым.
+        new_incoming = list(reversed(new_incoming))
+        if not known:
+            # Первый раз видим чат: не выгружаем всю историю, только последнее входящее.
+            new_incoming = new_incoming[-1:]
+
+        if not new_incoming:
+            if newest_id:
+                msg_map[cid] = newest_id
+            continue
+
+        discovered += len(new_incoming)
+        to_send = new_incoming[-_MAX_NEW_MSGS_PER_CHAT:]
         if notify and bucket.get("seeded"):
-            text = format_chat_message(
-                store.name or f"#{store.id}",
-                chat,
-                lm,
-                our_user_id=store.business_id,
-            )
-            ok, err, tg_mid = await _send(db, bot_token, chat_id, text)
-            if ok:
-                sent += 1
-                remember_tg_reply_target(
-                    db,
-                    tg_chat_id=chat_id,
-                    tg_message_id=tg_mid,
-                    store_id=int(store.id),
-                    avito_chat_id=cid,
-                    item_title=chat_item_title(chat),
+            for m in to_send:
+                text = format_chat_message(
+                    store.name or f"#{store.id}",
+                    chat,
+                    m,
+                    our_user_id=our_uid,
                 )
-            else:
-                log.warning("avito msg tg fail store=%s chat=%s: %s", store.id, cid, err)
+                ok, err, tg_mid = await _send(db, bot_token, chat_id, text)
+                if ok:
+                    sent += 1
+                    remember_tg_reply_target(
+                        db,
+                        tg_chat_id=chat_id,
+                        tg_message_id=tg_mid,
+                        store_id=int(store.id),
+                        avito_chat_id=cid,
+                        item_title=chat_item_title(chat),
+                    )
+                else:
+                    log.warning("avito msg tg fail store=%s chat=%s: %s", store.id, cid, err)
+                await asyncio.sleep(0.25)
+        if newest_id:
+            msg_map[cid] = newest_id
 
     bucket["messages"] = _trim_dict(msg_map, _MAX_SEEN_MESSAGES)
     return {
@@ -523,7 +635,7 @@ async def poll_store_messages(
         "error": None,
         "new": sent if (notify and bucket.get("seeded")) else 0,
         "discovered": discovered,
-        "chats": len(chats),
+        "chats": len(by_id),
     }
 
 

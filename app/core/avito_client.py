@@ -209,6 +209,8 @@ class AvitoClient:
             "offset": max(0, int(offset)),
         }
         if unread_only:
+            # Avito OpenAPI: unreadOnly; часть клиентов шлёт unread_only.
+            params["unreadOnly"] = "true"
             params["unread_only"] = "true"
         data = await self._request(
             "GET",
