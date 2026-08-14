@@ -6022,6 +6022,10 @@ body.compliance-show-ozon-cols .compliance-col-ozon {
   margin-bottom: 0.75rem;
 }
 
+.wb-bulk-chars-fields[hidden] {
+  display: none !important;
+}
+
 .wb-bulk-chars-field {
   display: flex;
   flex-direction: column;

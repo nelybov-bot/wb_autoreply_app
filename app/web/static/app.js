@@ -8956,10 +8956,16 @@
             return bits.join(' · ');
           });
           preview.hidden = false;
+          const warnBit = res.warnings?.length ? ` · ${res.warnings.slice(0, 2).join('; ')}` : '';
           preview.textContent = `Разобрано ${res.count || 0} строк`
-            + (sample.length ? `: ${sample.join('; ')}${(res.count || 0) > 5 ? '…' : ''}` : '');
+            + (sample.length ? `: ${sample.join('; ')}${(res.count || 0) > 5 ? '…' : ''}` : '')
+            + warnBit;
         }
-        toast(`Разобрано строк: ${res.count || 0}`);
+        if (!(res.count || 0)) {
+          toast(res.warnings?.[0] || 'Не разобралось: нужна строка «артикул бренд» или колонки через таб', 'error');
+        } else {
+          toast(`Разобрано строк: ${res.count || 0}`);
+        }
       } else {
         const res = await api('/wb/bulk-chars/parse', { method: 'POST', body: JSON.stringify({ text }) });
         ozonBulkCharsParsedOffers = (res.rows || []).map((r) => r.vendor_code).filter(Boolean);

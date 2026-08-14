@@ -92,14 +92,43 @@ _RE_TNVED_HEADER = re.compile(
 )
 
 
+def _looks_like_tnved_token(s: str) -> bool:
+    raw = str(s or "").strip()
+    digits = normalize_tnved_value(raw)
+    return bool(raw) and len(digits) >= 8 and re.fullmatch(r"[\d\s.\-]+", raw) is not None
+
+
 def _split_table_line(line: str) -> List[str]:
-    if "\t" in line:
-        return [p.strip() for p in line.split("\t")]
-    if ";" in line:
-        return [p.strip() for p in line.split(";")]
-    if "," in line and re.search(r",\s*\S", line):
-        return [p.strip() for p in line.split(",")]
-    return [p.strip() for p in re.split(r"\s{2,}", line) if p.strip()]
+    """Колонки: таб / ; / , / два пробела; иначе первый токен = артикул, хвост = значение(я).
+
+    Примеры без таба:
+    ``820305 balea`` → артикул + бренд
+    ``820305 3304990000`` → артикул + ТН ВЭД
+    ``820305 The Body Shop 3304990000`` → артикул + бренд + ТН ВЭД
+    """
+    raw = str(line or "").strip()
+    if not raw:
+        return []
+    if "\t" in raw:
+        return [p.strip() for p in raw.split("\t")]
+    if ";" in raw:
+        return [p.strip() for p in raw.split(";")]
+    if "," in raw and re.search(r",\s*\S", raw):
+        return [p.strip() for p in raw.split(",")]
+    if re.search(r"\s{2,}", raw):
+        return [p.strip() for p in re.split(r"\s{2,}", raw) if p.strip()]
+
+    tokens = raw.split()
+    if len(tokens) <= 1:
+        return tokens
+    if len(tokens) == 2:
+        return tokens
+    last = tokens[-1]
+    if _looks_like_tnved_token(last):
+        sku = tokens[0]
+        brand = " ".join(tokens[1:-1]).strip()
+        return [sku, brand, last] if brand else [sku, last]
+    return [tokens[0], " ".join(tokens[1:]).strip()]
 
 
 def parse_ozon_chars_table(text: str) -> Tuple[List[dict], List[str]]:
