@@ -562,9 +562,10 @@ class OzonClient:
         }
         filt = body["filter"]
         if offer_ids:
-            filt["offer_id"] = [str(x).strip() for x in offer_ids if str(x).strip()]
+            # Ozon: Filter.OfferId — не больше 1000.
+            filt["offer_id"] = [str(x).strip() for x in offer_ids if str(x).strip()][:1000]
         if product_ids:
-            filt["product_id"] = [int(x) for x in product_ids if x is not None]
+            filt["product_id"] = [int(x) for x in product_ids if x is not None][:1000]
         data = await self._request("POST", "/v3/product/list", json_body=body)
         return data if isinstance(data, dict) else {}
 
@@ -578,12 +579,21 @@ class OzonClient:
     ) -> List[dict]:
         """Пагинация /v3/product/list."""
         if offer_ids:
-            data = await self.list_products(limit=1000, offer_ids=offer_ids, visibility=visibility)
-            block = self._list_block(data)
-            items = block.get("items") or []
-            out = [x for x in items if isinstance(x, dict)]
+            codes = [str(x).strip() for x in offer_ids if str(x).strip()]
+            out: List[dict] = []
+            pages = 0
+            for i in range(0, len(codes), 1000):
+                pages += 1
+                data = await self.list_products(
+                    limit=1000,
+                    offer_ids=codes[i : i + 1000],
+                    visibility=visibility,
+                )
+                block = self._list_block(data)
+                items = block.get("items") or []
+                out.extend(x for x in items if isinstance(x, dict))
             if meta_out is not None:
-                meta_out["pages_fetched"] = 1
+                meta_out["pages_fetched"] = pages
                 meta_out["max_pages"] = max_pages
                 meta_out["page_size"] = 1000
                 meta_out["truncated"] = False
@@ -652,9 +662,9 @@ class OzonClient:
         """POST /v4/product/info/attributes — атрибуты (в т.ч. «Название модели»)."""
         filt: Dict[str, Any] = {"visibility": "ALL"}
         if offer_ids:
-            filt["offer_id"] = [str(x).strip() for x in offer_ids if str(x).strip()]
+            filt["offer_id"] = [str(x).strip() for x in offer_ids if str(x).strip()][:1000]
         if product_ids:
-            filt["product_id"] = [int(x) for x in product_ids if x is not None]
+            filt["product_id"] = [int(x) for x in product_ids if x is not None][:1000]
         body: Dict[str, Any] = {
             "filter": filt,
             "limit": min(max(int(limit), 1), 1000),

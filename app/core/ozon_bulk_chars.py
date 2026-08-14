@@ -581,11 +581,8 @@ async def apply_bulk_chars_for_store(
         if mode == "single":
             for oid in codes:
                 targets[oid] = {field_key: new_value}
-        listed = await client.list_products_all(
-            max_pages=5,
-            offer_ids=codes,
-            meta_out=list_meta,
-        )
+        # Не зовём /v3/product/list по всему списку: Ozon режет offer_id на 1000,
+        # а атрибуты и так грузятся пачками в _fetch_products_meta.
         scope_label = f"таблица ({len(codes)} арт.)" if mode == "table" else f"список ({len(codes)} арт.)"
 
     _raise_if_cancelled(cancel)
