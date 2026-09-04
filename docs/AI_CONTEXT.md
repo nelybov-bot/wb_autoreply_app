@@ -275,7 +275,7 @@ CORS_ORIGINS=https://...    # опционально
 - **`data-cl-view`** на `#panel-card-links` — CSS скрывает чужие панели
 - **Render без disk** — БД пустая после деплоя
 - **macOS desktop** — не запускать Tk из Cursor terminal
-- **Avito reply:** только reply на алерт бота (map `avito_tg_reply_map_json`); одно фото за раз; баланс — алерт только на пересечение порога вниз
+- **Avito reply:** только reply на алерт бота (map `avito_tg_reply_map_json`); одно фото за раз; баланс — только **рекламный** Ads, алерт при пересечении порога вниз (короткое сообщение с суммой)
 - **Avito messenger 402** — нужна платная подписка API мессенджера
 
 ## Что не трогать без явного запроса
