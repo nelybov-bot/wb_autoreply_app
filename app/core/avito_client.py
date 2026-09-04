@@ -229,6 +229,23 @@ class AvitoClient:
             return [c for c in data if isinstance(c, dict)]
         return []
 
+    async def get_chat(
+        self,
+        chat_id: str,
+        *,
+        user_id: Optional[int] = None,
+    ) -> dict:
+        """Один чат: context (товар) + users. GET /messenger/v2/accounts/{id}/chats/{chat_id}"""
+        uid = int(user_id) if user_id else await self.resolve_user_id()
+        cid = (chat_id or "").strip()
+        if not cid:
+            return {}
+        data = await self._request(
+            "GET",
+            f"/messenger/v2/accounts/{uid}/chats/{cid}",
+        )
+        return data if isinstance(data, dict) else {}
+
     async def list_chat_messages(
         self,
         chat_id: str,
@@ -604,13 +621,32 @@ def message_id_of(msg: dict) -> str:
 
 
 def chat_item_title(chat: dict) -> str:
+    if not isinstance(chat, dict):
+        return "—"
     ctx = chat.get("context") if isinstance(chat.get("context"), dict) else {}
     value = ctx.get("value") if isinstance(ctx.get("value"), dict) else {}
     title = value.get("title") or value.get("name")
     if title:
         return str(title).strip()
+    # Иногда title лежит прямо в context.
+    title = ctx.get("title") or ctx.get("name")
+    if title:
+        return str(title).strip()
     item = chat.get("item") if isinstance(chat.get("item"), dict) else {}
-    return str(item.get("title") or "").strip() or "—"
+    title = item.get("title") or item.get("name")
+    if title:
+        return str(title).strip()
+    return "—"
+
+
+def chat_has_meta(chat: dict) -> bool:
+    """Есть ли у объекта чата товар и/или участники."""
+    if not isinstance(chat, dict):
+        return False
+    if chat_item_title(chat) not in ("", "—"):
+        return True
+    users = chat.get("users")
+    return isinstance(users, list) and any(isinstance(u, dict) for u in users)
 
 
 def chat_buyer_name(

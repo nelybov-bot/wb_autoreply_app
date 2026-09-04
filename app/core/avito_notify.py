@@ -411,7 +411,10 @@ def format_chat_photo_caption(
 def format_balance_low_message(store_name: str, *, total: float) -> str:
     store = escape_tg_html(store_name or "Avito")
     amount = f"{total:,.0f}".replace(",", " ") + " ₽"
-    return f"⚠️ <b>Avito</b> · {store}\n{escape_tg_html(amount)}"
+    return (
+        "⚠️ <b>Критический баланс — нужно пополнение</b>\n"
+        f"{store}: {escape_tg_html(amount)}"
+    )
 
 
 def _reply_map_key(tg_chat_id: Any, tg_message_id: Any) -> str:
@@ -492,6 +495,28 @@ async def _send(
         parse_mode="HTML",
         db=db,
     )
+
+
+async def _ensure_chat_meta(client: AvitoClient, chat: dict, chat_id: str) -> dict:
+    """Если в объекте чата нет товара/users — догружаем getChatById."""
+    base = chat if isinstance(chat, dict) else {"id": chat_id}
+    has_title = chat_item_title(base) not in ("", "—")
+    users = base.get("users")
+    has_users = isinstance(users, list) and any(isinstance(u, dict) for u in users)
+    if has_title and has_users:
+        return base
+    try:
+        full = await client.get_chat(chat_id)
+    except Exception:
+        log.warning("avito get_chat failed chat=%s", chat_id, exc_info=True)
+        return base
+    if not isinstance(full, dict) or not full:
+        return base
+    merged = dict(base)
+    merged.update(full)
+    if not merged.get("last_message") and base.get("last_message"):
+        merged["last_message"] = base.get("last_message")
+    return merged
 
 
 async def _send_chat_alert(
@@ -801,13 +826,15 @@ async def poll_store_messages(
         discovered += len(new_incoming)
         to_send = new_incoming[-_MAX_NEW_MSGS_PER_CHAT:]
         if notify and bucket.get("seeded"):
+            chat_meta = await _ensure_chat_meta(client, chat, cid)
+            by_id[cid] = chat_meta
             for m in to_send:
                 ok, err, tg_mid = await _send_chat_alert(
                     db,
                     bot_token,
                     chat_id,
                     store,
-                    chat,
+                    chat_meta,
                     m,
                     our_uid=our_uid,
                 )
@@ -819,7 +846,7 @@ async def poll_store_messages(
                         tg_message_id=tg_mid,
                         store_id=int(store.id),
                         avito_chat_id=cid,
-                        item_title=chat_item_title(chat),
+                        item_title=chat_item_title(chat_meta),
                     )
                 else:
                     log.warning("avito msg tg fail store=%s chat=%s: %s", store.id, cid, err)
