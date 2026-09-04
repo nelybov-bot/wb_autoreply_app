@@ -161,6 +161,8 @@ from app.core.wb_banned_cards import (
 )
 from app.core.avito_notify import (
     POLL_SECONDS as AVITO_POLL_SECONDS,
+    SETTING_BALANCE_ENABLED as AVITO_BALANCE_NOTIFY_ENABLED,
+    SETTING_BALANCE_THRESHOLD as AVITO_BALANCE_THRESHOLD,
     SETTING_CHAT_ID as AVITO_NOTIFY_CHAT_ID,
     SETTING_ENABLED as AVITO_NOTIFY_ENABLED,
     SETTING_MESSAGES as AVITO_MESSAGES_NOTIFY_ENABLED,
@@ -1867,11 +1869,12 @@ async def _run_avito_notify(*, manual: bool = False) -> dict:
         _avito_fail_until = 0.0
         _avito_fail_token = ""
         log.info(
-            "avito_notify done manual=%s stores=%s orders=%s messages=%s",
+            "avito_notify done manual=%s stores=%s orders=%s messages=%s balance_alerts=%s",
             manual,
             result.get("stores"),
             result.get("orders_sent"),
             result.get("messages_sent"),
+            result.get("balance_alerts"),
         )
         return result
     except HTTPException:
@@ -2610,6 +2613,8 @@ def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(requir
         AVITO_NOTIFY_CHAT_ID,
         AVITO_ORDERS_NOTIFY_ENABLED,
         AVITO_MESSAGES_NOTIFY_ENABLED,
+        AVITO_BALANCE_NOTIFY_ENABLED,
+        AVITO_BALANCE_THRESHOLD,
         "telegram_agent_enabled",
         "telegram_agent_chat_id",
         "telegram_agent_user_id",

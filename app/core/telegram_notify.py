@@ -18,8 +18,11 @@ log = logging.getLogger("telegram")
 TELEGRAM_PARSE_MODE = "HTML"
 
 TELEGRAM_API_BASE = "https://api.telegram.org/bot{token}"
+TELEGRAM_FILE_BASE = "https://api.telegram.org/file/bot{token}/{path}"
 TELEGRAM_API = TELEGRAM_API_BASE + "/sendMessage"
+TELEGRAM_API_PHOTO = TELEGRAM_API_BASE + "/sendPhoto"
 _TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]{20,}$")
+TELEGRAM_CAPTION_MAX = 1024
 
 SETTING_REPORT_CHAT_ID = "telegram_report_chat_id"
 SETTING_CARD_ERROR_CHAT_ID = "telegram_card_error_chat_id"
@@ -365,6 +368,154 @@ async def send_telegram_message(
     except Exception as e:
         log.exception("Telegram send_telegram_message: %s", e)
         return False, str(e), None
+
+
+async def send_telegram_photo(
+    bot_token: str,
+    chat_id: Union[str, int],
+    photo_bytes: bytes,
+    *,
+    caption: str = "",
+    parse_mode: Optional[str] = None,
+    filename: str = "photo.jpg",
+    reply_to_message_id: Optional[int] = None,
+    db=None,
+) -> Tuple[bool, str, Optional[int]]:
+    """Отправка одного фото. Возвращает (успех, ошибка, message_id)."""
+    token = normalize_telegram_bot_token(bot_token)
+    cid = normalize_telegram_chat_id(chat_id)
+    if not token or not cid or not photo_bytes:
+        return False, "не заданы токен, chat_id или фото", None
+    if not is_plausible_telegram_token(token):
+        return (
+            False,
+            "неверный формат токена (ожидается 123456789:AAH... от @BotFather)",
+            None,
+        )
+    url = TELEGRAM_API_PHOTO.format(token=token)
+    cap = (caption or "").strip()
+    if len(cap) > TELEGRAM_CAPTION_MAX:
+        cap = cap[: TELEGRAM_CAPTION_MAX - 1] + "…"
+
+    async def _post(target_cid: str) -> Tuple[bool, str, Optional[int], Optional[Any]]:
+        form = aiohttp.FormData()
+        form.add_field("chat_id", str(target_cid))
+        form.add_field(
+            "photo",
+            photo_bytes,
+            filename=filename or "photo.jpg",
+            content_type="image/jpeg",
+        )
+        if cap:
+            form.add_field("caption", cap)
+            if parse_mode:
+                form.add_field("parse_mode", parse_mode)
+        if reply_to_message_id is not None:
+            try:
+                form.add_field("reply_to_message_id", str(int(reply_to_message_id)))
+            except (TypeError, ValueError):
+                pass
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url, data=form, timeout=aiohttp.ClientTimeout(total=60)
+            ) as resp:
+                raw = await resp.text()
+                try:
+                    data = json.loads(raw) if raw else {}
+                except json.JSONDecodeError:
+                    return False, f"HTTP {resp.status}: {raw[:200]}", None, None
+                if isinstance(data, dict) and data.get("ok"):
+                    result = data.get("result") if isinstance(data.get("result"), dict) else {}
+                    mid = result.get("message_id")
+                    try:
+                        return True, "", int(mid) if mid is not None else None, data
+                    except (TypeError, ValueError):
+                        return True, "", None, data
+                err = describe_telegram_api_error(int(resp.status), data)
+                return False, err, None, data if isinstance(data, dict) else None
+
+    try:
+        for attempt in range(2):
+            ok, err, mid, data = await _post(cid)
+            if ok:
+                return True, "", mid
+            migrated = telegram_migrate_chat_id(data) if isinstance(data, dict) else None
+            if attempt == 0 and migrated is not None and str(cid) != str(migrated):
+                old_cid = cid
+                cid = migrated
+                n = persist_migrated_chat_id(db, old_cid, migrated) if db is not None else 0
+                log.warning(
+                    "Telegram chat_id migrated %s -> %s (settings updated: %s)",
+                    old_cid,
+                    migrated,
+                    n,
+                )
+                continue
+            log.warning("Telegram sendPhoto failed: chat_id=%s %s", cid, (err or "")[:240])
+            return False, err or "не удалось отправить фото", None
+        return False, err or "не удалось отправить фото", None
+    except Exception as e:
+        log.exception("Telegram send_telegram_photo: %s", e)
+        return False, str(e), None
+
+
+async def download_url_bytes(
+    url: str,
+    *,
+    max_bytes: int = 20 * 1024 * 1024,
+    timeout_sec: float = 45,
+) -> Tuple[bool, str, bytes, str]:
+    """Скачать URL. Возвращает (ok, error, bytes, content_type)."""
+    src = (url or "").strip()
+    if not src.startswith("http"):
+        return False, "некорректный URL", b"", ""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                src, timeout=aiohttp.ClientTimeout(total=timeout_sec)
+            ) as resp:
+                if resp.status >= 400:
+                    return False, f"HTTP {resp.status}", b"", ""
+                ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
+                data = await resp.read()
+                if not data:
+                    return False, "пустой ответ", b"", ctype
+                if len(data) > max_bytes:
+                    return False, f"файл больше {max_bytes} байт", b"", ctype
+                return True, "", data, ctype
+    except Exception as e:
+        return False, str(e)[:200], b"", ""
+
+
+async def download_telegram_file(
+    bot_token: str,
+    file_id: str,
+    *,
+    max_bytes: int = 20 * 1024 * 1024,
+) -> Tuple[bool, str, bytes, str]:
+    """Скачать файл бота по file_id. Возвращает (ok, error, bytes, filename_hint)."""
+    token = normalize_telegram_bot_token(bot_token)
+    fid = (file_id or "").strip()
+    if not token or not fid:
+        return False, "нет токена или file_id", b"", ""
+    ok, err, data, _ = await _telegram_api_call(
+        token,
+        "getFile",
+        json_payload={"file_id": fid},
+        timeout_sec=20,
+    )
+    if not ok:
+        return False, err or "getFile failed", b"", ""
+    result = data.get("result") if isinstance(data.get("result"), dict) else {}
+    path = str(result.get("file_path") or "").strip()
+    if not path:
+        return False, "нет file_path", b"", ""
+    file_url = TELEGRAM_FILE_BASE.format(token=token, path=path)
+    ok2, err2, raw, _ctype = await download_url_bytes(file_url, max_bytes=max_bytes)
+    if not ok2:
+        return False, err2, b"", ""
+    name = path.rsplit("/", 1)[-1] or "photo.jpg"
+    return True, "", raw, name
 
 
 async def telegram_get_updates(

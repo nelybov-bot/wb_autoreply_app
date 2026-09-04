@@ -254,6 +254,88 @@ class AvitoClient:
             return [m for m in data if isinstance(m, dict)]
         return []
 
+    async def get_balance(self, *, user_id: Optional[int] = None) -> dict:
+        """Кошелёк: real + bonus (рубли). GET /core/v1/accounts/{user_id}/balance/"""
+        uid = int(user_id) if user_id else await self.resolve_user_id()
+        data = await self._request("GET", f"/core/v1/accounts/{uid}/balance/")
+        return data if isinstance(data, dict) else {}
+
+    async def upload_image(
+        self,
+        image_bytes: bytes,
+        *,
+        filename: str = "photo.jpg",
+        content_type: str = "image/jpeg",
+        user_id: Optional[int] = None,
+    ) -> str:
+        """Загрузка одного изображения. Возвращает image_id."""
+        uid = int(user_id) if user_id else await self.resolve_user_id()
+        if not image_bytes:
+            raise HttpStatusError(400, "пустой файл изображения")
+        # Лимит Avito — 24 МБ.
+        if len(image_bytes) > 24 * 1024 * 1024:
+            raise HttpStatusError(400, "файл больше 24 МБ")
+
+        url = f"{BASE}/messenger/v1/accounts/{uid}/uploadImages"
+
+        async def _do(force_token: bool = False) -> str:
+            token = await self._ensure_token(force=force_token)
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "User-Agent": USER_AGENT,
+            }
+            form = aiohttp.FormData()
+            form.add_field(
+                "uploadfile[]",
+                image_bytes,
+                filename=filename or "photo.jpg",
+                content_type=content_type or "image/jpeg",
+            )
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                async with session.post(url, data=form, headers=headers) as resp:
+                    text = await resp.text()
+                    if resp.status in (401, 403) and not force_token:
+                        body_l = (text or "").lower()
+                        if "token" in body_l or "unauthorized" in body_l or resp.status == 401:
+                            raise _AuthRetryNeeded(text)
+                    if resp.status >= 400:
+                        raise HttpStatusError(int(resp.status), text[:1200])
+                    try:
+                        data = json.loads(text) if text.strip() else {}
+                    except Exception as e:
+                        raise HttpStatusError(resp.status, f"bad upload JSON: {e}; {text[:400]}")
+                    if not isinstance(data, dict) or not data:
+                        raise HttpStatusError(400, f"нет image_id в ответе: {text[:400]}")
+                    # Ответ: { "<image_id>": { "1280x960": "url", ... } }
+                    image_id = next(iter(data.keys()))
+                    if not image_id:
+                        raise HttpStatusError(400, f"пустой image_id: {text[:400]}")
+                    return str(image_id)
+
+        try:
+            return await retry(lambda: _do(False), retries=3, retry_on_status=(429, 500, 502, 503, 504))
+        except _AuthRetryNeeded:
+            return await retry(lambda: _do(True), retries=2, retry_on_status=(429, 500, 502, 503, 504))
+
+    async def send_image_message(
+        self,
+        chat_id: str,
+        image_id: str,
+        *,
+        user_id: Optional[int] = None,
+    ) -> dict:
+        uid = int(user_id) if user_id else await self.resolve_user_id()
+        cid = (chat_id or "").strip()
+        iid = (image_id or "").strip()
+        if not cid or not iid:
+            raise HttpStatusError(400, "нужны chat_id и image_id")
+        data = await self._request(
+            "POST",
+            f"/messenger/v1/accounts/{uid}/chats/{cid}/messages/image",
+            json_body={"image_id": iid},
+        )
+        return data if isinstance(data, dict) else {"ok": True}
+
     async def send_text_message(
         self,
         chat_id: str,
@@ -386,6 +468,47 @@ def message_text_preview(msg: dict, *, max_len: int = 280) -> str:
     if len(text) > max_len:
         return text[: max_len - 1] + "…"
     return text
+
+
+def message_image_url(msg: dict) -> str:
+    """Лучший URL картинки из сообщения типа image (предпочитаем больший размер)."""
+    if not isinstance(msg, dict):
+        return ""
+    content = msg.get("content") if isinstance(msg.get("content"), dict) else {}
+    image = content.get("image") if isinstance(content.get("image"), dict) else {}
+    sizes = image.get("sizes") if isinstance(image.get("sizes"), dict) else {}
+    if not sizes:
+        return ""
+    best_url = ""
+    best_area = -1
+    for key, url in sizes.items():
+        if not url:
+            continue
+        area = 0
+        try:
+            parts = str(key).lower().replace("×", "x").split("x")
+            if len(parts) == 2:
+                area = int(parts[0]) * int(parts[1])
+        except (TypeError, ValueError):
+            area = 0
+        if area >= best_area:
+            best_area = area
+            best_url = str(url).strip()
+    return best_url
+
+
+def balance_total_rub(balance: dict) -> float:
+    if not isinstance(balance, dict):
+        return 0.0
+    try:
+        real = float(balance.get("real") or 0)
+    except (TypeError, ValueError):
+        real = 0.0
+    try:
+        bonus = float(balance.get("bonus") or 0)
+    except (TypeError, ValueError):
+        bonus = 0.0
+    return real + bonus
 
 
 def message_id_of(msg: dict) -> str:

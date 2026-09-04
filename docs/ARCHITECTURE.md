@@ -74,8 +74,8 @@
 | `ozon_actions.py` | Промо-акции |
 | `ozon_alerts.py` | Классификация сообщений поддержки |
 | `yam_client.py` | Яндекс.Маркет: отзывы, вопросы, ответы (без чатов и card-links) |
-| `avito_client.py` | Avito Business API: OAuth, заказы, messenger |
-| `avito_notify.py` | Опрос заказов/сообщений Avito → Telegram |
+| `avito_client.py` | Avito Business API: OAuth, заказы, messenger, баланс, uploadImages |
+| `avito_notify.py` | Опрос заказов/сообщений/баланса Avito → Telegram; reply текст/фото |
 | `net.py` | `HttpStatusError`, `UnauthorizedStoreError`, retry |
 | `openai_client.py` | `OpenAIClient` — chat completions (default `gpt-5.2`) |
 | `chat_common.py` | Общая логика чатов: даты отсечки, ключи сообщений |
@@ -187,7 +187,7 @@
   - _auto_scheduler_loop()      # MSK слоты
   - _telegram_report_loop()
   - _wb_banned_cards_loop()     # заблокированные карточки WB → Telegram
-  - _avito_notify_loop()        # заказы/сообщения Avito → Telegram
+  - _avito_notify_loop()        # заказы/сообщения/баланс Avito → Telegram
   - start_telegram_agent_task()
 ```
 

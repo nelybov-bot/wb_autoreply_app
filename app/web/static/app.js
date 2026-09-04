@@ -10193,6 +10193,7 @@
         'telegram_card_error_chat_id',
         'wb_banned_cards_telegram_chat_id',
         'avito_notify_telegram_chat_id',
+        'avito_balance_threshold',
         'telegram_agent_chat_id',
         'telegram_agent_user_id',
         'buyer_chat_reply_from_date',
@@ -10200,6 +10201,8 @@
         const el = document.getElementById('setting-' + k);
         if (el) el.value = data[k] || '';
       });
+      const balTh = document.getElementById('setting-avito_balance_threshold');
+      if (balTh && !String(balTh.value || '').trim()) balTh.value = '1000';
       secretSettingKeys.forEach(k => {
         const el = document.getElementById('setting-' + k);
         if (!el) return;
@@ -10227,6 +10230,8 @@
       if (avitoOrders) avitoOrders.checked = String(data.avito_orders_notify_enabled || '1') !== '0';
       const avitoMsgs = document.getElementById('setting-avito_messages_notify_enabled');
       if (avitoMsgs) avitoMsgs.checked = String(data.avito_messages_notify_enabled || '1') !== '0';
+      const avitoBal = document.getElementById('setting-avito_balance_notify_enabled');
+      if (avitoBal) avitoBal.checked = String(data.avito_balance_notify_enabled || '1') !== '0';
       const tgAgent = document.getElementById('setting-telegram_agent_enabled');
       if (tgAgent) tgAgent.checked = String(data.telegram_agent_enabled || '0') === '1';
       const cardEnabled = document.getElementById('setting-card_check_enabled');
@@ -10617,6 +10622,8 @@
       avito_notify_enabled: document.getElementById('setting-avito_notify_enabled')?.checked ? '1' : '0',
       avito_orders_notify_enabled: document.getElementById('setting-avito_orders_notify_enabled')?.checked ? '1' : '0',
       avito_messages_notify_enabled: document.getElementById('setting-avito_messages_notify_enabled')?.checked ? '1' : '0',
+      avito_balance_notify_enabled: document.getElementById('setting-avito_balance_notify_enabled')?.checked ? '1' : '0',
+      avito_balance_threshold: String(document.getElementById('setting-avito_balance_threshold')?.value || '1000').trim() || '1000',
       avito_notify_telegram_chat_id: document.getElementById('setting-avito_notify_telegram_chat_id')?.value || '',
       telegram_agent_enabled: document.getElementById('setting-telegram_agent_enabled')?.checked ? '1' : '0',
       telegram_agent_chat_id: document.getElementById('setting-telegram_agent_chat_id')?.value || '',
@@ -10733,8 +10740,8 @@
       try {
         const res = await api('/telegram/avito-notify-now', { method: 'POST' });
         toast(
-          `Avito: магазинов ${res.stores ?? 0}, заказов отправлено ${res.orders_sent ?? 0}, `
-          + `сообщений ${res.messages_sent ?? 0}`,
+          `Avito: магазинов ${res.stores ?? 0}, заказов ${res.orders_sent ?? 0}, `
+          + `сообщений ${res.messages_sent ?? 0}, баланс-алертов ${res.balance_alerts ?? 0}`,
         );
       } catch (err) {
         toast(err.message, 'error');

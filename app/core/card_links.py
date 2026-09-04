@@ -889,11 +889,13 @@ def validate_ozon_link_rows(
     attr_names: Dict[int, str],
     brand_attr_ids: set,
     qty_pack: bool = False,
+    category_only: bool = False,
 ) -> None:
     """
     Правила Ozon перед объединением:
     - одна категория;
     - qty_pack (TMS 1/2/3 шт): только категория; кол-во в упаковке выставится при связке;
+    - category_only (копия связки с WB): только категория; хар-ки не трогаем и не сверяем;
     - иначе: все НЕ-вариативные характеристики совпадают (кроме артикула/TMS);
     - вариативные (is_aspect) должны отличаться между SKU.
     """
@@ -916,7 +918,7 @@ def validate_ozon_link_rows(
         fp = row.get("attribute_fingerprint") or {}
         return _ozon_brand_from_fingerprint(fp, brand_attr_ids        )
 
-    if qty_pack:
+    if qty_pack or category_only:
         return
 
     fingerprints = [r.get("attribute_fingerprint") or {} for r in selected]
@@ -4713,9 +4715,15 @@ async def ozon_link_by_model(
     model_name: str,
     catalog_rows: Optional[List[dict]] = None,
     qty_pack: bool = False,
+    category_only: bool = False,
     validate_only: bool = False,
     unlink_first: bool = True,
 ) -> dict:
+    """
+    Связать offer_id одним «Названием модели».
+    category_only — копия с WB: только проверка категории, без сверки/записи прочих хар-к
+    (ТН ВЭД, бренд, вес/габариты/упаковка не трогаем).
+    """
     model = (model_name or "").strip()
     if not model:
         raise ValueError("model_name пуст")
@@ -4743,6 +4751,7 @@ async def ozon_link_by_model(
                     attr_names=attr_names,
                     brand_attr_ids=brand_ids,
                     qty_pack=qty_pack,
+                    category_only=category_only,
                 )
                 if qty_pack:
                     qty_attr_id = _ozon_qty_pack_attr_id(attr_names)

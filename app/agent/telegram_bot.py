@@ -12,6 +12,7 @@ from app.agent.orchestrator import handle_agent_message
 from app.agent.session import AgentSession, clear_session, get_or_create_session
 from app.agent.tools import AgentContext
 from app.core.telegram_notify import (
+    download_telegram_file,
     normalize_telegram_bot_token,
     normalize_telegram_chat_id,
     resolve_telegram_chat_id,
@@ -25,6 +26,7 @@ from app.core.telegram_notify import (
 from app.core.avito_notify import (
     lookup_tg_reply_target,
     notify_enabled as avito_notify_enabled,
+    send_avito_image_from_telegram,
     send_avito_reply_from_telegram,
 )
 from app.db import Database, UserRow
@@ -367,16 +369,39 @@ def _avito_reply_chat_allowed(db: Database, chat_id: object) -> bool:
     return str(normalize_telegram_chat_id(chat_id)) in allowed
 
 
+def _message_largest_photo_file_id(message: dict) -> str:
+    """Одно фото: берём самый крупный размер из message.photo."""
+    photos = message.get("photo")
+    if not isinstance(photos, list) or not photos:
+        return ""
+    best = None
+    best_area = -1
+    for p in photos:
+        if not isinstance(p, dict):
+            continue
+        try:
+            area = int(p.get("width") or 0) * int(p.get("height") or 0)
+        except (TypeError, ValueError):
+            area = 0
+        if area >= best_area and p.get("file_id"):
+            best_area = area
+            best = p
+    if not best:
+        return ""
+    return str(best.get("file_id") or "").strip()
+
+
 async def _try_handle_avito_reply(db: Database, message: dict) -> bool:
     """
-    Если это reply на уведомление Avito — отправить текст в Avito.
+    Если это reply на уведомление Avito — отправить текст/фото в Avito.
     Возвращает True, если сообщение обработано (не отдавать агенту).
     """
     reply = message.get("reply_to_message")
     if not isinstance(reply, dict):
         return False
-    text = (message.get("text") or "").strip()
-    if not text:
+    text = (message.get("text") or message.get("caption") or "").strip()
+    photo_id = _message_largest_photo_file_id(message)
+    if not text and not photo_id:
         return False
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
@@ -397,17 +422,42 @@ async def _try_handle_avito_reply(db: Database, message: dict) -> bool:
     avito_chat = str(target.get("avito_chat_id") or "").strip()
     item = escape_tg(str(target.get("item") or "").strip() or "чат Avito")
 
-    ok, err = await send_avito_reply_from_telegram(
-        db,
-        store_id=store_id,
-        avito_chat_id=avito_chat,
-        text=text,
-    )
+    if photo_id:
+        ok_dl, err_dl, raw, fname = await download_telegram_file(token, photo_id)
+        if not ok_dl or not raw:
+            await send_telegram_message(
+                token,
+                chat_id,
+                f"❌ Не удалось скачать фото из Telegram: {escape_tg(err_dl)}",
+                parse_mode="HTML",
+                reply_to_message_id=message.get("message_id"),
+                db=db,
+            )
+            return True
+        ok, err = await send_avito_image_from_telegram(
+            db,
+            store_id=store_id,
+            avito_chat_id=avito_chat,
+            image_bytes=raw,
+            filename=fname or "photo.jpg",
+            caption=text,
+        )
+        kind = "фото" + (" и текст" if text else "")
+    else:
+        ok, err = await send_avito_reply_from_telegram(
+            db,
+            store_id=store_id,
+            avito_chat_id=avito_chat,
+            text=text,
+        )
+        kind = "текст"
+
     if ok:
+        extra = f" ({escape_tg(err)})" if err else ""
         await send_telegram_message(
             token,
             chat_id,
-            f"✅ <b>Отправлено в Avito</b>\n📦 {item}",
+            f"✅ <b>Отправлено в Avito</b> ({escape_tg(kind)})\n📦 {item}{extra}",
             parse_mode="HTML",
             reply_to_message_id=message.get("message_id"),
             db=db,

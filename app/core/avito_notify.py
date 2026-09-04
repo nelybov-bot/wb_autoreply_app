@@ -16,18 +16,26 @@ from app.db import Database, Store
 
 from .avito_client import (
     AvitoClient,
+    balance_total_rub,
     chat_buyer_name,
     chat_id_of,
     chat_item_title,
     chat_last_message,
     message_id_of,
+    message_image_url,
     message_text_preview,
     order_display_id,
     order_item_titles,
     order_total_rub,
 )
 from .net import HttpStatusError
-from .telegram_notify import escape_tg_html, normalize_telegram_chat_id, send_telegram_message
+from .telegram_notify import (
+    download_url_bytes,
+    escape_tg_html,
+    normalize_telegram_chat_id,
+    send_telegram_message,
+    send_telegram_photo,
+)
 
 log = logging.getLogger("avito_notify")
 
@@ -38,6 +46,11 @@ SETTING_CHAT_ID = "avito_notify_telegram_chat_id"
 SETTING_SEEN = "avito_notify_seen_json"
 SETTING_LAST_CHECK = "avito_notify_last_check"
 SETTING_REPLY_MAP = "avito_tg_reply_map_json"
+SETTING_BALANCE_ENABLED = "avito_balance_notify_enabled"
+SETTING_BALANCE_THRESHOLD = "avito_balance_threshold"
+SETTING_BALANCE_STATE = "avito_balance_state_json"
+
+DEFAULT_BALANCE_THRESHOLD = 1000.0
 
 # Новые заказы, требующие внимания продавца.
 ORDER_WATCH_STATUSES = ("on_confirmation", "ready_to_ship")
@@ -72,6 +85,39 @@ def messages_notify_enabled(db: Database) -> bool:
     if raw == "":
         return True
     return raw == "1"
+
+
+def balance_notify_enabled(db: Database) -> bool:
+    raw = (db.get_setting(SETTING_BALANCE_ENABLED) or "").strip()
+    if raw == "":
+        return True
+    return raw == "1"
+
+
+def balance_threshold_rub(db: Database) -> float:
+    raw = (db.get_setting(SETTING_BALANCE_THRESHOLD) or "").strip()
+    if not raw:
+        return DEFAULT_BALANCE_THRESHOLD
+    try:
+        val = float(raw.replace(",", ".").replace(" ", ""))
+    except (TypeError, ValueError):
+        return DEFAULT_BALANCE_THRESHOLD
+    return max(0.0, val)
+
+
+def _load_balance_state(db: Database) -> dict[str, Any]:
+    raw = (db.get_setting(SETTING_BALANCE_STATE) or "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_balance_state(db: Database, data: dict[str, Any]) -> None:
+    db.set_setting(SETTING_BALANCE_STATE, json.dumps(data, ensure_ascii=False))
 
 
 def _load_seen(db: Database) -> dict[str, Any]:
@@ -330,9 +376,64 @@ def format_chat_message(
         "",
         body,
         "",
-        "<i>↩️ Ответьте на это сообщение — уйдёт покупателю в Avito</i>",
+        "<i>↩️ Ответьте текстом или фото — уйдёт покупателю в Avito</i>",
     ]
     return "\n".join(lines)
+
+
+def format_chat_photo_caption(
+    store_name: str,
+    chat: dict,
+    msg: dict,
+    *,
+    our_user_id: Optional[int] = None,
+) -> str:
+    """Подпись к фото в Telegram (без плейсхолдера «фото»)."""
+    store = escape_tg_html(store_name or "Avito")
+    item = escape_tg_html(chat_item_title(chat))
+    author = msg.get("author_id")
+    if author is None:
+        author = msg.get("authorId")
+    buyer = chat_buyer_name(chat, author_id=author, our_user_id=our_user_id)
+    buyer_s = escape_tg_html(buyer) if buyer else "Покупатель"
+    return "\n".join(
+        [
+            "✉️ <b>Новое сообщение · Avito</b>",
+            f"🏪 <b>{store}</b>",
+            f"📦 {item}",
+            f"👤 {buyer_s}",
+            "",
+            "<i>↩️ Ответьте текстом или фото — уйдёт покупателю в Avito</i>",
+        ]
+    )
+
+
+def format_balance_low_message(
+    store_name: str,
+    *,
+    total: float,
+    real: float,
+    bonus: float,
+    threshold: float,
+) -> str:
+    store = escape_tg_html(store_name or "Avito")
+
+    def _rub(v: float) -> str:
+        return f"{v:,.0f}".replace(",", " ") + " ₽"
+
+    return "\n".join(
+        [
+            "⚠️ <b>Низкий баланс Avito</b>",
+            f"🏪 <b>{store}</b>",
+            "",
+            f"💰 Остаток: <b>{escape_tg_html(_rub(total))}</b>",
+            f" реальные: {escape_tg_html(_rub(real))}",
+            f" бонусы: {escape_tg_html(_rub(bonus))}",
+            f"📉 Порог уведомления: {escape_tg_html(_rub(threshold))}",
+            "",
+            "<i>Пополните кошелёк в кабинете Avito — повторно напомним, когда снова упадёт ниже порога.</i>",
+        ]
+    )
 
 
 def _reply_map_key(tg_chat_id: Any, tg_message_id: Any) -> str:
@@ -415,6 +516,75 @@ async def _send(
     )
 
 
+async def _send_chat_alert(
+    db: Database,
+    bot_token: str,
+    chat_id: str,
+    store: Store,
+    chat: dict,
+    msg: dict,
+    *,
+    our_uid: Optional[int],
+) -> tuple[bool, str, Optional[int]]:
+    """Текст или фото (одно) в Telegram для входящего Avito-сообщения."""
+    mtype = str(msg.get("type") or "").strip().lower()
+    if mtype == "image":
+        img_url = message_image_url(msg)
+        if img_url:
+            ok_dl, err_dl, raw, ctype = await download_url_bytes(img_url)
+            if ok_dl and raw:
+                caption = format_chat_photo_caption(
+                    store.name or f"#{store.id}",
+                    chat,
+                    msg,
+                    our_user_id=our_uid,
+                )
+                fname = "avito.jpg"
+                if "png" in (ctype or "").lower():
+                    fname = "avito.png"
+                ok, err, tg_mid = await send_telegram_photo(
+                    bot_token,
+                    chat_id,
+                    raw,
+                    caption=caption,
+                    parse_mode="HTML",
+                    filename=fname,
+                    db=db,
+                )
+                if ok:
+                    return ok, err, tg_mid
+                log.warning(
+                    "avito image→tg photo fail store=%s: %s — fallback text",
+                    store.id,
+                    err,
+                )
+            else:
+                log.warning(
+                    "avito image download fail store=%s: %s",
+                    store.id,
+                    err_dl,
+                )
+    text = format_chat_message(
+        store.name or f"#{store.id}",
+        chat,
+        msg,
+        our_user_id=our_uid,
+    )
+    return await _send(db, bot_token, chat_id, text)
+
+
+def _avito_store_or_error(db: Database, store_id: int) -> tuple[Optional[Store], str]:
+    stores = [s for s in db.list_stores() if int(s.id) == int(store_id)]
+    if not stores:
+        return None, "магазин Avito не найден"
+    store = stores[0]
+    if (store.marketplace or "").strip().lower() != "avito":
+        return None, "магазин не Avito"
+    if not store.active:
+        return None, "магазин выключен"
+    return store, ""
+
+
 async def send_avito_reply_from_telegram(
     db: Database,
     *,
@@ -426,14 +596,9 @@ async def send_avito_reply_from_telegram(
     body = (text or "").strip()
     if not body:
         return False, "пустой текст"
-    stores = [s for s in db.list_stores() if int(s.id) == int(store_id)]
-    if not stores:
-        return False, "магазин Avito не найден"
-    store = stores[0]
-    if (store.marketplace or "").strip().lower() != "avito":
-        return False, "магазин не Avito"
-    if not store.active:
-        return False, "магазин выключен"
+    store, err = _avito_store_or_error(db, store_id)
+    if not store:
+        return False, err
     client = _client_for_store(store)
     try:
         await _ensure_user_id(db, store, client)
@@ -453,6 +618,60 @@ async def send_avito_reply_from_telegram(
         return False, f"Avito HTTP {e.status}{hint}: {str(e.body)[:160]}"
     except Exception as e:
         log.exception("avito reply send failed store=%s chat=%s", store_id, avito_chat_id)
+        return False, str(e)[:180]
+
+
+async def send_avito_image_from_telegram(
+    db: Database,
+    *,
+    store_id: int,
+    avito_chat_id: str,
+    image_bytes: bytes,
+    filename: str = "photo.jpg",
+    content_type: str = "image/jpeg",
+    caption: str = "",
+) -> tuple[bool, str]:
+    """Одно фото из Telegram → uploadImages → messages/image (+ опционально caption текстом)."""
+    if not image_bytes:
+        return False, "пустое фото"
+    store, err = _avito_store_or_error(db, store_id)
+    if not store:
+        return False, err
+    client = _client_for_store(store)
+    try:
+        await _ensure_user_id(db, store, client)
+        image_id = await client.upload_image(
+            image_bytes,
+            filename=filename or "photo.jpg",
+            content_type=content_type or "image/jpeg",
+            user_id=store.business_id,
+        )
+        data = await client.send_image_message(
+            avito_chat_id,
+            image_id,
+            user_id=store.business_id,
+        )
+        mid = message_id_of(data) if isinstance(data, dict) else ""
+        if mid:
+            _mark_chat_seen(db, int(store.id), avito_chat_id, mid)
+        cap = (caption or "").strip()
+        if cap:
+            ok_t, err_t = await send_avito_reply_from_telegram(
+                db,
+                store_id=int(store.id),
+                avito_chat_id=avito_chat_id,
+                text=cap,
+            )
+            if not ok_t:
+                return True, f"фото отправлено, текст нет: {err_t}"
+        return True, ""
+    except HttpStatusError as e:
+        hint = ""
+        if e.status == 402:
+            hint = " (нужна подписка Avito с API мессенджера)"
+        return False, f"Avito HTTP {e.status}{hint}: {str(e.body)[:160]}"
+    except Exception as e:
+        log.exception("avito image send failed store=%s chat=%s", store_id, avito_chat_id)
         return False, str(e)[:180]
 
 
@@ -605,13 +824,15 @@ async def poll_store_messages(
         to_send = new_incoming[-_MAX_NEW_MSGS_PER_CHAT:]
         if notify and bucket.get("seeded"):
             for m in to_send:
-                text = format_chat_message(
-                    store.name or f"#{store.id}",
+                ok, err, tg_mid = await _send_chat_alert(
+                    db,
+                    bot_token,
+                    chat_id,
+                    store,
                     chat,
                     m,
-                    our_user_id=our_uid,
+                    our_uid=our_uid,
                 )
-                ok, err, tg_mid = await _send(db, bot_token, chat_id, text)
                 if ok:
                     sent += 1
                     remember_tg_reply_target(
@@ -639,6 +860,96 @@ async def poll_store_messages(
     }
 
 
+async def poll_store_balance(
+    db: Database,
+    store: Store,
+    *,
+    bot_token: str,
+    chat_id: str,
+    state: dict[str, Any],
+    threshold: float,
+    notify: bool,
+) -> dict[str, Any]:
+    """Проверка кошелька: одно уведомление при пересечении порога вниз."""
+    key = str(int(store.id))
+    row = state.get(key)
+    if not isinstance(row, dict):
+        row = {"below": False}
+        state[key] = row
+
+    client = _client_for_store(store)
+    try:
+        await _ensure_user_id(db, store, client)
+        bal = await client.get_balance(user_id=store.business_id)
+    except HttpStatusError as e:
+        return {
+            "store_id": int(store.id),
+            "ok": False,
+            "error": f"баланс HTTP {e.status}: {str(e.body)[:160]}",
+            "alerted": False,
+        }
+    except Exception as e:
+        log.exception("avito balance store=%s", store.id)
+        return {"store_id": int(store.id), "ok": False, "error": str(e)[:180], "alerted": False}
+
+    try:
+        real = float(bal.get("real") or 0)
+    except (TypeError, ValueError):
+        real = 0.0
+    try:
+        bonus = float(bal.get("bonus") or 0)
+    except (TypeError, ValueError):
+        bonus = 0.0
+    total = balance_total_rub(bal)
+    was_below = bool(row.get("below"))
+    is_below = total < float(threshold)
+    alerted = False
+
+    if is_below and not was_below and notify:
+        text = format_balance_low_message(
+            store.name or f"#{store.id}",
+            total=total,
+            real=real,
+            bonus=bonus,
+            threshold=threshold,
+        )
+        ok, err, _ = await _send(db, bot_token, chat_id, text)
+        if ok:
+            alerted = True
+        else:
+            log.warning("avito balance tg fail store=%s: %s", store.id, err)
+            # Не ставим below=True при ошибке TG — повторим на следующем цикле.
+            row["last_total"] = total
+            row["last_check"] = int(time.time())
+            return {
+                "store_id": int(store.id),
+                "ok": True,
+                "error": None,
+                "total": total,
+                "real": real,
+                "bonus": bonus,
+                "below": is_below,
+                "alerted": False,
+                "tg_error": err,
+            }
+
+    row["below"] = is_below
+    row["last_total"] = total
+    row["last_real"] = real
+    row["last_bonus"] = bonus
+    row["last_check"] = int(time.time())
+    return {
+        "store_id": int(store.id),
+        "ok": True,
+        "error": None,
+        "total": total,
+        "real": real,
+        "bonus": bonus,
+        "below": is_below,
+        "alerted": alerted,
+    }
+
+
 async def run_avito_notify_cycle(
     db: Database,
     *,
@@ -652,13 +963,18 @@ async def run_avito_notify_cycle(
     """
     stores = _avito_stores(db)
     seen = _load_seen(db)
+    bal_state = _load_balance_state(db)
     do_orders = orders_notify_enabled(db)
     do_messages = messages_notify_enabled(db)
+    do_balance = balance_notify_enabled(db)
+    threshold = balance_threshold_rub(db)
 
     results_orders: list[dict] = []
     results_messages: list[dict] = []
+    results_balance: list[dict] = []
     orders_sent = 0
     messages_sent = 0
+    balance_alerts = 0
 
     for store in stores:
         bucket = _store_bucket(seen, int(store.id))
@@ -686,9 +1002,26 @@ async def run_avito_notify_cycle(
             )
             results_messages.append(r)
             messages_sent += int(r.get("new") or 0)
+        if do_balance:
+            # Баланс: на первом seed тоже можно алертить (force/manual),
+            # иначе после включения сразу узнаем о низком остатке.
+            r = await poll_store_balance(
+                db,
+                store,
+                bot_token=bot_token,
+                chat_id=chat_id,
+                state=bal_state,
+                threshold=threshold,
+                notify=True,
+            )
+            results_balance.append(r)
+            if r.get("alerted"):
+                balance_alerts += 1
         bucket["seeded"] = True
 
     _save_seen(db, seen)
+    if do_balance:
+        _save_balance_state(db, bal_state)
     db.set_setting(SETTING_LAST_CHECK, str(int(time.time())))
 
     return {
@@ -696,8 +1029,12 @@ async def run_avito_notify_cycle(
         "stores": len(stores),
         "orders_sent": orders_sent,
         "messages_sent": messages_sent,
+        "balance_alerts": balance_alerts,
+        "balance_threshold": threshold,
         "orders": results_orders,
         "messages": results_messages,
+        "balance": results_balance,
         "orders_enabled": do_orders,
         "messages_enabled": do_messages,
+        "balance_enabled": do_balance,
     }

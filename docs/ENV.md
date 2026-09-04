@@ -66,10 +66,13 @@ API `GET /api/settings` возвращает секреты **замаскиро
 | `wb_banned_cards_last_slot` | Служебный ключ слота `YYYY-MM-DD|HH` (09/15/21 МСК) |
 | `wb_banned_cards_last_check` | Служебная метка последнего live-опроса (раз в час) |
 | `wb_banned_cards_last_snapshot` | JSON последнего снимка counts (срочные алерты) |
-| `avito_notify_enabled` | `1` — опрос заказов/сообщений Avito → Telegram |
+| `avito_notify_enabled` | `1` — опрос заказов/сообщений/баланса Avito → Telegram |
 | `avito_notify_telegram_chat_id` | Отдельный чат (пустой = основной `telegram_chat_id`) |
 | `avito_orders_notify_enabled` | `1` / пусто — уведомления о новых заказах (default вкл.) |
 | `avito_messages_notify_enabled` | `1` / пусто — уведомления о входящих сообщениях (default вкл.) |
+| `avito_balance_notify_enabled` | `1` / пусто — алерт при низком балансе кошелька (default вкл.) |
+| `avito_balance_threshold` | Порог ₽ (default `1000`); real+bonus |
+| `avito_balance_state_json` | Служебный JSON: флаг «уже ниже порога» по магазинам |
 | `avito_notify_seen_json` | Служебный JSON seen order/message ids |
 | `avito_notify_last_check` | Служебная метка последнего опроса |
 | `avito_tg_reply_map_json` | Связка Telegram message_id → чат Avito (для ответа reply) |

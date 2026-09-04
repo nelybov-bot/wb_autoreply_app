@@ -1540,7 +1540,12 @@
           <div class="form-group">
             <label>Чат для Avito (заказы и сообщения)</label>
             <input type="text" id="setting-avito_notify_telegram_chat_id" placeholder="необязательно — иначе основной ID чата">
-            <div class="form-hint">Беседа для новых заказов и входящих сообщений Avito. На уведомление о сообщении можно <b>ответить в Telegram</b> — текст уйдёт покупателю в Avito. Магазин: «Магазины» (client_id + client_secret).</div>
+            <div class="form-hint">Беседа для новых заказов, сообщений и низкого баланса Avito. На уведомление о сообщении можно <b>ответить текстом или одним фото</b> — уйдёт покупателю в Avito. Магазин: «Магазины» (client_id + client_secret).</div>
+          </div>
+          <div class="form-group">
+            <label>Порог баланса Avito (₽)</label>
+            <input type="number" id="setting-avito_balance_threshold" min="0" step="100" placeholder="1000">
+            <div class="form-hint">Если сумма кошелька (реальные + бонусы) станет ниже порога — одно уведомление. Повтор — только после того, как баланс снова вырастет выше порога и снова упадёт.</div>
           </div>
 
           <h3 class="settings-subhead">AI-ассистент в Telegram</h3>
@@ -1569,9 +1574,10 @@
             <div class="toggle-row"><span class="toggle-label">Ошибки карточек в отчёте</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-card_check_include_in_periodic_report" checked><span class="switch-track"></span></label></div>
             <div class="toggle-row"><span class="toggle-label">Заблокированные карточки WB в сводном отчёте</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_banned_cards_in_report" checked><span class="switch-track"></span></label></div>
             <div class="toggle-row"><span class="toggle-label">Отдельные уведомления: заблокированные WB <em class="toggle-hint">обязательно для авто</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_banned_cards_enabled"><span class="switch-track"></span></label></div>
-            <div class="toggle-row"><span class="toggle-label">Уведомления Avito <em class="toggle-hint">заказы + сообщения, опрос ~1.5 мин</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_notify_enabled"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Уведомления Avito <em class="toggle-hint">заказы + сообщения + баланс, опрос ~1.5 мин</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_notify_enabled"><span class="switch-track"></span></label></div>
             <div class="toggle-row"><span class="toggle-label">Avito: новые заказы</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_orders_notify_enabled" checked><span class="switch-track"></span></label></div>
             <div class="toggle-row"><span class="toggle-label">Avito: входящие сообщения</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_messages_notify_enabled" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Avito: низкий баланс кошелька</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_balance_notify_enabled" checked><span class="switch-track"></span></label></div>
           </div>
           <div class="form-group">
             <label>Период отчёта</label>
@@ -2042,7 +2048,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=127"></script>
+  <script src="/static/app.js?v=128"></script>
   <script src="/static/card_links_master.js?v=9"></script>
 </body>
 </html>
