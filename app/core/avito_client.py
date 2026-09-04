@@ -98,17 +98,21 @@ class AvitoClient:
         *,
         params: Optional[Dict[str, Any]] = None,
         json_body: Optional[dict] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
         retry_auth: bool = True,
     ) -> Any:
         url = BASE + path
 
         async def _do(force_token: bool = False) -> Any:
             token = await self._ensure_token(force=force_token)
+            headers = self._auth_headers(token)
+            if extra_headers:
+                headers.update(extra_headers)
             async with aiohttp.ClientSession(timeout=self.timeout) as session:
                 async with session.request(
                     method,
                     url,
-                    headers=self._auth_headers(token),
+                    headers=headers,
                     params=params,
                     json=json_body,
                 ) as resp:
@@ -255,9 +259,25 @@ class AvitoClient:
         return []
 
     async def get_balance(self, *, user_id: Optional[int] = None) -> dict:
-        """Кошелёк: real + bonus (рубли). GET /core/v1/accounts/{user_id}/balance/"""
+        """Кошелёк ЛК: real + bonus (рубли). GET /core/v1/accounts/{user_id}/balance/"""
         uid = int(user_id) if user_id else await self.resolve_user_id()
         data = await self._request("GET", f"/core/v1/accounts/{uid}/balance/")
+        return data if isinstance(data, dict) else {}
+
+    async def get_ads_balance(self, *, user_id: Optional[int] = None) -> dict:
+        """Рекламный баланс: balance + bonusBalance (рубли)."""
+        uid = int(user_id) if user_id else await self.resolve_user_id()
+        data = await self._request("GET", f"/ads/v1/account/{uid}/balance")
+        return data if isinstance(data, dict) else {}
+
+    async def get_cpa_balance(self) -> dict:
+        """CPA-кошелёк в копейках. POST /cpa/v3/balanceInfo (лимит ~1/мин)."""
+        data = await self._request(
+            "POST",
+            "/cpa/v3/balanceInfo",
+            json_body={},
+            extra_headers={"X-Source": "MarketAI"},
+        )
         return data if isinstance(data, dict) else {}
 
     async def upload_image(
@@ -497,18 +517,82 @@ def message_image_url(msg: dict) -> str:
     return best_url
 
 
-def balance_total_rub(balance: dict) -> float:
+def _as_float(val: Any) -> Optional[float]:
+    if val is None or val is False:
+        return None
+    if isinstance(val, bool):
+        return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pick_number(data: dict, *keys: str) -> Optional[float]:
+    for key in keys:
+        if key in data:
+            num = _as_float(data.get(key))
+            if num is not None:
+                return num
+    return None
+
+
+def parse_wallet_balance(balance: dict) -> tuple[float, float, float]:
+    """Кошелёк ЛК → (real, bonus, total) в рублях."""
     if not isinstance(balance, dict):
-        return 0.0
-    try:
-        real = float(balance.get("real") or 0)
-    except (TypeError, ValueError):
-        real = 0.0
-    try:
-        bonus = float(balance.get("bonus") or 0)
-    except (TypeError, ValueError):
-        bonus = 0.0
-    return real + bonus
+        return 0.0, 0.0, 0.0
+    raw = balance
+    nested = balance.get("balance")
+    if isinstance(nested, dict) and ("real" in nested or "bonus" in nested):
+        raw = nested
+    result = balance.get("result")
+    if isinstance(result, dict) and ("real" in result or "bonus" in result):
+        raw = result
+    real = _pick_number(raw, "real", "amountRub", "amount_rub") or 0.0
+    bonus = _pick_number(raw, "bonus", "amountBonus", "amount_bonus") or 0.0
+    return real, bonus, real + bonus
+
+
+def parse_ads_balance(balance: dict) -> tuple[float, float, float]:
+    """Рекламный аккаунт → (balance, bonus, total) в рублях."""
+    if not isinstance(balance, dict):
+        return 0.0, 0.0, 0.0
+    raw = balance
+    nested = balance.get("balance")
+    # Иногда обёртка { "balance": { "balance": 1, "bonusBalance": 2 } }
+    if isinstance(nested, dict) and (
+        "balance" in nested or "bonusBalance" in nested or "balanceKopeks" in nested
+    ):
+        raw = nested
+    rub = _pick_number(raw, "balance", "amount")
+    bonus = _pick_number(raw, "bonusBalance", "bonus_balance", "bonus")
+    if rub is None:
+        kopeks = _pick_number(raw, "balanceKopeks", "balance_kopeks")
+        rub = (kopeks / 100.0) if kopeks is not None else 0.0
+    if bonus is None:
+        b_kopeks = _pick_number(raw, "bonusBalanceKopeks", "bonus_balance_kopeks")
+        bonus = (b_kopeks / 100.0) if b_kopeks is not None else 0.0
+    return float(rub), float(bonus), float(rub) + float(bonus)
+
+
+def parse_cpa_balance(balance: dict) -> tuple[float, float]:
+    """CPA → (total_rub, kopeks). Баланс в копейках."""
+    if not isinstance(balance, dict):
+        return 0.0, 0.0
+    raw = balance
+    result = balance.get("result")
+    if isinstance(result, dict) and "balance" in result:
+        raw = result
+    kopeks = _pick_number(raw, "balance")
+    if kopeks is None:
+        return 0.0, 0.0
+    return float(kopeks) / 100.0, float(kopeks)
+
+
+def balance_total_rub(balance: dict) -> float:
+    """Обратная совместимость: сумма кошелька ЛК."""
+    _real, _bonus, total = parse_wallet_balance(balance)
+    return total
 
 
 def message_id_of(msg: dict) -> str:
