@@ -27,8 +27,6 @@ from .avito_client import (
     order_item_titles,
     order_total_rub,
     parse_ads_balance,
-    parse_cpa_balance,
-    parse_wallet_balance,
 )
 from .net import HttpStatusError
 from .telegram_notify import (
@@ -410,59 +408,10 @@ def format_chat_photo_caption(
     )
 
 
-def format_balance_low_message(
-    store_name: str,
-    *,
-    total: float,
-    threshold: float,
-    wallet_real: Optional[float] = None,
-    wallet_bonus: Optional[float] = None,
-    ads_real: Optional[float] = None,
-    ads_bonus: Optional[float] = None,
-    cpa_rub: Optional[float] = None,
-    source: str = "",
-) -> str:
+def format_balance_low_message(store_name: str, *, total: float) -> str:
     store = escape_tg_html(store_name or "Avito")
-
-    def _rub(v: float) -> str:
-        return f"{v:,.0f}".replace(",", " ") + " ₽"
-
-    lines = [
-        "⚠️ <b>Низкий баланс Avito</b>",
-        f"🏪 <b>{store}</b>",
-        "",
-        f"💰 К проверке: <b>{escape_tg_html(_rub(total))}</b>"
-        + (f" <i>({escape_tg_html(source)})</i>" if source else ""),
-    ]
-    detail_lines: list[str] = []
-    if wallet_real is not None or wallet_bonus is not None:
-        wr = wallet_real or 0.0
-        wb = wallet_bonus or 0.0
-        detail_lines.append(
-            f"🧾 Кошелёк ЛК: {escape_tg_html(_rub(wr + wb))} "
-            f"(реал. {escape_tg_html(_rub(wr))}, бонус {escape_tg_html(_rub(wb))})"
-        )
-    if ads_real is not None or ads_bonus is not None:
-        ar = ads_real or 0.0
-        ab = ads_bonus or 0.0
-        detail_lines.append(
-            f"📣 Реклама: {escape_tg_html(_rub(ar + ab))} "
-            f"(осн. {escape_tg_html(_rub(ar))}, бонус {escape_tg_html(_rub(ab))})"
-        )
-    if cpa_rub is not None:
-        detail_lines.append(f"🎯 CPA: {escape_tg_html(_rub(cpa_rub))}")
-    if detail_lines:
-        lines.append("")
-        lines.extend(detail_lines)
-    lines.extend(
-        [
-            "",
-            f"📉 Порог уведомления: {escape_tg_html(_rub(threshold))}",
-            "",
-            "<i>Пополните баланс в кабинете Avito — повторно напомним, когда снова упадёт ниже порога.</i>",
-        ]
-    )
-    return "\n".join(lines)
+    amount = f"{total:,.0f}".replace(",", " ") + " ₽"
+    return f"⚠️ <b>Avito</b> · {store}\n{escape_tg_html(amount)}"
 
 
 def _reply_map_key(tg_chat_id: Any, tg_message_id: Any) -> str:
@@ -899,11 +848,7 @@ async def poll_store_balance(
     threshold: float,
     notify: bool,
 ) -> dict[str, Any]:
-    """
-    Проверка балансов Avito: кошелёк ЛК + реклама + CPA.
-    Порог сравниваем с максимальным доступным остатком (чтобы не алертить
-    нулевой ЛК, когда деньги лежат в рекламе/CPA).
-    """
+    """Рекламный баланс Avito: одно уведомление при пересечении порога вниз."""
     key = str(int(store.id))
     row = state.get(key)
     if not isinstance(row, dict):
@@ -913,95 +858,25 @@ async def poll_store_balance(
     client = _client_for_store(store)
     try:
         await _ensure_user_id(db, store, client)
-        uid = store.business_id
+        ads_raw = await client.get_ads_balance(user_id=store.business_id)
     except HttpStatusError as e:
         return {
             "store_id": int(store.id),
             "ok": False,
-            "error": f"user_id HTTP {e.status}: {str(e.body)[:160]}",
+            "error": f"ads balance HTTP {e.status}: {str(e.body)[:160]}",
             "alerted": False,
         }
     except Exception as e:
-        log.exception("avito balance user_id store=%s", store.id)
+        log.exception("avito ads balance store=%s", store.id)
         return {"store_id": int(store.id), "ok": False, "error": str(e)[:180], "alerted": False}
 
-    wallet_real = wallet_bonus = wallet_total = None
-    ads_real = ads_bonus = ads_total = None
-    cpa_rub = None
-    errors: list[str] = []
-
-    try:
-        wallet_raw = await client.get_balance(user_id=uid)
-        wr, wb, wt = parse_wallet_balance(wallet_raw)
-        wallet_real, wallet_bonus, wallet_total = wr, wb, wt
-        if wt <= 0:
-            log.info(
-                "avito wallet balance store=%s raw_keys=%s sample=%s",
-                store.id,
-                list(wallet_raw.keys())[:12] if isinstance(wallet_raw, dict) else type(wallet_raw),
-                str(wallet_raw)[:240],
-            )
-    except HttpStatusError as e:
-        errors.append(f"wallet HTTP {e.status}")
-        log.warning("avito wallet balance store=%s: HTTP %s %s", store.id, e.status, str(e.body)[:120])
-    except Exception as e:
-        errors.append(f"wallet {e}"[:80])
-        log.warning("avito wallet balance store=%s: %s", store.id, e)
-
-    try:
-        ads_raw = await client.get_ads_balance(user_id=uid)
-        ar, ab, at = parse_ads_balance(ads_raw)
-        ads_real, ads_bonus, ads_total = ar, ab, at
-    except HttpStatusError as e:
-        errors.append(f"ads HTTP {e.status}")
-        log.warning("avito ads balance store=%s: HTTP %s %s", store.id, e.status, str(e.body)[:120])
-    except Exception as e:
-        errors.append(f"ads {e}"[:80])
-        log.warning("avito ads balance store=%s: %s", store.id, e)
-
-    try:
-        cpa_raw = await client.get_cpa_balance()
-        cpa_rub, _kopeks = parse_cpa_balance(cpa_raw)
-    except HttpStatusError as e:
-        errors.append(f"cpa HTTP {e.status}")
-        log.warning("avito cpa balance store=%s: HTTP %s %s", store.id, e.status, str(e.body)[:120])
-    except Exception as e:
-        errors.append(f"cpa {e}"[:80])
-        log.warning("avito cpa balance store=%s: %s", store.id, e)
-
-    candidates: list[tuple[str, float]] = []
-    if wallet_total is not None:
-        candidates.append(("кошелёк ЛК", float(wallet_total)))
-    if ads_total is not None:
-        candidates.append(("реклама", float(ads_total)))
-    if cpa_rub is not None:
-        candidates.append(("CPA", float(cpa_rub)))
-
-    if not candidates:
-        return {
-            "store_id": int(store.id),
-            "ok": False,
-            "error": "; ".join(errors) or "не удалось получить балансы",
-            "alerted": False,
-        }
-
-    source, total = max(candidates, key=lambda x: x[1])
+    _real, _bonus, total = parse_ads_balance(ads_raw)
     was_below = bool(row.get("below"))
     is_below = total < float(threshold)
     alerted = False
 
     if is_below and not was_below and notify:
-        text = format_balance_low_message(
-            store.name or f"#{store.id}",
-            total=total,
-            threshold=threshold,
-            wallet_real=wallet_real,
-            wallet_bonus=wallet_bonus,
-            ads_real=ads_real,
-            ads_bonus=ads_bonus,
-            cpa_rub=cpa_rub,
-            source=source,
-        )
+        text = format_balance_low_message(store.name or f"#{store.id}", total=total)
         ok, err, _ = await _send(db, bot_token, chat_id, text)
         if ok:
             alerted = True
@@ -1014,32 +889,21 @@ async def poll_store_balance(
                 "ok": True,
                 "error": None,
                 "total": total,
-                "source": source,
                 "below": is_below,
                 "alerted": False,
                 "tg_error": err,
-                "errors": errors,
             }
 
     row["below"] = is_below
     row["last_total"] = total
-    row["last_source"] = source
-    row["last_wallet"] = wallet_total
-    row["last_ads"] = ads_total
-    row["last_cpa"] = cpa_rub
     row["last_check"] = int(time.time())
     return {
         "store_id": int(store.id),
         "ok": True,
         "error": None,
         "total": total,
-        "source": source,
-        "wallet": wallet_total,
-        "ads": ads_total,
-        "cpa": cpa_rub,
         "below": is_below,
         "alerted": alerted,
-        "errors": errors,
     }
 
 
