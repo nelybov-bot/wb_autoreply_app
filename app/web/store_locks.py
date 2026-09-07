@@ -18,6 +18,7 @@ _OP_LABELS = {
     "wb_card_drafts": "черновики WB",
     "ozon_certificates": "документы Ozon",
     "packaging_dims": "габариты WB",
+    "wb_catalog": "обновление каталога WB",
 }
 
 

@@ -7014,6 +7014,113 @@
     const prevOz = getAutoMpStoreIds('compliance-ozon-store-list');
     const selectedOz = prevOz.length ? prevOz : oz.map(s => s.id);
     renderAutoMpStoreList('compliance-ozon-store-list', 'ozon', selectedOz);
+    void loadComplianceWbCatalogInfo();
+  }
+
+  function complianceStoreName(storeId) {
+    const hit = stores.find(s => Number(s.id) === Number(storeId));
+    return hit?.name || `Магазин ${storeId}`;
+  }
+
+  async function loadComplianceWbCatalogInfo() {
+    const info = document.getElementById('compliance-wb-catalog-info');
+    const restoreBtn = document.getElementById('btn-compliance-wb-catalog-restore');
+    if (!info) return;
+    const storeIds = getAutoMpStoreIds('compliance-wb-store-list');
+    if (!storeIds.length) {
+      info.textContent = 'Выберите магазины WB, чтобы увидеть состояние каталога.';
+      if (restoreBtn) restoreBtn.hidden = true;
+      return;
+    }
+    const lines = [];
+    let hasPrev = false;
+    for (const id of storeIds) {
+      let meta = null;
+      try {
+        meta = await api(`/wb/catalog/cache/${id}`);
+      } catch (_) {
+        continue;
+      }
+      const name = escapeHtml(complianceStoreName(meta.store_id));
+      if (!meta.cards_count) {
+        lines.push(`${name}: каталог ещё не загружен — нажмите «Обновить каталог»`);
+      } else {
+        const stale = meta.fresh ? '' : ' · копия старше суток';
+        lines.push(`${name}: ${meta.cards_count} карточек от ${formatDate(meta.catalog_at)}${stale}`);
+      }
+      if (meta.previous?.cards_count) {
+        hasPrev = true;
+        lines.push(
+          `<span class="form-hint">↩ предыдущий: ${meta.previous.cards_count} карточек `
+          + `от ${formatDate(meta.previous.catalog_at)}</span>`
+        );
+      }
+    }
+    info.innerHTML = lines.length
+      ? lines.join('<br>')
+      : 'Не удалось получить состояние каталога.';
+    if (restoreBtn) restoreBtn.hidden = !hasPrev;
+  }
+
+  async function runComplianceWbCatalogRefresh() {
+    const storeIds = getAutoMpStoreIds('compliance-wb-store-list');
+    if (!storeIds.length) {
+      toast('Выберите хотя бы один магазин WB', 'error');
+      return;
+    }
+    const btn = document.getElementById('btn-compliance-wb-catalog-refresh');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await api('/wb/catalog/refresh', {
+        method: 'POST',
+        body: JSON.stringify({ store_ids: storeIds }),
+      });
+      pollItemsTask(res.task_id, 'compliance-wb-catalog', {
+        label: `Загрузка каталога WB (${storeIds.length} магаз.)…`,
+        onFinish: () => {
+          if (btn) btn.disabled = false;
+          void loadComplianceWbCatalogInfo();
+        },
+        onDone: (result) => {
+          const rows = result?.stores || [];
+          const loaded = rows.reduce((a, s) => a + (Number(s.cards_count) || 0), 0);
+          const failed = rows.filter(s => s.error);
+          if (failed.length) {
+            toast(`Каталог: ошибка у ${failed.length} магазинов — ${failed[0].error}`, 'error');
+          } else {
+            toast(`Каталог обновлён: ${loaded} карточек`);
+          }
+        },
+      });
+    } catch (err) {
+      if (btn) btn.disabled = false;
+      toast(err.message || 'Ошибка', 'error');
+    }
+  }
+
+  async function restoreComplianceWbCatalog() {
+    const storeIds = getAutoMpStoreIds('compliance-wb-store-list');
+    if (!storeIds.length) {
+      toast('Выберите хотя бы один магазин WB', 'error');
+      return;
+    }
+    if (!confirm('Вернуть предыдущий сохранённый каталог для выбранных магазинов?')) return;
+    const btn = document.getElementById('btn-compliance-wb-catalog-restore');
+    if (btn) btn.disabled = true;
+    let ok = 0;
+    const errors = [];
+    for (const id of storeIds) {
+      try {
+        await api(`/wb/catalog/cache/${id}/restore-previous`, { method: 'POST' });
+        ok += 1;
+      } catch (err) {
+        errors.push(`${complianceStoreName(id)}: ${err.message || 'ошибка'}`);
+      }
+    }
+    if (btn) btn.disabled = false;
+    await loadComplianceWbCatalogInfo();
+    if (ok) toast(`Возвращён предыдущий каталог: ${ok} магаз.`);
+    if (errors.length) toast(errors[0], 'error');
   }
 
   function renderComplianceWbResult(result) {
@@ -7046,6 +7153,15 @@
       const err = (st.rows || []).filter(r => r.status === 'error').length;
       parts.push(`<h4 class="compliance-result-store">${title}</h4>`);
       parts.push(`<p class="form-hint">Строк: ${st.parsed || 0}, найдено карточек: ${st.cards_found || 0}, готово: ${ok}, не найдено: ${nf}, нет полей в категории: ${nfld}, ошибки: ${err}${st.sent != null ? `, отправлено: ${st.sent}` : ''}</p>`);
+      if (st.catalog) {
+        const cat = st.catalog;
+        const src = cat.cache_hit === false ? 'загружен с WB' : 'сохранённая копия';
+        const at = cat.catalog_at ? ` от ${formatDate(cat.catalog_at)}` : '';
+        const miss = cat.not_found_in_cache
+          ? ` · ${cat.not_found_in_cache} артикулов нет в копии — нажмите «Обновить каталог»`
+          : '';
+        parts.push(`<p class="form-hint">Каталог: ${src}, ${cat.cards_count || 0} карточек${at}${miss}</p>`);
+      }
       const good = (st.rows || []).filter(r => r.status === 'ok' || r.status === 'preview');
       if (good.length) {
         parts.push('<table class="items-table compliance-result-table"><thead><tr><th>Артикул</th><th>nmID</th><th>Тип</th><th>Поля WB</th><th>Статус</th></tr></thead><tbody>');
@@ -7652,8 +7768,23 @@
     document.getElementById('btn-compliance-ozon-stores-all')?.addEventListener('click', () => complianceSetOzonStoreChecks(true));
     document.getElementById('btn-compliance-ozon-stores-none')?.addEventListener('click', () => complianceSetOzonStoreChecks(false));
     document.getElementById('btn-compliance-parse')?.addEventListener('click', () => parseComplianceTable());
-    document.getElementById('btn-compliance-wb-stores-all')?.addEventListener('click', () => complianceSetWbStoreChecks(true));
-    document.getElementById('btn-compliance-wb-stores-none')?.addEventListener('click', () => complianceSetWbStoreChecks(false));
+    document.getElementById('btn-compliance-wb-stores-all')?.addEventListener('click', () => {
+      complianceSetWbStoreChecks(true);
+      void loadComplianceWbCatalogInfo();
+    });
+    document.getElementById('btn-compliance-wb-stores-none')?.addEventListener('click', () => {
+      complianceSetWbStoreChecks(false);
+      void loadComplianceWbCatalogInfo();
+    });
+    document.getElementById('compliance-wb-store-list')?.addEventListener('change', () => {
+      void loadComplianceWbCatalogInfo();
+    });
+    document.getElementById('btn-compliance-wb-catalog-refresh')?.addEventListener('click', () => {
+      void runComplianceWbCatalogRefresh();
+    });
+    document.getElementById('btn-compliance-wb-catalog-restore')?.addEventListener('click', () => {
+      void restoreComplianceWbCatalog();
+    });
     document.getElementById('btn-compliance-rows-all')?.addEventListener('click', () => complianceSetRowChecks(true));
     document.getElementById('btn-compliance-rows-none')?.addEventListener('click', () => complianceSetRowChecks(false));
     document.getElementById('compliance-rows-check-all')?.addEventListener('change', (e) => {

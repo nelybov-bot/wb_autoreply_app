@@ -73,7 +73,7 @@
 | `ozon_buyer_chat.py` | Чаты Ozon (buyer + support) |
 | `ozon_actions.py` | Промо-акции |
 | `ozon_alerts.py` | Классификация сообщений поддержки |
-| `yam_client.py` | Яндекс.Маркет: отзывы, вопросы, ответы (без чатов и card-links) |
+| `yam_client.py` | `YamClient` — отзывы, вопросы, каталог, группы вариантов (param 200) |
 | `avito_client.py` | Avito Business API: OAuth, заказы, messenger, баланс, uploadImages |
 | `avito_notify.py` | Опрос заказов/сообщений/баланса Avito → Telegram; reply текст/фото |
 | `net.py` | `HttpStatusError`, `UnauthorizedStoreError`, retry |
@@ -121,7 +121,7 @@
    - `group_attach_suggestions` — пулы attach в одну связку
    - `suggest_combine_candidates` — объединение нескольких new_link
    - `suggest_review_linked_groups` — перепроверка/перепривязка
-5. **Операции:** `wb_merge_cards`, `wb_disconnect_cards`, `ozon_link_by_model`, `ozon_unlink_cards`, `link_ozon_tms_qty_groups`
+5. **Операции:** `wb_merge_cards`, `wb_disconnect_cards`, `ozon_link_by_model`, `ozon_unlink_cards`, `link_ozon_tms_qty_groups`, `yam_link_by_group`, `yam_unlink_cards`
 6. **ИИ:** `ai_suggest_card_links`
 7. **Сортировка каталога:** `sort_catalog_rows` (категория → связки → одиночки)
 8. **Кэш каталога WB:** таблицы `card_links_catalog_*` (`clc_*` в `db.py`), отдельно от мастера
@@ -129,6 +129,16 @@
 Эвристики сопоставления названий: `_title_base_key`, `_titles_related_enough`, `_titles_strictly_similar`, `_item_matches_group`, `_item_matches_group_attach`.
 
 Лимит: `MAX_LINK_ITEMS = 30`.
+
+### Ozon link deficits (`ozon_link_deficits.py`)
+
+Дозаполнение «недочётов» у уже склеенных карточек (аспектные поля UI: цвет, объём мл, единиц, вес товара):
+
+1. `propose_link_deficit_fills` — dry-run (title/description → web → OpenAI)
+2. `apply_link_deficit_fills` — запись через `/v1/product/attributes/update`
+3. CLI: `data/ozon_link_deficits_dryrun.py`
+
+Не трогает ТН ВЭД / бренд / габариты и вес упаковки.
 
 ### Card Links Master (`card_links_master.py`)
 

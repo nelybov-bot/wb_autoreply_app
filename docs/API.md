@@ -255,7 +255,7 @@ UI больше не даёт выбирать глубину — фронт в�
 | Метод | Путь | Описание |
 |-------|------|----------|
 | POST | `/api/wb/certificates/parse` | То же, что `/api/compliance/parse` (совместимость) |
-| POST | `/api/wb/certificates/apply` | Сопоставление + `cards/update`. Body: `{ store_ids, text, vendor_codes?: string[], dry_run?: bool }` → `{ task_id }` |
+| POST | `/api/wb/certificates/apply` | Сопоставление + `cards/update`. Body: `{ store_ids, text, vendor_codes?: string[], dry_run?: bool, refresh_catalog?: bool }` → `{ task_id }` |
 | POST | `/api/wb/certificates/drafts-scan` | Черновики WB: ошибки + пустые обязательные поля. Body: `{ store_ids, vendor_codes?: string[] }` → `{ task_id }` |
 | POST | `/api/wb/certificates/drafts-fill` | ИИ-дозаполнение характеристик. Body: `{ store_ids, vendor_codes?, dry_run?, fills? }` → `{ task_id }` |
 
@@ -264,6 +264,16 @@ UI больше не даёт выбирать глубину — фронт в�
 `vendor_codes` — если не пустой, обрабатываются только эти артикулы из таблицы. Несколько `store_ids` — последовательная проверка и отправка в каждый магазин.
 
 Колонки в `text` (TSV/CSV, с заголовком или без): артикул продавца, номер сертификата/декларации, дата регистрации, действует до.
+
+## Каталог WB (кэш карточек)
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| GET | `/api/wb/catalog/cache/{store_id}` | Состояние копии каталога: `cards_count`, `catalog_at`, `fresh`, `previous: { cards_count, catalog_at }` |
+| POST | `/api/wb/catalog/refresh` | Перекачать каталог в кэш. Body: `{ store_ids }` → `{ task_id }`; блокировка магазина `wb_catalog` |
+| POST | `/api/wb/catalog/cache/{store_id}/restore-previous` | Вернуть предыдущий снимок (обмен с текущим); 409 если магазин занят |
+
+Кэш общий с «Габаритами» и «Характеристиками» (`packaging_dims_cards` в SQLite). Хранится один предыдущий снимок (`packaging_dims_cards_prev`): он записывается при каждой полной замене каталога и не теряется, если новая загрузка упала. Загрузка документов каталог сама не обновляет — только по кнопке или с `refresh_catalog: true`.
 
 ## Документы Ozon
 

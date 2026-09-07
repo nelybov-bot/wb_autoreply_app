@@ -5067,6 +5067,11 @@ class WbCertificatesApplyBody(BaseModel):
     text: str = ""
     vendor_codes: list[str] = []
     dry_run: bool = False
+    refresh_catalog: bool = False
+
+
+class WbCatalogRefreshBody(BaseModel):
+    store_ids: list[int] = []
 
 
 class WbCardDraftsScanBody(BaseModel):
@@ -5478,6 +5483,7 @@ async def api_wb_certificates_apply(
             text=text,
             vendor_codes=vendor_codes or None,
             dry_run=bool(body.dry_run),
+            refresh_catalog=bool(body.refresh_catalog),
         )
     except StoreBusyError as e:
         raise _http_store_busy(e) from e
@@ -5498,6 +5504,91 @@ async def api_wb_certificates_apply(
     except Exception:
         pass
     return {"task_id": task_id, "status": "running"}
+
+
+@app.get("/api/wb/catalog/cache/{store_id}")
+def api_wb_catalog_cache(
+    store_id: int,
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_user),
+):
+    """Состояние кэша каталога WB: текущий снимок и предыдущий (для отката)."""
+    meta = db.packaging_dims_cache_meta(store_id) or {}
+    return {
+        "store_id": int(store_id),
+        "cards_count": int(meta.get("cards_count") or 0),
+        "catalog_at": str(meta.get("catalog_at") or ""),
+        "load_mode": str(meta.get("load_mode") or ""),
+        "truncated": bool(meta.get("truncated")),
+        "fresh": bool(db.packaging_dims_cache_is_fresh(store_id)),
+        "previous": {
+            "cards_count": int(meta.get("prev_cards_count") or 0),
+            "catalog_at": str(meta.get("prev_catalog_at") or ""),
+            "load_mode": str(meta.get("prev_load_mode") or ""),
+            "truncated": bool(meta.get("prev_truncated")),
+        },
+    }
+
+
+@app.post("/api/wb/catalog/refresh")
+async def api_wb_catalog_refresh(
+    body: WbCatalogRefreshBody,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    """Обновить каталог WB в кэше. Прошлый снимок сохраняется и его можно вернуть."""
+    if not body.store_ids:
+        raise HTTPException(400, "Выберите хотя бы один магазин WB")
+    try:
+        task_id = await web_tasks.run_wb_catalog_refresh(db, store_ids=body.store_ids)
+    except StoreBusyError as e:
+        raise _http_store_busy(e) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="wb_catalog_refresh",
+            item_type="wb_catalog",
+            result="started",
+            meta={"store_ids": body.store_ids},
+        )
+    except Exception:
+        pass
+    return {"task_id": task_id, "status": "running"}
+
+
+@app.post("/api/wb/catalog/cache/{store_id}/restore-previous")
+def api_wb_catalog_restore_previous(
+    store_id: int,
+    db: Database = Depends(get_db),
+    user: UserRow = Depends(require_user),
+):
+    """Вернуть предыдущий снимок каталога WB (обмен местами с текущим)."""
+    if store_locks.is_busy(store_id):
+        raise HTTPException(409, "Магазин занят — дождитесь завершения текущей задачи")
+    meta = db.packaging_dims_cache_restore_previous(store_id)
+    if not meta:
+        raise HTTPException(400, "Для этого магазина нет предыдущего каталога")
+    try:
+        db.add_audit_event(
+            actor=user.username,
+            action="wb_catalog_restore_previous",
+            item_type="wb_catalog",
+            result="ok",
+            meta={"store_id": int(store_id), "cards_count": int(meta.get("cards_count") or 0)},
+        )
+    except Exception:
+        pass
+    return {
+        "store_id": int(store_id),
+        "cards_count": int(meta.get("cards_count") or 0),
+        "catalog_at": str(meta.get("catalog_at") or ""),
+        "previous": {
+            "cards_count": int(meta.get("prev_cards_count") or 0),
+            "catalog_at": str(meta.get("prev_catalog_at") or ""),
+        },
+    }
 
 
 @app.post("/api/wb/certificates/drafts-scan")

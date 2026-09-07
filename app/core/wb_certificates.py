@@ -29,32 +29,28 @@ _RE_DOC_NUMBER = re.compile(
     r"регистрационн.*номер|номер.*документ|документ.*номер",
     re.I,
 )
-_RE_DECL_NUMBER = re.compile(r"номер.*декларац|декларац.*номер", re.I)
-_RE_CERT_NUMBER = re.compile(r"номер.*сертификат|сертификат.*номер", re.I)
-_RE_REG_DATE = re.compile(
-    r"дата.*регистрац|регистрац.*дата|дата.*начала|начало.*действ|действует\s*от",
-    re.I,
-)
-_RE_DECL_REG_DATE = re.compile(
-    r"декларац.*(дата|регистрац|действует\s*от)|(дата|регистрац|действует\s*от).*декларац",
-    re.I,
-)
-_RE_CERT_REG_DATE = re.compile(
-    r"сертификат.*(дата|регистрац|действует\s*от)|(дата|регистрац|действует\s*от).*сертификат",
-    re.I,
-)
 _RE_VALID_UNTIL = re.compile(
-    r"действует.*до|дата.*окончан|окончан.*действ|срок.*действ|конец.*действ",
+    r"действует.*до|действител(ен|ьн[оа]).*до|годен.*до|"
+    r"дата.*окончан|окончан.*действ|срок.*действ|конец.*действ",
     re.I,
 )
-_RE_DECL_VALID = re.compile(
-    r"декларац.*(действует\s*до|окончан|срок)|(действует\s*до|окончан|срок).*декларац",
+_RE_REG_DATE = re.compile(
+    r"дата.*регистрац|регистрац.*дата|дата.*начала|начал.*действ|"
+    r"действует\s*от|дата.*выдач|дата.*принят",
     re.I,
 )
-_RE_CERT_VALID = re.compile(
-    r"сертификат.*(действует\s*до|окончан|срок)|(действует\s*до|окончан|срок).*сертификат",
-    re.I,
-)
+
+_ROLE_NUMBER = "number"
+_ROLE_REG_DATE = "reg_date"
+_ROLE_VALID_UNTIL = "valid_until"
+
+# Имя поля → к какому типу документа оно относится
+_SCOPE_PREFIXES = {
+    "declaration": ("decl",),
+    "certificate": ("cert",),
+    "both": ("decl", "cert"),
+    "generic": ("generic",),
+}
 
 
 @dataclass
@@ -111,6 +107,47 @@ def _match_charc(ch: dict, pattern: re.Pattern[str]) -> bool:
     return bool(pattern.search(_charc_name(ch)))
 
 
+def _charc_role(name: str) -> Optional[str]:
+    """Роль поля по имени. Срок действия проверяется раньше даты регистрации:
+    «Дата окончания действия декларации» — это срок, а не дата начала."""
+    if _RE_VALID_UNTIL.search(name):
+        return _ROLE_VALID_UNTIL
+    if _RE_REG_DATE.search(name):
+        return _ROLE_REG_DATE
+    if _RE_DOC_NUMBER.search(name):
+        return _ROLE_NUMBER
+    return None
+
+
+def _charc_scope(name: str) -> str:
+    """declaration | certificate | both | generic — по упоминанию типа документа в имени."""
+    low = name.casefold()
+    has_decl = "декларац" in low
+    has_cert = "сертификат" in low
+    if has_decl and has_cert:
+        return "both"
+    if has_decl:
+        return "declaration"
+    if has_cert:
+        return "certificate"
+    return "generic"
+
+
+def _assign_charc(m: CertFieldMap, cid: int, name: str) -> None:
+    """Заполняет слот карты полей. Первое подходящее поле выигрывает —
+    иначе поле срока действия перетирает уже найденную дату регистрации."""
+    role = _charc_role(name)
+    if not role:
+        return
+    for prefix in _SCOPE_PREFIXES[_charc_scope(name)]:
+        attr = f"{prefix}_{role}_id"
+        if getattr(m, attr, None):
+            continue
+        setattr(m, attr, cid)
+        if role == _ROLE_NUMBER:
+            setattr(m, f"{prefix}_number_name", name)
+
+
 def _map_fields_from_charcs(charcs: List[dict]) -> CertFieldMap:
     subject_id = 0
     for ch in charcs:
@@ -125,30 +162,8 @@ def _map_fields_from_charcs(charcs: List[dict]) -> CertFieldMap:
         if not isinstance(ch, dict):
             continue
         cid = _charc_id(ch)
-        name = _charc_name(ch)
-        if not cid:
-            continue
-        if _RE_DECL_NUMBER.search(name):
-            m.decl_number_id = cid
-            m.decl_number_name = name
-        elif _RE_CERT_NUMBER.search(name):
-            m.cert_number_id = cid
-            m.cert_number_name = name
-        elif _RE_DOC_NUMBER.search(name) and not m.generic_number_id:
-            m.generic_number_id = cid
-            m.generic_number_name = name
-        if _RE_DECL_REG_DATE.search(name):
-            m.decl_reg_date_id = cid
-        elif _RE_CERT_REG_DATE.search(name):
-            m.cert_reg_date_id = cid
-        elif _RE_REG_DATE.search(name) and not m.generic_reg_date_id:
-            m.generic_reg_date_id = cid
-        if _RE_DECL_VALID.search(name):
-            m.decl_valid_until_id = cid
-        elif _RE_CERT_VALID.search(name):
-            m.cert_valid_until_id = cid
-        elif _RE_VALID_UNTIL.search(name) and not m.generic_valid_until_id:
-            m.generic_valid_until_id = cid
+        if cid:
+            _assign_charc(m, cid, _charc_name(ch))
     return m
 
 
@@ -162,30 +177,8 @@ def _map_fields_from_card(card: dict) -> CertFieldMap:
         if not isinstance(ch, dict):
             continue
         cid = _charc_id(ch)
-        name = _charc_name(ch)
-        if not cid:
-            continue
-        if _RE_DECL_NUMBER.search(name):
-            m.decl_number_id = cid
-            m.decl_number_name = name
-        elif _RE_CERT_NUMBER.search(name):
-            m.cert_number_id = cid
-            m.cert_number_name = name
-        elif _RE_DOC_NUMBER.search(name) and not m.generic_number_id:
-            m.generic_number_id = cid
-            m.generic_number_name = name
-        if _RE_DECL_REG_DATE.search(name):
-            m.decl_reg_date_id = cid
-        elif _RE_CERT_REG_DATE.search(name):
-            m.cert_reg_date_id = cid
-        elif _RE_REG_DATE.search(name) and not m.generic_reg_date_id:
-            m.generic_reg_date_id = cid
-        if _RE_DECL_VALID.search(name):
-            m.decl_valid_until_id = cid
-        elif _RE_CERT_VALID.search(name):
-            m.cert_valid_until_id = cid
-        elif _RE_VALID_UNTIL.search(name) and not m.generic_valid_until_id:
-            m.generic_valid_until_id = cid
+        if cid:
+            _assign_charc(m, cid, _charc_name(ch))
     return m
 
 
@@ -202,15 +195,21 @@ def _build_cert_patch_ids(row: CertInputRow, fmap: CertFieldMap) -> Tuple[Dict[i
     patches: Dict[int, Any] = {}
     mapped: List[str] = []
 
-    def _set(cid: Optional[int], val: str, label: str) -> None:
-        if cid and val:
-            patches[cid] = val
-            mapped.append(label)
+    def _set(cid: Optional[int], val: str, label: str) -> bool:
+        if not cid or not val:
+            return False
+        if cid in patches:
+            # одно поле не может получить и номер, и дату — приоритет у первой записи
+            return False
+        patches[cid] = val
+        mapped.append(label)
+        return True
 
     def _clear(cid: Optional[int], label: str) -> None:
-        if cid:
-            patches[cid] = ""
-            mapped.append(f"очистка: {label}")
+        if not cid or cid in patches:
+            return
+        patches[cid] = ""
+        mapped.append(f"очистка: {label}")
 
     def _generic_ok_for_decl() -> bool:
         name = (fmap.generic_number_name or "").casefold()
@@ -228,49 +227,59 @@ def _build_cert_patch_ids(row: CertInputRow, fmap: CertFieldMap) -> Tuple[Dict[i
             return True
         return "сертификат" in name or "декларац" not in name
 
+    wrote_number = False
     if doc_type == "declaration":
         if fmap.decl_number_id:
-            _set(fmap.decl_number_id, doc_number, f"декларация номер ({fmap.decl_number_name or fmap.decl_number_id})")
+            wrote_number = _set(fmap.decl_number_id, doc_number, f"декларация номер ({fmap.decl_number_name or fmap.decl_number_id})")
         elif _generic_ok_for_decl():
-            _set(fmap.generic_number_id, doc_number, f"номер ({fmap.generic_number_name or fmap.generic_number_id})")
+            wrote_number = _set(fmap.generic_number_id, doc_number, f"номер ({fmap.generic_number_name or fmap.generic_number_id})")
         elif fmap.decl_number_id is None and fmap.generic_number_id and not _generic_ok_for_decl():
             mapped.append(
                 f"⚠ нет поля декларации; «{fmap.generic_number_name}» похоже на сертификат — номер не записан"
             )
-        if fmap.decl_reg_date_id:
-            _set(fmap.decl_reg_date_id, row.reg_date, "декларация дата рег.")
-        elif fmap.generic_reg_date_id:
-            _set(fmap.generic_reg_date_id, row.reg_date, "дата рег.")
         if fmap.decl_valid_until_id:
             _set(fmap.decl_valid_until_id, row.valid_until, "декларация действует до")
         elif fmap.generic_valid_until_id:
             _set(fmap.generic_valid_until_id, row.valid_until, "действует до")
-        _clear(fmap.cert_number_id, "номер сертификата")
-        _clear(fmap.cert_reg_date_id, "дата сертификата")
-        _clear(fmap.cert_valid_until_id, "срок сертификата")
-    elif doc_type == "certificate":
-        if fmap.cert_number_id:
-            _set(fmap.cert_number_id, doc_number, f"сертификат номер ({fmap.cert_number_name or fmap.cert_number_id})")
-        elif _generic_ok_for_cert():
-            _set(fmap.generic_number_id, doc_number, f"номер ({fmap.generic_number_name or fmap.generic_number_id})")
-        if fmap.cert_reg_date_id:
-            _set(fmap.cert_reg_date_id, row.reg_date, "сертификат дата рег.")
+        if fmap.decl_reg_date_id:
+            _set(fmap.decl_reg_date_id, row.reg_date, "декларация дата рег.")
         elif fmap.generic_reg_date_id:
             _set(fmap.generic_reg_date_id, row.reg_date, "дата рег.")
+        if wrote_number:
+            _clear(fmap.cert_number_id, "номер сертификата")
+            _clear(fmap.cert_reg_date_id, "дата сертификата")
+            _clear(fmap.cert_valid_until_id, "срок сертификата")
+    elif doc_type == "certificate":
+        if fmap.cert_number_id:
+            wrote_number = _set(fmap.cert_number_id, doc_number, f"сертификат номер ({fmap.cert_number_name or fmap.cert_number_id})")
+        elif _generic_ok_for_cert():
+            wrote_number = _set(fmap.generic_number_id, doc_number, f"номер ({fmap.generic_number_name or fmap.generic_number_id})")
         if fmap.cert_valid_until_id:
             _set(fmap.cert_valid_until_id, row.valid_until, "сертификат действует до")
         elif fmap.generic_valid_until_id:
             _set(fmap.generic_valid_until_id, row.valid_until, "действует до")
-        _clear(fmap.decl_number_id, "номер декларации")
-        _clear(fmap.decl_reg_date_id, "дата декларации")
-        _clear(fmap.decl_valid_until_id, "срок декларации")
+        if fmap.cert_reg_date_id:
+            _set(fmap.cert_reg_date_id, row.reg_date, "сертификат дата рег.")
+        elif fmap.generic_reg_date_id:
+            _set(fmap.generic_reg_date_id, row.reg_date, "дата рег.")
+        if wrote_number:
+            _clear(fmap.decl_number_id, "номер декларации")
+            _clear(fmap.decl_reg_date_id, "дата декларации")
+            _clear(fmap.decl_valid_until_id, "срок декларации")
     else:
         cid = fmap.generic_number_id or fmap.decl_number_id or fmap.cert_number_id
         _set(cid, doc_number, "номер (тип не определён)")
-        rid = fmap.generic_reg_date_id or fmap.decl_reg_date_id or fmap.cert_reg_date_id
-        _set(rid, row.reg_date, "дата рег.")
         uid = fmap.generic_valid_until_id or fmap.decl_valid_until_id or fmap.cert_valid_until_id
         _set(uid, row.valid_until, "действует до")
+        rid = fmap.generic_reg_date_id or fmap.decl_reg_date_id or fmap.cert_reg_date_id
+        _set(rid, row.reg_date, "дата рег.")
+
+    if not patches:
+        mapped.append(
+            f"⚠ в категории нет полей для «{doc_type_label(doc_type)}» — карточка не изменена"
+        )
+    elif row.reg_date and not any(str(v).strip() == row.reg_date for v in patches.values()):
+        mapped.append("⚠ в категории нет поля даты регистрации — дата начала не записана")
 
     return patches, mapped
 
@@ -599,6 +608,7 @@ async def apply_certificates_for_store(
     dry_run: bool = False,
     store_id: Optional[int] = None,
     db: Any = None,
+    refresh_catalog: bool = False,
     progress_cb: Optional[ProgressCb] = None,
 ) -> dict:
     """Сопоставляет артикулы с карточками WB и обновляет поля сертификата."""
@@ -621,6 +631,10 @@ async def apply_certificates_for_store(
             vendor_codes,
             store_id=store_id,
             db=db,
+            force_refresh=refresh_catalog,
+            # каталог обновляется только по кнопке — иначе новые артикулы
+            # запускали полную перезакачку посреди отправки
+            auto_reload_on_miss=False,
             progress_cb=progress_cb,
         )
     else:
@@ -675,6 +689,18 @@ async def apply_certificates_for_store(
 
         patch_ids, mapped = _build_cert_patch_ids(row, fmap)
         doc_type = detect_doc_type(row.doc_number)
+        if not patch_ids:
+            results.append(CertApplyRowResult(
+                vendor_code=row.vendor_code,
+                nm_id=nm,
+                status="no_fields",
+                message=f"В категории нет полей для «{doc_type_label(doc_type)}»",
+                doc_type=doc_type,
+                mapped_fields=mapped,
+            ))
+            if progress_cb:
+                progress_cb(done, total, f"Нет полей: {row.vendor_code}")
+            continue
         payload = build_card_update_payload(card, row, fmap, patch_ids=patch_ids)
         if not payload.get("sizes"):
             results.append(CertApplyRowResult(
@@ -735,6 +761,12 @@ async def apply_certificates_for_store(
     ok_n = sum(1 for r in results if r.status in ("ok", "preview"))
     return {
         "dry_run": dry_run,
+        "catalog": {
+            "cards_count": int(_meta.get("cards_loaded") or _meta.get("cards_count") or 0),
+            "catalog_at": str(_meta.get("catalog_at") or ""),
+            "cache_hit": _meta.get("cache_hit"),
+            "not_found_in_cache": int(_meta.get("not_found_in_cache") or 0),
+        },
         "parsed": len(rows),
         "cards_found": len({id(c) for c in matched_cards}),
         "prepared": len(updates),
@@ -760,6 +792,7 @@ async def apply_certificates_multi_store(
     rows: List[CertInputRow],
     dry_run: bool = False,
     db: Any = None,
+    refresh_catalog: bool = False,
     progress_cb: Optional[ProgressCb] = None,
 ) -> dict:
     """stores: (store_id, store_name, api_key)."""
@@ -802,6 +835,7 @@ async def apply_certificates_multi_store(
                 dry_run=dry_run,
                 store_id=store_id,
                 db=db,
+                refresh_catalog=refresh_catalog,
                 progress_cb=_cb if progress_cb else None,
             )
             part["store_id"] = store_id

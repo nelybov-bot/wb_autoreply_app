@@ -538,6 +538,7 @@ async def _load_wb_cards_for_compare(
     store_id: Optional[int] = None,
     db: Any = None,
     force_refresh: bool = False,
+    auto_reload_on_miss: bool = True,
     cache_ttl_s: int = _CACHE_TTL_S,
     progress_cb: Optional[ProgressCb] = None,
 ) -> Tuple[Dict[str, dict], Dict[str, dict], Dict[str, dict], dict]:
@@ -566,6 +567,7 @@ async def _load_wb_cards_for_compare(
                 progress_cb(1, 1, f"Каталог из кэша ({len(cards)} карточек)")
             need_reload = (
                 bool(missing)
+                and auto_reload_on_miss
                 and (
                     cached_meta.get("load_mode") != "full_catalog"
                     or bool(cached_meta.get("truncated"))
@@ -586,9 +588,7 @@ async def _load_wb_cards_for_compare(
                 len(codes),
             )
 
-    if force_refresh and db and store_id:
-        db.packaging_dims_cache_clear(store_id)
-
+    # каталог не удаляем заранее: если загрузка упадёт, прежний снимок останется в силе
     cards, meta = await _fetch_full_catalog_from_wb(client, progress_cb=progress_cb)
     if db and store_id:
         _save_cards_to_cache(
@@ -612,6 +612,32 @@ async def _load_wb_cards_for_compare(
             len(codes),
         )
     return by_vendor, by_nm_id, by_barcode, meta
+
+
+async def refresh_wb_catalog_for_store(
+    api_key: str,
+    *,
+    store_id: int,
+    db: Any,
+    progress_cb: Optional[ProgressCb] = None,
+) -> dict:
+    """Кнопка «Обновить каталог WB»: качает каталог целиком и заменяет кэш.
+    Прежний снимок уезжает в «предыдущий» — его можно вернуть."""
+    client = WbContentClient(api_key, timeout_s=600.0)
+    cards, meta = await _fetch_full_catalog_from_wb(client, progress_cb=progress_cb)
+    if not cards:
+        raise ValueError("WB вернул пустой каталог — прежний каталог оставлен без изменений")
+    _save_cards_to_cache(
+        db,
+        store_id,
+        cards,
+        load_mode="full_catalog",
+        truncated=bool(meta.get("truncated")),
+        replace_all=True,
+    )
+    out = dict(db.packaging_dims_cache_meta(store_id))
+    out["pages_fetched"] = int(meta.get("pages_fetched") or 0)
+    return out
 
 
 async def compare_dims_for_store(

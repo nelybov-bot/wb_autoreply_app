@@ -769,6 +769,7 @@ async def run_wb_certificates_apply(
     text: str = "",
     vendor_codes: Optional[list[str]] = None,
     dry_run: bool = False,
+    refresh_catalog: bool = False,
 ) -> str:
     from app.core.wb_certificates import (
         apply_certificates_multi_store,
@@ -845,6 +846,7 @@ async def run_wb_certificates_apply(
                 rows=rows,
                 dry_run=dry_run,
                 db=db,
+                refresh_catalog=refresh_catalog,
                 progress_cb=_progress,
             )
             if parse_warnings:
@@ -878,6 +880,116 @@ async def run_wb_certificates_apply(
             _mark_finished(task_id, "error")
         except Exception as e:
             log.exception("wb_certificates task %s failed: %s", task_id, e)
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = str(e)[:400]
+            _mark_finished(task_id, "error")
+        finally:
+            await store_locks.release(sids, task_id)
+
+    _handles[task_id] = asyncio.create_task(_run())
+    return task_id
+
+
+async def run_wb_catalog_refresh(
+    db: Any,
+    *,
+    store_ids: list[int],
+) -> str:
+    """Кнопка «Обновить каталог WB»: перекачивает каталог в кэш, сохраняя прошлый снимок."""
+    from app.core.net import HttpStatusError, UnauthorizedStoreError
+    from app.core.packaging_dims import _CATALOG_MAX_PAGES, refresh_wb_catalog_for_store
+
+    sids = sorted({int(x) for x in (store_ids or []) if int(x) > 0})
+    if not sids:
+        raise ValueError("Выберите хотя бы один магазин WB")
+
+    stores_payload: list[tuple[int, str, str]] = []
+    by_id = {s.id: s for s in db.list_stores()}
+    for sid in sids:
+        st = by_id.get(sid)
+        if not st or str(st.marketplace or "").lower() != "wb":
+            raise ValueError(f"Магазин {sid} не найден или не WB")
+        if not (st.api_key or "").strip():
+            raise ValueError(f"У магазина «{st.name}» нет API-ключа")
+        stores_payload.append((sid, st.name, st.api_key.strip()))
+
+    task_id = _make_id()
+    try:
+        await store_locks.acquire(
+            sids, "wb_catalog", task_id,
+            store_names=_store_names(db, sids),
+        )
+    except StoreBusyError:
+        await store_locks.release_all_for_owner(task_id)
+        raise
+
+    total_steps = max(len(sids) * _CATALOG_MAX_PAGES, 1)
+    await _init_task(task_id, "wb_catalog_refresh", "Каталог WB", total_steps)
+    async with _tasks_lock:
+        _tasks[task_id]["store_ids"] = sids
+
+    def _set_progress(cur: int, detail: str) -> None:
+        if _tasks.get(task_id, {}).get("status") != "running":
+            return
+
+        async def _set() -> None:
+            async with _tasks_lock:
+                if task_id in _tasks:
+                    _tasks[task_id]["progress"] = [
+                        max(0, min(int(cur), total_steps)),
+                        total_steps,
+                    ]
+                    _tasks[task_id]["detail"] = detail
+
+        asyncio.create_task(_set())
+
+    async def _run() -> None:
+        out: list[dict] = []
+        try:
+            for i, (sid, name, api_key) in enumerate(stores_payload):
+                offset = i * _CATALOG_MAX_PAGES
+
+                def _cb(cur: int, tot: int, detail: str, _o=offset, _n=name, _i=i) -> None:
+                    share = int(cur * _CATALOG_MAX_PAGES / max(int(tot or 0), 1))
+                    _set_progress(
+                        _o + share,
+                        f"Магазин {_i + 1}/{len(stores_payload)} · {_n}: {detail}",
+                    )
+
+                try:
+                    meta = await refresh_wb_catalog_for_store(
+                        api_key, store_id=sid, db=db, progress_cb=_cb
+                    )
+                    out.append({"store_id": sid, "store_name": name, **meta})
+                except UnauthorizedStoreError as e:
+                    out.append({"store_id": sid, "store_name": name, "error": str(e)[:400]})
+                except HttpStatusError as e:
+                    out.append({
+                        "store_id": sid,
+                        "store_name": name,
+                        "error": str(e.body or e)[:400],
+                    })
+                except ValueError as e:
+                    out.append({"store_id": sid, "store_name": name, "error": str(e)[:400]})
+
+            loaded = sum(int(s.get("cards_count") or 0) for s in out)
+            async with _tasks_lock:
+                _tasks[task_id]["status"] = "done"
+                _tasks[task_id]["result"] = {"stores": out}
+                _tasks[task_id]["detail"] = (
+                    f"Каталог обновлён: {loaded} карточек в {len(sids)} магазинах"
+                )
+                _tasks[task_id]["progress"] = [total_steps, total_steps]
+            _mark_finished(task_id, "done")
+        except asyncio.CancelledError:
+            async with _tasks_lock:
+                if task_id in _tasks and _tasks[task_id].get("status") == "running":
+                    _tasks[task_id]["status"] = "cancelled"
+                    _tasks[task_id]["error"] = "Остановлено пользователем"
+            _mark_finished(task_id, "cancelled")
+        except Exception as e:
+            log.exception("wb_catalog_refresh task %s failed: %s", task_id, e)
             async with _tasks_lock:
                 _tasks[task_id]["status"] = "error"
                 _tasks[task_id]["error"] = str(e)[:400]

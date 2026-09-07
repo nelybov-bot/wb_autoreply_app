@@ -5,6 +5,78 @@
 
 ---
 
+## 2026-09-07 — Fix: дата начала декларации не попадала на WB
+
+- `wb_certificates`: `_RE_DECL_REG_DATE` матчила поле «Дата **окончания** действия декларации» (ветка `(дата).*декларац`), а слоты `decl_*`/`cert_*` перезаписывались последним совпадением → `decl_reg_date_id == decl_valid_until_id`, дата регистрации затиралась датой окончания
+- Новый классификатор `_charc_role` / `_charc_scope` / `_assign_charc`: срок действия проверяется **раньше** даты регистрации, первое подходящее поле выигрывает, совмещённые имена («сертификата/декларации») заполняют оба слота
+- `_build_cert_patch_ids`: одно поле не получает два значения; очистка «чужого» типа только если номер реально записан (раньше загрузка сертификата в категорию с полями только декларации затирала их пустыми)
+- Строка без полей под свой тип документа → статус `no_fields`, а не «Отправлено»
+
+## 2026-09-07 — Каталог WB: обновление по кнопке + прошлый снимок
+
+- Панель «Документы» → WB: блок «Каталог WB» с датой и числом карточек, кнопки «Обновить каталог» и «Вернуть предыдущий»
+- Загрузка документов больше **не** перезакачивает каталог сама (`auto_reload_on_miss=False`); артикулы вне копии видны в отчёте
+- `packaging_dims`: кэш не удаляется до загрузки — при падении остаётся прежний снимок
+- БД: таблица `packaging_dims_cards_prev` + колонки `prev_*` в `packaging_dims_catalog_meta`; `packaging_dims_cache_replace(keep_previous=True)`, `packaging_dims_cache_restore_previous`
+- API: `GET /api/wb/catalog/cache/{store_id}`, `POST /api/wb/catalog/refresh`, `POST /api/wb/catalog/cache/{store_id}/restore-previous`; `refresh_catalog` в `POST /api/wb/certificates/apply`
+- `app.js?v=130`
+
+## 2026-09-07 — Fix: каталог Ozon грузился только 1000 товаров
+
+- `ozon_client.list_products_all`: v3 не возвращает `has_next` → пагинация обрывалась на первой странице
+- Теперь идём по `last_id`, пока страница полная; каталог ES = 5771 (было 1000)
+
+## 2026-09-07 — OZON ES: сравнение с заливкой 03.09
+
+- Из 587 залитых групп: 67 целы, 329 частично, 191 развалилась (1673 артикула из 5447)
+- Причина: Ozon сам расклеивает карточки без различий по аспектам → модель `<база>_<артикул>` (3487 шт)
+- Лист «Было-стало (залив 03.09)» в Excel-аудите
+
+## 2026-09-07 — OZON ES: аудит связок
+
+- `data/ozon_es_links_audit.py`: связки, ошибки, предложения по одиночкам (эталон — связки WB)
+- Excel на Рабочем столе: 2508 в существующие связки, 90 новых связок, 854 спорных, 383 ошибки
+
+## 2026-09-07 — Ozon deficits: APPLY 3 связки OK
+
+- 6 атрибутов записаны (units 1/2/3 + volume 300), `task_id=5576861335`, failed=0
+- Логи: `ozon_link_deficits_TRIAL3_APPLY_07.09.2026.json`
+
+## 2026-09-07 — Ozon deficits: вес ≈ объём × шт
+
+- Для жидкостей без явных грамм: `weight_g = volume_ml × units` (source `inferred_volume_x_units`)
+- Trial3 пересчёт: мусс 250/500/750 г
+
+## 2026-09-07 — Ozon deficits: trial 3 связки (dry-run)
+
+- 9 offer_id / 3 группы: мусс Balea, мыло Balea med, маска Schaebens
+- 6 proposals (units 1/2/3 + volume 300); запись не делали
+- JSON: `ozon_link_deficits_TRIAL3_07.09.2026.json`
+
+## 2026-09-07 — Ozon: дозаполнение недочётов связок (модуль)
+
+- `app/core/ozon_link_deficits.py`: dry-run/apply для цвет / объём мл / единиц / вес товара
+- Источники: title → description → web (DuckDuckGo) → OpenAI по тексту/сниппетам
+- CLI: `data/ozon_link_deficits_dryrun.py` (не запускался в сессии)
+- Политика: вес **товара** можно; вес/габариты **упаковки**, бренд, ТН ВЭД — нельзя
+
+## 2026-09-06 — YM EUROSTORE: пробные 5 склеек OK
+
+- 5× `copy_one` через `yam_link_by_group` — 5/5 API OK + общий `groupId`
+- Лог: `wb_to_yam_es_TRIAL5_06.09.2026.csv`
+
+## 2026-09-06 — YM: API связок + dry-run WB→YM EUROSTORE
+
+- `yam_client`: каталог (`offer-mappings`), карточки, схема категории, `offer-cards/update`
+- `card_links`: `fetch_yam_catalog`, `yam_link_by_group` / `yam_unlink_cards` (параметр 200)
+- Dry-run: `data/wb_to_yam_es_dryrun.py` → 714 link ops, 5736/5757 артикулов на YM
+- План: `wb_to_yam_es_DRYRUN_plan_06.09.2026.csv` (без записи на Маркет)
+
+## 2026-09-06 — Ozon ES: массовая склейка с WB
+
+- Догнали mass apply по плану v2 (`category_only`)
+- Лог: `wb_to_ozon_es_MASS_APPLY_03.09.2026.csv` — 587 OK, 0 FAIL
+
 ## 2026-09-04 — Avito: товар/имя в алерте + критический баланс
 
 - Перед отправкой в TG догружаем чат (`getChatById`) — title и buyer

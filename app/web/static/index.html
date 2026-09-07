@@ -701,6 +701,17 @@
             </div>
             <div id="compliance-wb-store-list" class="auto-store-list auto-store-list--compact"></div>
           </div>
+          <div class="compliance-stores-block">
+            <div class="compliance-toolbar">
+              <span class="toolbar-label">Каталог WB</span>
+              <div class="compliance-toolbar-actions">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-wb-catalog-refresh">Обновить каталог</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-wb-catalog-restore" hidden>Вернуть предыдущий</button>
+              </div>
+            </div>
+            <p class="form-hint" id="compliance-wb-catalog-info">Каталог берётся из сохранённой копии и сам не перезагружается — обновляйте кнопкой.</p>
+          </div>
+          <div class="progress-container" id="progress-compliance-wb-catalog" hidden></div>
           <div class="progress-container" id="progress-compliance-wb" hidden></div>
           <div class="compliance-actions">
             <button type="button" class="btn btn-primary" id="btn-compliance-wb-apply">Проверить и отправить на выбранные магазины WB</button>
@@ -2048,7 +2059,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=129"></script>
+  <script src="/static/app.js?v=130"></script>
   <script src="/static/card_links_master.js?v=9"></script>
 </body>
 </html>

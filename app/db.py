@@ -491,6 +491,16 @@ class Database:
                 )
             """)
             c.execute("""
+                CREATE TABLE IF NOT EXISTS packaging_dims_cards_prev (
+                    store_id INTEGER NOT NULL,
+                    vendor_code TEXT NOT NULL,
+                    nm_id INTEGER NOT NULL DEFAULT 0,
+                    card_json TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (store_id, vendor_code)
+                )
+            """)
+            c.execute("""
                 CREATE TABLE IF NOT EXISTS packaging_dims_catalog_meta (
                     store_id INTEGER PRIMARY KEY,
                     cards_count INTEGER NOT NULL DEFAULT 0,
@@ -499,9 +509,23 @@ class Database:
                     truncated INTEGER NOT NULL DEFAULT 0
                 )
             """)
+            for col, ddl in (
+                ("prev_cards_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("prev_load_mode", "TEXT NOT NULL DEFAULT ''"),
+                ("prev_catalog_at", "TEXT NOT NULL DEFAULT ''"),
+                ("prev_truncated", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                try:
+                    c.execute(f"ALTER TABLE packaging_dims_catalog_meta ADD COLUMN {col} {ddl}")
+                except sqlite3.OperationalError:
+                    pass
             c.execute(
                 "CREATE INDEX IF NOT EXISTS idx_packaging_dims_cards_store "
                 "ON packaging_dims_cards(store_id)"
+            )
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_packaging_dims_cards_prev_store "
+                "ON packaging_dims_cards_prev(store_id)"
             )
             c.execute("""
                 CREATE TABLE IF NOT EXISTS packaging_dims_charcs (
@@ -2707,7 +2731,8 @@ class Database:
     def packaging_dims_cache_meta(self, store_id: int) -> dict:
         with _DB_LOCK:
             row = self._conn.execute(
-                """SELECT store_id, cards_count, load_mode, catalog_at, truncated
+                """SELECT store_id, cards_count, load_mode, catalog_at, truncated,
+                          prev_cards_count, prev_load_mode, prev_catalog_at, prev_truncated
                    FROM packaging_dims_catalog_meta WHERE store_id=?""",
                 (int(store_id),),
             ).fetchone()
@@ -2719,6 +2744,10 @@ class Database:
                 "load_mode": str(row["load_mode"] or ""),
                 "catalog_at": str(row["catalog_at"] or ""),
                 "truncated": bool(int(row["truncated"] or 0)),
+                "prev_cards_count": int(row["prev_cards_count"] or 0),
+                "prev_load_mode": str(row["prev_load_mode"] or ""),
+                "prev_catalog_at": str(row["prev_catalog_at"] or ""),
+                "prev_truncated": bool(int(row["prev_truncated"] or 0)),
             }
 
     def packaging_dims_cache_is_fresh(self, store_id: int, ttl_s: int = 86400) -> bool:
@@ -2828,10 +2857,45 @@ class Database:
         *,
         load_mode: str,
         truncated: bool = False,
+        keep_previous: bool = True,
     ) -> None:
+        """Замена каталога одной транзакцией. При keep_previous текущий снимок
+        уезжает в «предыдущий», чтобы его можно было вернуть."""
         sid = int(store_id)
         ts = utc_now_iso()
         with _DB_LOCK:
+            old = self._conn.execute(
+                """SELECT cards_count, load_mode, catalog_at, truncated,
+                          prev_cards_count, prev_load_mode, prev_catalog_at, prev_truncated
+                   FROM packaging_dims_catalog_meta WHERE store_id=?""",
+                (sid,),
+            ).fetchone()
+            if keep_previous and old and int(old["cards_count"] or 0) > 0:
+                self._conn.execute(
+                    "DELETE FROM packaging_dims_cards_prev WHERE store_id=?", (sid,)
+                )
+                self._conn.execute(
+                    """INSERT INTO packaging_dims_cards_prev
+                         (store_id, vendor_code, nm_id, card_json, updated_at)
+                       SELECT store_id, vendor_code, nm_id, card_json, updated_at
+                       FROM packaging_dims_cards WHERE store_id=?""",
+                    (sid,),
+                )
+                prev_meta = (
+                    int(old["cards_count"] or 0),
+                    str(old["load_mode"] or ""),
+                    str(old["catalog_at"] or ""),
+                    1 if int(old["truncated"] or 0) else 0,
+                )
+            elif old:
+                prev_meta = (
+                    int(old["prev_cards_count"] or 0),
+                    str(old["prev_load_mode"] or ""),
+                    str(old["prev_catalog_at"] or ""),
+                    1 if int(old["prev_truncated"] or 0) else 0,
+                )
+            else:
+                prev_meta = (0, "", "", 0)
             self._conn.execute("DELETE FROM packaging_dims_cards WHERE store_id=?", (sid,))
             for card in cards:
                 if not isinstance(card, dict):
@@ -2849,14 +2913,20 @@ class Database:
                     (sid, vc, nm, json.dumps(card, ensure_ascii=False, default=str), ts),
                 )
             self._conn.execute(
-                """INSERT INTO packaging_dims_catalog_meta(store_id, cards_count, load_mode, catalog_at, truncated)
-                   VALUES (?,?,?,?,?)
+                """INSERT INTO packaging_dims_catalog_meta(
+                       store_id, cards_count, load_mode, catalog_at, truncated,
+                       prev_cards_count, prev_load_mode, prev_catalog_at, prev_truncated)
+                   VALUES (?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(store_id) DO UPDATE SET
                      cards_count=excluded.cards_count,
                      load_mode=excluded.load_mode,
                      catalog_at=excluded.catalog_at,
-                     truncated=excluded.truncated""",
-                (sid, len(cards), str(load_mode or ""), ts, 1 if truncated else 0),
+                     truncated=excluded.truncated,
+                     prev_cards_count=excluded.prev_cards_count,
+                     prev_load_mode=excluded.prev_load_mode,
+                     prev_catalog_at=excluded.prev_catalog_at,
+                     prev_truncated=excluded.prev_truncated""",
+                (sid, len(cards), str(load_mode or ""), ts, 1 if truncated else 0, *prev_meta),
             )
             self._conn.commit()
 
@@ -2883,11 +2953,74 @@ class Database:
             )
             self._conn.commit()
 
-    def packaging_dims_cache_clear(self, store_id: int) -> None:
+    def packaging_dims_cache_restore_previous(self, store_id: int) -> dict:
+        """Меняет местами текущий и предыдущий снимки каталога."""
+        sid = int(store_id)
+        with _DB_LOCK:
+            old = self._conn.execute(
+                """SELECT cards_count, load_mode, catalog_at, truncated,
+                          prev_cards_count, prev_load_mode, prev_catalog_at, prev_truncated
+                   FROM packaging_dims_catalog_meta WHERE store_id=?""",
+                (sid,),
+            ).fetchone()
+            if not old or int(old["prev_cards_count"] or 0) <= 0:
+                return {}
+            self._conn.execute(
+                "CREATE TEMP TABLE IF NOT EXISTS pd_cards_swap AS "
+                "SELECT * FROM packaging_dims_cards WHERE 0"
+            )
+            self._conn.execute("DELETE FROM pd_cards_swap")
+            self._conn.execute(
+                "INSERT INTO pd_cards_swap SELECT * FROM packaging_dims_cards WHERE store_id=?",
+                (sid,),
+            )
+            self._conn.execute("DELETE FROM packaging_dims_cards WHERE store_id=?", (sid,))
+            self._conn.execute(
+                "INSERT INTO packaging_dims_cards "
+                "SELECT * FROM packaging_dims_cards_prev WHERE store_id=?",
+                (sid,),
+            )
+            self._conn.execute("DELETE FROM packaging_dims_cards_prev WHERE store_id=?", (sid,))
+            self._conn.execute("INSERT INTO packaging_dims_cards_prev SELECT * FROM pd_cards_swap")
+            self._conn.execute("DELETE FROM pd_cards_swap")
+            self._conn.execute(
+                """UPDATE packaging_dims_catalog_meta SET
+                     cards_count=?, load_mode=?, catalog_at=?, truncated=?,
+                     prev_cards_count=?, prev_load_mode=?, prev_catalog_at=?, prev_truncated=?
+                   WHERE store_id=?""",
+                (
+                    int(old["prev_cards_count"] or 0),
+                    str(old["prev_load_mode"] or ""),
+                    str(old["prev_catalog_at"] or ""),
+                    1 if int(old["prev_truncated"] or 0) else 0,
+                    int(old["cards_count"] or 0),
+                    str(old["load_mode"] or ""),
+                    str(old["catalog_at"] or ""),
+                    1 if int(old["truncated"] or 0) else 0,
+                    sid,
+                ),
+            )
+            self._conn.commit()
+        return self.packaging_dims_cache_meta(sid)
+
+    def packaging_dims_cache_clear(self, store_id: int, *, keep_previous: bool = False) -> None:
         sid = int(store_id)
         with _DB_LOCK:
             self._conn.execute("DELETE FROM packaging_dims_cards WHERE store_id=?", (sid,))
-            self._conn.execute("DELETE FROM packaging_dims_catalog_meta WHERE store_id=?", (sid,))
+            if keep_previous:
+                self._conn.execute(
+                    """UPDATE packaging_dims_catalog_meta
+                       SET cards_count=0, load_mode='', catalog_at='', truncated=0
+                       WHERE store_id=?""",
+                    (sid,),
+                )
+            else:
+                self._conn.execute(
+                    "DELETE FROM packaging_dims_cards_prev WHERE store_id=?", (sid,)
+                )
+                self._conn.execute(
+                    "DELETE FROM packaging_dims_catalog_meta WHERE store_id=?", (sid,)
+                )
             self._conn.commit()
 
     def packaging_dims_charcs_get(self, subject_id: int, ttl_s: int = 604800) -> Optional[list[dict]]:
