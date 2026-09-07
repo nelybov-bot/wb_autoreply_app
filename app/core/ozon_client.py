@@ -614,10 +614,14 @@ class OzonClient:
             for it in batch:
                 if isinstance(it, dict):
                     rows.append(it)
-            last_id = str(block.get("last_id") or "").strip()
-            has_next = bool(block.get("has_next"))
-            if not last_id or not has_next:
+            next_id = str(block.get("last_id") or "").strip()
+            # v3 больше не присылает has_next: идём пока меняется last_id и страница полная
+            has_next = block.get("has_next")
+            if has_next is False:
                 break
+            if not next_id or next_id == last_id or len(batch) < page_size:
+                break
+            last_id = next_id
             if pages >= max_pages:
                 truncated = True
                 break

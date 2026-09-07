@@ -1,4 +1,4 @@
-"""Связки карточек WB и Ozon: выгрузка каталога, проверка групп, привязка."""
+"""Связки карточек WB, Ozon и Яндекс.Маркет: каталог, группы, привязка."""
 from __future__ import annotations
 
 import asyncio
@@ -12,12 +12,15 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from app.core.net import HttpStatusError
 from app.core.ozon_client import OzonClient
 from app.core.wb_content_client import WbContentClient
+from app.core.yam_client import YAM_GROUP_PARAM_ID, YamClient
 
 log = logging.getLogger("card_links")
 
 AI_SUGGEST_PARALLEL = 3
 
 OZON_MODEL_ATTR_ID = OzonClient.OZON_MODEL_ATTR_ID
+YAM_GROUP_NAME_PARAM_ID = YAM_GROUP_PARAM_ID
+MAX_YAM_LINK_ITEMS = 30
 # Частые ID «Бренд» в разных категориях Ozon (уточняются по схеме категории).
 OZON_BRAND_ATTR_IDS = (85, 31)
 
@@ -4798,6 +4801,243 @@ async def ozon_link_by_model(
             )
         items.append({"offer_id": oid, "attributes": attrs})
     link_result = await client.update_product_attributes(items)
+    if unlinked_n:
+        return {"link": link_result, "unlinked": unlinked_n}
+    return link_result
+
+
+# ---------------------------------------------------------------------------
+# Яндекс.Маркет: группы вариантов (параметр 200)
+# ---------------------------------------------------------------------------
+
+
+def normalize_yam_product(entry: dict) -> dict:
+    """Сырой offerMappings-элемент → строка каталога связок."""
+    offer = (entry or {}).get("offer") or {}
+    mapping = (entry or {}).get("mapping") or {}
+    oid = str(offer.get("offerId") or "").strip()
+    group_id = str(offer.get("groupId") or "").strip()
+    group_name = YamClient.extract_group_name(offer) or group_id
+    try:
+        cat_id = int(mapping.get("marketCategoryId") or 0)
+    except (TypeError, ValueError):
+        cat_id = 0
+    return {
+        "offer_id": oid,
+        "vendor_code": str(offer.get("vendorCode") or oid).strip() or oid,
+        "title": str(offer.get("name") or "").strip(),
+        "brand": str(offer.get("vendor") or "").strip(),
+        "category": str(
+            mapping.get("marketCategoryName") or offer.get("category") or ""
+        ).strip(),
+        "market_category_id": cat_id,
+        "group_id": group_id,
+        "group_name": group_name,
+        "model_name": group_name,
+        "linked": bool(group_id),
+        "marketplace": "yam",
+        "card_status": str(offer.get("cardStatus") or "").strip(),
+    }
+
+
+async def fetch_yam_catalog(
+    api_key: str,
+    business_id: int,
+    *,
+    offer_ids: Optional[List[str]] = None,
+    max_pages: int = 200,
+    meta_out: Optional[dict] = None,
+    articles_only: bool = False,
+) -> List[dict]:
+    """Каталог YM: offerId, категория, groupId / название группы."""
+    codes = [str(x).strip() for x in (offer_ids or []) if str(x).strip()]
+    if articles_only and not codes:
+        raise ValueError("articles_only: список артикулов пуст")
+    client = YamClient(api_key, int(business_id), timeout_s=60.0)
+    list_meta: dict = {}
+    raw = await client.list_offer_mappings_all(
+        offer_ids=codes or None,
+        max_pages=max_pages,
+        meta_out=list_meta,
+    )
+    rows = [normalize_yam_product(e) for e in raw if isinstance(e, dict)]
+    rows = [r for r in rows if r.get("offer_id")]
+    if codes:
+        rows, missing = filter_rows_by_articles(rows, codes, marketplace="yam")
+        list_meta["missing_articles"] = missing
+    if meta_out is not None:
+        meta_out.update(list_meta)
+        meta_out["normalized"] = len(rows)
+    return rows
+
+
+def group_yam_rows(rows: List[dict], *, articles_only: bool = False) -> List[dict]:
+    """Группы по group_id / group_name (как model_name на Ozon)."""
+    by: Dict[str, List[dict]] = {}
+    singles: List[dict] = []
+    for r in rows:
+        key = str(r.get("group_id") or r.get("group_name") or "").strip()
+        if not key:
+            singles.append(r)
+            continue
+        by.setdefault(key, []).append(r)
+    groups: List[dict] = []
+    for key, items in by.items():
+        if len(items) < 2:
+            for it in items:
+                singles.append(it)
+            continue
+        groups.append(
+            {
+                "group_id": key,
+                "group_name": key,
+                "model_name": key,
+                "size": len(items),
+                "items": items,
+                "linked": True,
+                "market_category_id": items[0].get("market_category_id"),
+                "category": items[0].get("category"),
+                "brand": items[0].get("brand"),
+            }
+        )
+    if articles_only:
+        return groups
+    for it in singles:
+        groups.append(
+            {
+                "group_id": str(it.get("offer_id") or ""),
+                "group_name": str(it.get("group_name") or it.get("offer_id") or ""),
+                "model_name": str(it.get("group_name") or it.get("offer_id") or ""),
+                "size": 1,
+                "items": [it],
+                "linked": False,
+                "market_category_id": it.get("market_category_id"),
+                "category": it.get("category"),
+                "brand": it.get("brand"),
+            }
+        )
+    return groups
+
+
+def validate_yam_link_rows(catalog_rows: List[dict], offer_ids: List[str]) -> None:
+    """Одна категория + лимит размера группы. Хар-ки не сверяем (как category_only)."""
+    oid_set = {str(x).strip() for x in offer_ids if str(x).strip()}
+    picked = [r for r in catalog_rows if str(r.get("offer_id") or "").strip() in oid_set]
+    if len(picked) < 2:
+        raise ValueError(f"На YM найдено меньше 2 артикулов для склейки ({len(picked)})")
+    if len(picked) > MAX_YAM_LINK_ITEMS:
+        raise ValueError(f"Слишком много товаров для одной группы YM: {len(picked)} > {MAX_YAM_LINK_ITEMS}")
+    cats = {int(r.get("market_category_id") or 0) for r in picked}
+    cats.discard(0)
+    if len(cats) != 1:
+        raise ValueError(f"Разные категории YM в пачке: {sorted(cats)}")
+
+
+async def yam_unlink_cards(
+    api_key: str,
+    business_id: int,
+    *,
+    offer_ids: List[str],
+    catalog_rows: Optional[List[dict]] = None,
+) -> dict:
+    """Развязка: каждому offer — своё имя группы (= offerId), параметр 200."""
+    oids = [str(x).strip() for x in offer_ids if str(x).strip()]
+    if not oids:
+        raise ValueError("offer_ids пуст")
+    by: Dict[str, dict] = {}
+    if catalog_rows:
+        for r in catalog_rows:
+            oid = str(r.get("offer_id") or "").strip()
+            if oid:
+                by[oid] = r
+    missing = [o for o in oids if o not in by]
+    if missing:
+        extra = await fetch_yam_catalog(
+            api_key, business_id, offer_ids=missing, articles_only=True, max_pages=50
+        )
+        for r in extra:
+            by[str(r.get("offer_id") or "").strip()] = r
+    content: List[dict] = []
+    for oid in oids:
+        row = by.get(oid) or {}
+        cat_id = int(row.get("market_category_id") or 0)
+        item: dict = {
+            "offerId": oid,
+            "parameterValues": [{"parameterId": YAM_GROUP_NAME_PARAM_ID, "value": oid}],
+        }
+        if cat_id:
+            item["categoryId"] = cat_id
+        content.append(item)
+    client = YamClient(api_key, int(business_id), timeout_s=60.0)
+    return await client.update_offer_cards(content)
+
+
+async def yam_link_by_group(
+    api_key: str,
+    business_id: int,
+    *,
+    offer_ids: List[str],
+    group_name: str,
+    catalog_rows: Optional[List[dict]] = None,
+    validate_only: bool = False,
+    unlink_first: bool = True,
+) -> dict:
+    """
+    Склеить offer_id одним «Названием группы вариантов» (parameterId=200).
+    Как Ozon category_only: только одна категория, прочие хар-ки не трогаем.
+    Distinctive-поля должны уже отличаться у вариантов — иначе Маркет предупредит/не склеит.
+    """
+    group = (group_name or "").strip()
+    if not group:
+        raise ValueError("group_name пуст")
+    if len(group) > 255:
+        raise ValueError("group_name длиннее 255 символов")
+    oids = [str(x).strip() for x in offer_ids if str(x).strip()]
+    if not oids:
+        raise ValueError("offer_ids пуст")
+
+    rows = catalog_rows
+    if rows is None:
+        rows = await fetch_yam_catalog(
+            api_key, business_id, offer_ids=oids, articles_only=True, max_pages=50
+        )
+    validate_yam_link_rows(rows, oids)
+    if validate_only:
+        return {"ok": True, "validated": True}
+
+    unlinked_n = 0
+    if unlink_first:
+        oid_set = set(oids)
+        target = group
+        to_unlink: List[str] = []
+        for r in rows:
+            oid = str(r.get("offer_id") or "").strip()
+            if oid not in oid_set:
+                continue
+            cur = str(r.get("group_name") or r.get("group_id") or "").strip()
+            if cur and cur != target and r.get("linked"):
+                to_unlink.append(oid)
+        if to_unlink:
+            await yam_unlink_cards(
+                api_key, business_id, offer_ids=to_unlink, catalog_rows=rows
+            )
+            unlinked_n = len(to_unlink)
+            await asyncio.sleep(2.0)
+
+    by = {str(r.get("offer_id") or "").strip(): r for r in rows}
+    content: List[dict] = []
+    for oid in oids:
+        row = by.get(oid) or {}
+        cat_id = int(row.get("market_category_id") or 0)
+        item: dict = {
+            "offerId": oid,
+            "parameterValues": [{"parameterId": YAM_GROUP_NAME_PARAM_ID, "value": group}],
+        }
+        if cat_id:
+            item["categoryId"] = cat_id
+        content.append(item)
+    client = YamClient(api_key, int(business_id), timeout_s=60.0)
+    link_result = await client.update_offer_cards(content)
     if unlinked_n:
         return {"link": link_result, "unlinked": unlinked_n}
     return link_result
