@@ -24,12 +24,28 @@ try:
 except ImportError:
     pass
 
+# Сетевые сбои, которые имеет смысл повторить (обрыв соединения, таймаут connect и т.п.)
+RETRYABLE_NETWORK_ERRORS = _RETRY_ON
+
+
 @dataclass
 class HttpStatusError(Exception):
     status: int
     body: str
     def __str__(self) -> str:
         return f"HTTP {self.status}: {self.body}"
+
+
+class NetworkUnavailableError(HttpStatusError):
+    """Соединение не установилось после всех ретраев.
+
+    Наследник HttpStatusError со статусом 504: существующие обработчики
+    `except HttpStatusError` покажут понятную ошибку по строке/странице,
+    а не оборвут всю операцию по магазину.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(504, message)
 
 
 class UnauthorizedStoreError(Exception):

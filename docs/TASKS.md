@@ -15,6 +15,9 @@
 | T-002 | Persistent storage на Render (Disk 1GB) | todo | Описано в DEPLOY.md; без диска БД сбрасывается |
 | T-003 | Диагностика «пропущенных» одиночек в предложениях | todo | Частично закрыто режимом «Одиночки» (`suggest_wb_singles`); нужны примеры если residual |
 | T-004 | Обновить корневой README.md (web-first, не только desktop) | todo | Сейчас вводит в заблуждение |
+| T-005 | WB Content API: keep-alive вместо сессии на каждый запрос | todo | Сейчас каждый запрос = новый `TCPConnector(force_close=True)` + TLS. Задевает все WB-панели и desktop-loop → сессию кэшировать по event loop |
+| T-006 | `WB_PROXY_URL` — прокси в РФ для WB Content API | todo | Только если таймауты с Render систематические (см. BUG-00C); по образцу `FSA_PROXY_URL` |
+| T-007 | Параллельные магазины в остальных `*_multi_store` | todo | Документы WB уже через `asyncio.gather` + семафор (2026-09-09). Осталось: `wb_bulk_chars`, `packaging_dims` (compare/apply), `wb_card_drafts`, `ozon_certificates`, `ozon_bulk_chars` — тот же приём: нормировать прогресс каждого магазина и суммировать |
 
 ---
 

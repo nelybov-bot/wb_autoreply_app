@@ -9,7 +9,13 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 
-from .net import HttpStatusError, RateLimiter, USER_AGENT
+from .net import (
+    RETRYABLE_NETWORK_ERRORS,
+    HttpStatusError,
+    NetworkUnavailableError,
+    RateLimiter,
+    USER_AGENT,
+)
 
 log = logging.getLogger("wb.content")
 
@@ -20,6 +26,13 @@ _VENDOR_SEARCH_BATCH = 40
 _UPDATE_BATCH_SIZE = 300
 _UPDATE_BATCH_PAUSE_S = 0.0
 _MUTATE_RPS = 10.0 / 60.0  # ~1 запрос / 6 с
+# С Render соединение до WB встаёт не всегда быстро — 15 с не хватало
+_CONNECT_TIMEOUT_S = 30
+
+
+def _network_error_text(e: BaseException, url: str) -> str:
+    reason = str(e).strip() or e.__class__.__name__
+    return f"WB не отвечает: {reason[:200]} ({url}). Повторите позже."
 
 
 class WbContentClient:
@@ -27,7 +40,7 @@ class WbContentClient:
         self.api_key = (api_key or "").strip()
         if self.api_key.lower().startswith("bearer "):
             self.api_key = self.api_key[7:].strip()
-        self.timeout = aiohttp.ClientTimeout(connect=15, total=timeout_s)
+        self.timeout = aiohttp.ClientTimeout(connect=_CONNECT_TIMEOUT_S, total=timeout_s)
         # Content API: ~100 req/min чтение; cards/update ~10 req/min
         self._read_limiter = RateLimiter(0.75)
         self._mutate_limiter = RateLimiter(_MUTATE_RPS)
@@ -98,6 +111,16 @@ class WbContentClient:
                     last_exc = e
                     if e.status not in retry_on_status or attempt >= retries - 1:
                         raise
+                except RETRYABLE_NETWORK_ERRORS as e:
+                    # обрыв/таймаут соединения: повторяем, иначе один сетевой
+                    # сбой обрывал всю операцию по магазину
+                    last_exc = e
+                    log.warning(
+                        "WB %s %s: сеть (%s/%s) — %s",
+                        method, path, attempt + 1, retries, str(e)[:200],
+                    )
+                    if attempt >= retries - 1:
+                        raise NetworkUnavailableError(_network_error_text(e, url)) from e
                 delay = retry_delays[attempt] if attempt < len(retry_delays) else retry_delays[-1]
                 await asyncio.sleep(delay)
             if last_exc:
@@ -397,7 +420,7 @@ class WbContentClient:
         last_batch_size = 0
         truncated = False
         bulk_timeout = aiohttp.ClientTimeout(
-            connect=15,
+            connect=_CONNECT_TIMEOUT_S,
             total=max(120.0, float(getattr(self.timeout, "total", None) or 45.0)),
         )
         page_retry_delays = (1.5, 3.0, 6.0)
@@ -418,6 +441,25 @@ class WbContentClient:
                             )
                             last_page_exc = None
                             break
+                        except RETRYABLE_NETWORK_ERRORS as e:
+                            if attempt < len(page_retry_delays):
+                                log.warning(
+                                    "WB catalog: страница %s, сеть — %s",
+                                    pages_fetched + 1, str(e)[:200],
+                                )
+                                await asyncio.sleep(page_retry_delays[attempt])
+                                continue
+                            last_page_exc = NetworkUnavailableError(
+                                _network_error_text(e, BASE + "/content/v2/get/cards/list")
+                            )
+                            if pages_fetched > 0:
+                                truncated = True
+                                if meta_out is not None:
+                                    meta_out["partial"] = True
+                                    meta_out["wb_error_status"] = last_page_exc.status
+                                    meta_out["wb_error_body"] = last_page_exc.body[:500]
+                                break
+                            raise last_page_exc from e
                         except HttpStatusError as e:
                             last_page_exc = e
                             if e.status in (429, 500, 502, 503, 504) and attempt < len(page_retry_delays):
