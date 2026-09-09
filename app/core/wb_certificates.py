@@ -44,9 +44,10 @@ _ROLE_NUMBER = "number"
 _ROLE_REG_DATE = "reg_date"
 _ROLE_VALID_UNTIL = "valid_until"
 
-# Сколько магазинов обрабатываем одновременно: у каждого свой ключ и свой лимит
-# WB (лимиты считаются на продавца), поэтому магазины не мешают друг другу.
-_STORE_CONCURRENCY = 4
+# Карточек в одном cards/update. WB принимает до 3000; берём с запасом по
+# размеру тела — 500 строк уходят одним запросом. Если WB пачку отвергнет,
+# update_cards_batched поделит её пополам и найдёт виновную карточку.
+_CERT_BATCH_SIZE = 1000
 
 # Имя поля → к какому типу документа оно относится
 _SCOPE_PREFIXES = {
@@ -638,6 +639,10 @@ async def apply_certificates_for_store(
     if progress_cb:
         progress_cb(0, max(len(rows), 1), "Загрузка каталога WB…")
 
+    field_cache: Dict[int, CertFieldMap] = {}
+    matched_cards: List[dict] = []
+    row_cards: List[Tuple[CertInputRow, Optional[dict]]] = []
+
     if store_id and db is not None:
         by_vendor, by_nm_id, by_barcode, _meta = await _load_wb_cards_for_compare(
             client,
@@ -653,15 +658,17 @@ async def apply_certificates_for_store(
     else:
         cards, _meta = await _fetch_full_catalog_from_wb(client, progress_cb=progress_cb)
         by_vendor, by_nm_id, by_barcode = _build_card_index(cards)
+        del cards
 
-    field_cache: Dict[int, CertFieldMap] = {}
-    matched_cards: List[dict] = []
-    row_cards: List[Tuple[CertInputRow, Optional[dict]]] = []
     for row in rows:
         card = _lookup_card(by_vendor, by_nm_id, by_barcode, row.vendor_code)
         row_cards.append((row, card))
         if card is not None:
             matched_cards.append(card)
+
+    # каталог целиком больше не нужен: дальше работаем только с найденными
+    # карточками, остальные 11.5 тыс. можно отдать сборщику мусора
+    del by_vendor, by_nm_id, by_barcode
 
     await _load_field_maps(client, matched_cards, field_cache)
 
@@ -750,14 +757,12 @@ async def apply_certificates_for_store(
     sent = 0
     errors: List[dict] = []
     if not dry_run and updates:
-        # Пачками по 300: WB принимает до 3000 карточек за запрос, а при ошибке
-        # пачка делится пополам — построчная точность сохраняется.
         def _send_progress(cur: int, tot: int, detail: str) -> None:
             if progress_cb:
                 progress_cb(total, total, f"Отправка на WB: {detail}")
 
         sent, send_errors = await client.update_cards_batched(
-            updates, progress_cb=_send_progress
+            updates, batch_size=_CERT_BATCH_SIZE, progress_cb=_send_progress
         )
 
         # один и тот же артикул может встретиться в таблице дважды — ошибку
@@ -835,79 +840,69 @@ async def apply_certificates_multi_store(
     dry_run: bool = False,
     db: Any = None,
     refresh_catalog: bool = False,
-    max_concurrency: int = _STORE_CONCURRENCY,
     progress_cb: Optional[ProgressCb] = None,
 ) -> dict:
-    """stores: (store_id, store_name, api_key). Магазины обрабатываются параллельно."""
+    """stores: (store_id, store_name, api_key). Магазины обрабатываются по одному:
+    каталог магазина занимает в памяти ~180 МБ на 12 тыс. карточек."""
+    out_stores: List[dict] = []
     total_stores = len(stores)
     row_total = max(len(rows), 1)
     grand_total = max(total_stores * row_total, 1)
-    # Прогресс каждого магазина нормируем к row_total и складываем: магазины
-    # идут одновременно, поэтому линейного смещения по индексу больше нет.
-    store_done: Dict[int, int] = {i: 0 for i in range(total_stores)}
 
-    def _emit(idx: int, name: str, cur: int, tot: int, detail: str) -> None:
-        if not progress_cb:
-            return
-        safe_tot = max(int(tot or 0), 1)
-        safe_cur = max(0, min(int(cur or 0), safe_tot))
-        store_done[idx] = int(safe_cur * row_total / safe_tot)
-        done = min(sum(store_done.values()), grand_total)
-        progress_cb(done, grand_total, f"{name}: {detail}")
+    for i, (store_id, store_name, api_key) in enumerate(stores):
+        store_offset = i * row_total
 
-    sem = asyncio.Semaphore(max(1, int(max_concurrency)))
-
-    async def _run_store(idx: int, store_id: int, store_name: str, api_key: str) -> dict:
-        async with sem:
-            def _cb(cur: int, tot: int, detail: str) -> None:
-                _emit(idx, store_name, cur, tot, detail)
-
-            try:
-                part = await apply_certificates_for_store(
-                    api_key,
-                    rows=rows,
-                    dry_run=dry_run,
-                    store_id=store_id,
-                    db=db,
-                    refresh_catalog=refresh_catalog,
-                    progress_cb=_cb if progress_cb else None,
-                )
-                part["store_id"] = store_id
-                part["store_name"] = store_name
-                out = part
-            except HttpStatusError as e:
-                out = {
-                    "store_id": store_id,
-                    "store_name": store_name,
-                    "error": str(e.body or e)[:400],
-                    "rows": [],
-                }
-            except Exception as e:
-                log.exception("wb certificates store %s: %s", store_id, e)
-                out = {
-                    "store_id": store_id,
-                    "store_name": store_name,
-                    "error": str(e)[:400],
-                    "rows": [],
-                }
-            store_done[idx] = row_total
+        def _cb(
+            cur: int,
+            tot: int,
+            detail: str,
+            _offset=store_offset,
+            _name=store_name,
+            _si=i,
+        ) -> None:
             if progress_cb:
+                safe_tot = max(int(tot or 0), 1)
+                safe_cur = max(0, min(int(cur or 0), safe_tot))
                 progress_cb(
-                    min(sum(store_done.values()), grand_total),
+                    _offset + int(safe_cur * row_total / safe_tot),
                     grand_total,
-                    f"{store_name}: готово",
+                    f"Магазин {_si + 1}/{total_stores} · {_name}: {detail}",
                 )
-            return out
 
-    if progress_cb and total_stores:
-        progress_cb(0, grand_total, f"Магазинов одновременно: {min(total_stores, max(1, int(max_concurrency)))} из {total_stores}")
-
-    out_stores = list(
-        await asyncio.gather(
-            *(
-                _run_store(i, store_id, store_name, api_key)
-                for i, (store_id, store_name, api_key) in enumerate(stores)
+        if progress_cb:
+            progress_cb(
+                store_offset,
+                grand_total,
+                f"Магазин {i + 1}/{total_stores}: {store_name}…",
             )
-        )
-    )
+
+        try:
+            part = await apply_certificates_for_store(
+                api_key,
+                rows=rows,
+                dry_run=dry_run,
+                store_id=store_id,
+                db=db,
+                refresh_catalog=refresh_catalog,
+                progress_cb=_cb if progress_cb else None,
+            )
+            part["store_id"] = store_id
+            part["store_name"] = store_name
+            out_stores.append(part)
+        except HttpStatusError as e:
+            out_stores.append({
+                "store_id": store_id,
+                "store_name": store_name,
+                "error": str(e.body or e)[:400],
+                "rows": [],
+            })
+        except Exception as e:
+            log.exception("wb certificates store %s: %s", store_id, e)
+            out_stores.append({
+                "store_id": store_id,
+                "store_name": store_name,
+                "error": str(e)[:400],
+                "rows": [],
+            })
+
     return {"stores": out_stores}

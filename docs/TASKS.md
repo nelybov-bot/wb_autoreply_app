@@ -17,6 +17,7 @@
 | T-004 | Обновить корневой README.md (web-first, не только desktop) | todo | Сейчас вводит в заблуждение |
 | T-005 | WB Content API: keep-alive вместо сессии на каждый запрос | todo | Сейчас каждый запрос = новый `TCPConnector(force_close=True)` + TLS. Задевает все WB-панели и desktop-loop → сессию кэшировать по event loop |
 | T-006 | `WB_PROXY_URL` — прокси в РФ для WB Content API | todo | Только если таймауты с Render систематические (см. BUG-00C); по образцу `FSA_PROXY_URL` |
+| T-008 | Каталог из SQLite точечно, а не весь в память | todo | `packaging_dims_cache_load` поднимает весь каталог (12 тыс. карточек ≈ 183 МБ) даже когда нужно 500 артикулов. Нужен `SELECT ... WHERE vendor_code IN (...)` (+ nmID/штрихкоды) → память ~8 МБ, каталоги магазинов можно грузить параллельно и снять `_CATALOG_CONCURRENCY = 1`. Затрагивает 4 панели, делать аккуратно |
 | T-007 | Параллельные магазины в остальных `*_multi_store` | todo | Документы WB уже через `asyncio.gather` + семафор (2026-09-09). Осталось: `wb_bulk_chars`, `packaging_dims` (compare/apply), `wb_card_drafts`, `ozon_certificates`, `ozon_bulk_chars` — тот же приём: нормировать прогресс каждого магазина и суммировать |
 
 ---

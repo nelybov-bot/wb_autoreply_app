@@ -20,7 +20,7 @@ ProgressCb = Callable[[int, int, str], None]
 _DIM_TOLERANCE_CM = 0.05
 # Всегда полный каталог WB — textSearch по списку артикулов ненадёжен.
 _CATALOG_MAX_PAGES = 150
-_CACHE_TTL_S = 86400
+_CACHE_TTL_S = 7 * 86400  # копия каталога живёт неделю: обновление — кнопкой
 # Если из кэша не нашлось больше этого доли — перегружаем каталог с WB.
 _CACHE_MISS_RELOAD_RATIO = 0.05
 
