@@ -76,7 +76,7 @@
 | `yam_client.py` | `YamClient` — отзывы, вопросы, каталог, группы вариантов (param 200) |
 | `avito_client.py` | Avito Business API: OAuth, заказы, messenger, баланс, uploadImages |
 | `avito_notify.py` | Опрос заказов/сообщений/баланса Avito → Telegram; reply текст/фото |
-| `avito_ai_reply.py` | ИИ-черновики ответов Avito + inline-кнопки в Telegram |
+| `avito_ai_reply.py` | ИИ-черновики Avito: edit одного TG-сообщения + inline-кнопки |
 | `net.py` | `HttpStatusError`, `UnauthorizedStoreError`, retry |
 | `openai_client.py` | `OpenAIClient` — chat completions (default `gpt-5.2`) |
 | `chat_common.py` | Общая логика чатов: даты отсечки, ключи сообщений |

@@ -345,40 +345,31 @@ def format_chat_message(
     *,
     our_user_id: Optional[int] = None,
 ) -> str:
-    store = escape_tg_html(store_name or "Avito")
-    item = escape_tg_html(chat_item_title(chat))
-    preview_raw = message_text_preview(msg) or "—"
-    preview = escape_tg_html(preview_raw)
+    from .avito_ai_reply import format_unified_card
+
     author = msg.get("author_id")
     if author is None:
         author = msg.get("authorId")
-    buyer = chat_buyer_name(chat, author_id=author, our_user_id=our_user_id)
-    buyer_s = escape_tg_html(buyer) if buyer else "Покупатель"
-
+    buyer = chat_buyer_name(chat, author_id=author, our_user_id=our_user_id) or "Покупатель"
+    item = chat_item_title(chat)
+    preview_raw = message_text_preview(msg) or ""
     mtype = str(msg.get("type") or "").strip().lower()
     if mtype == "image":
-        body = "🖼 <i>фото</i>"
+        buyer_text = "фото"
     elif mtype == "voice":
-        body = "🎤 <i>голосовое</i>"
+        buyer_text = "голосовое"
     elif mtype == "call":
-        body = "📞 <i>звонок</i>"
-    elif mtype in ("text", "") or preview_raw not in ("—",):
-        body = f"💬 «<b>{preview}</b>»"
+        buyer_text = "звонок"
+    elif preview_raw and preview_raw != "—":
+        buyer_text = preview_raw
     else:
-        body = f"💬 {preview}"
-
-    lines = [
-        "✉️ <b>Новое сообщение · Avito</b>",
-        f"🏪 <b>{store}</b>",
-        "",
-        f"📦 {item}",
-        f"👤 {buyer_s}",
-        "",
-        body,
-        "",
-        "<i>↩️ Ответьте текстом или фото — уйдёт покупателю в Avito</i>",
-    ]
-    return "\n".join(lines)
+        buyer_text = preview_raw or "…"
+    return format_unified_card(
+        store_name=store_name,
+        item_title=item,
+        buyer_name=buyer,
+        buyer_text=buyer_text,
+    )
 
 
 def format_chat_photo_caption(
@@ -390,7 +381,7 @@ def format_chat_photo_caption(
 ) -> str:
     """Подпись к фото в Telegram (без плейсхолдера «фото»)."""
     store = escape_tg_html(store_name or "Avito")
-    item = escape_tg_html(chat_item_title(chat))
+    item = escape_tg_html(chat_item_title(chat) or "Без названия")
     author = msg.get("author_id")
     if author is None:
         author = msg.get("authorId")
@@ -398,12 +389,12 @@ def format_chat_photo_caption(
     buyer_s = escape_tg_html(buyer) if buyer else "Покупатель"
     return "\n".join(
         [
-            "✉️ <b>Новое сообщение · Avito</b>",
-            f"🏪 <b>{store}</b>",
-            f"📦 {item}",
-            f"👤 {buyer_s}",
+            f"<b>Avito</b>  ·  {store}",
             "",
-            "<i>↩️ Ответьте текстом или фото — уйдёт покупателю в Avito</i>",
+            f"<b>{item}</b>",
+            buyer_s,
+            "",
+            "<i>reply текстом или фото → уйдёт в Avito</i>",
         ]
     )
 
@@ -859,6 +850,8 @@ async def poll_store_messages(
                             chat=chat_meta,
                             msg=m,
                             avito_chat_id=cid,
+                            alert_tg_message_id=tg_mid,
+                            our_user_id=our_uid,
                         )
                     except Exception:
                         log.warning(
