@@ -2615,6 +2615,8 @@ def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(requir
         AVITO_MESSAGES_NOTIFY_ENABLED,
         AVITO_BALANCE_NOTIFY_ENABLED,
         AVITO_BALANCE_THRESHOLD,
+        "avito_ai_reply_enabled",
+        "avito_ai_reply_prompt",
         "telegram_agent_enabled",
         "telegram_agent_chat_id",
         "telegram_agent_user_id",

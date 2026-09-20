@@ -29,6 +29,10 @@ from app.core.avito_notify import (
     send_avito_image_from_telegram,
     send_avito_reply_from_telegram,
 )
+from app.core.avito_ai_reply import (
+    handle_draft_callback as handle_avito_draft_callback,
+    try_handle_edit_followup as try_handle_avito_edit_followup,
+)
 from app.db import Database, UserRow
 
 log = logging.getLogger("agent.telegram")
@@ -486,6 +490,13 @@ async def _handle_message(db: Database, message: dict) -> None:
     if not token:
         return
 
+    # Текст после кнопки «Изменить» черновика Avito.
+    try:
+        if await try_handle_avito_edit_followup(db, bot_token=token, message=message):
+            return
+    except Exception:
+        log.exception("avito edit followup failed")
+
     # Reply на алерт Avito — до агента (работает даже без AI-агента).
     try:
         if await _try_handle_avito_reply(db, message):
@@ -554,18 +565,31 @@ async def _handle_callback(db: Database, callback: dict) -> None:
     user_id = from_user.get("id")
     if chat_id is None:
         return
-    if not _request_allowed(db, chat_id, user_id):
-        await telegram_answer_callback_query(
-            normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or ""),
-            str(callback.get("id") or ""),
-            text="Нет доступа",
-            show_alert=True,
-        )
-        return
 
     token = normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or "")
     data = str(callback.get("data") or "")
     cb_id = str(callback.get("id") or "")
+
+    # Кнопки черновика Avito — до проверки AI-агента.
+    if data.startswith("avito:"):
+        if not _avito_reply_chat_allowed(db, chat_id):
+            await telegram_answer_callback_query(token, cb_id, text="Чат не разрешён", show_alert=True)
+            return
+        try:
+            await handle_avito_draft_callback(db, bot_token=token, callback=callback)
+        except Exception:
+            log.exception("avito draft callback failed")
+            await telegram_answer_callback_query(token, cb_id, text="Ошибка", show_alert=True)
+        return
+
+    if not _request_allowed(db, chat_id, user_id):
+        await telegram_answer_callback_query(
+            token,
+            cb_id,
+            text="Нет доступа",
+            show_alert=True,
+        )
+        return
 
     if data == "agent:confirm":
         await telegram_answer_callback_query(token, cb_id, text="Выполняю…")

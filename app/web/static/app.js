@@ -10363,6 +10363,10 @@
       if (avitoMsgs) avitoMsgs.checked = String(data.avito_messages_notify_enabled || '1') !== '0';
       const avitoBal = document.getElementById('setting-avito_balance_notify_enabled');
       if (avitoBal) avitoBal.checked = String(data.avito_balance_notify_enabled || '1') !== '0';
+      const avitoAi = document.getElementById('setting-avito_ai_reply_enabled');
+      if (avitoAi) avitoAi.checked = String(data.avito_ai_reply_enabled || '1') !== '0';
+      const avitoPrompt = document.getElementById('setting-avito_ai_reply_prompt');
+      if (avitoPrompt) avitoPrompt.value = data.avito_ai_reply_prompt || '';
       const tgAgent = document.getElementById('setting-telegram_agent_enabled');
       if (tgAgent) tgAgent.checked = String(data.telegram_agent_enabled || '0') === '1';
       const cardEnabled = document.getElementById('setting-card_check_enabled');
@@ -10754,6 +10758,8 @@
       avito_orders_notify_enabled: document.getElementById('setting-avito_orders_notify_enabled')?.checked ? '1' : '0',
       avito_messages_notify_enabled: document.getElementById('setting-avito_messages_notify_enabled')?.checked ? '1' : '0',
       avito_balance_notify_enabled: document.getElementById('setting-avito_balance_notify_enabled')?.checked ? '1' : '0',
+      avito_ai_reply_enabled: document.getElementById('setting-avito_ai_reply_enabled')?.checked ? '1' : '0',
+      avito_ai_reply_prompt: document.getElementById('setting-avito_ai_reply_prompt')?.value || '',
       avito_balance_threshold: String(document.getElementById('setting-avito_balance_threshold')?.value || '1000').trim() || '1000',
       avito_notify_telegram_chat_id: document.getElementById('setting-avito_notify_telegram_chat_id')?.value || '',
       telegram_agent_enabled: document.getElementById('setting-telegram_agent_enabled')?.checked ? '1' : '0',

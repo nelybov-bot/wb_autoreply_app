@@ -593,6 +593,33 @@ async def telegram_edit_message_reply_markup(
     await _telegram_api_call(bot_token, "editMessageReplyMarkup", json_payload=payload)
 
 
+async def telegram_edit_message_text(
+    bot_token: str,
+    chat_id: Union[str, int],
+    message_id: int,
+    text: str,
+    *,
+    parse_mode: Optional[str] = None,
+    reply_markup: Optional[dict] = None,
+) -> Tuple[bool, str]:
+    cid = normalize_telegram_chat_id(chat_id)
+    body = (text or "").strip()
+    if not cid or not body:
+        return False, "нет chat_id или текста"
+    payload: dict = {
+        "chat_id": cid,
+        "message_id": int(message_id),
+        "text": body[:TELEGRAM_MAX_MESSAGE_LEN],
+        "disable_web_page_preview": True,
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    ok, err, _, _ = await _telegram_api_call(bot_token, "editMessageText", json_payload=payload)
+    return ok, err
+
+
 def _ru_review_word(n: int) -> str:
     n = abs(int(n))
     mod10, mod100 = n % 10, n % 100

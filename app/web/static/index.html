@@ -1589,6 +1589,12 @@
             <div class="toggle-row"><span class="toggle-label">Avito: новые заказы</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_orders_notify_enabled" checked><span class="switch-track"></span></label></div>
             <div class="toggle-row"><span class="toggle-label">Avito: входящие сообщения</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_messages_notify_enabled" checked><span class="switch-track"></span></label></div>
             <div class="toggle-row"><span class="toggle-label">Avito: низкий рекламный баланс</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_balance_notify_enabled" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Avito: ИИ-черновики ответов <em class="toggle-hint">кнопки Отправить / Изменить / Отклонить</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_ai_reply_enabled" checked><span class="switch-track"></span></label></div>
+          </div>
+          <div class="form-group">
+            <label>Промпт ИИ для ответов Avito</label>
+            <textarea id="setting-avito_ai_reply_prompt" rows="10" placeholder="Пусто = встроенный промпт (доставка, характеристики, цена, скидка 10% от 2 шт…)"></textarea>
+            <div class="form-hint">Черновик уходит в беседку Avito с кнопками. В Avito покупателю — только после «Отправить» (с задержкой ~1–2 мин). Наличие (SKIP) — без черновика.</div>
           </div>
           <div class="form-group">
             <label>Период отчёта</label>
@@ -2059,7 +2065,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=130"></script>
+  <script src="/static/app.js?v=131"></script>
   <script src="/static/card_links_master.js?v=9"></script>
 </body>
 </html>

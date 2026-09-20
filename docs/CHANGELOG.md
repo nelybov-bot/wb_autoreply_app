@@ -5,6 +5,132 @@
 
 ---
 
+## 2026-09-19 — YM: разрез дублей варианта по линейке
+
+- `data/yam_es_split_dups.py` — split по линейке из title, фасовки 1/2/3 вместе
+- APPLY 1874 moves; ~535 связок ≥2 (331 группы по 3)
+
+## 2026-09-19 — YM EUROSTORE: автофикс ошибок (title/description)
+
+- Скрипт `data/yam_es_errors_fix.py`: vendor из названия, разрез групп по бренду, distinctive из текста
+- APPLY: **7891** ops (vendor 3306 / group 791 / params 3794)
+
+## 2026-09-19 — YM EUROSTORE: аудит вкладки «С ошибками»
+
+- Скрипт `data/yam_es_errors_audit.py` — все offer-cards со статусом ошибки
+- 4714 карточек / 7962 warnings; топ: бренд в группе, дубль варианта, пустые отличия
+- Отчёт: `data/yam_es_errors_audit_2026-09-19_1410.*`
+
+## 2026-09-19 — YM EUROSTORE: mass apply связок WB→YM
+
+- Скрипт `data/wb_to_yam_es_mass_apply.py` — запись parameterId=200 по dry-run плану
+- `yam_client.list_offer_mappings`: лимит `offerIds` **100** (API BAD_REQUEST на 200)
+- Итог: **705 OK / 4 FAIL** (709 ops; trial 5 ранее). Fail = разные категории YM в пачке
+- Лог: `data/wb_to_yam_es_MASS_APPLY_2026-09-19_1150.csv`
+
+## 2026-09-15 — OZON SunFlower: остаток «Скоро скроем»
+
+- Новый отчёт 15.09: **102 SKU** → **84** арт.
+- API: 70 без ТН ВЭД (32 код не встал / 38 кода не было), 14 с ТН ВЭД ещё в ЛК
+- TXT: `OZON_SunFlower_маркировка_артикулы_15.09.2026.txt`, `OZON_SunFlower_скоро_скроем_15.09.2026.txt`
+
+## 2026-09-14 — OZON SunFlower: заливка ТН ВЭД
+
+- APPLY 1134 арт. → отправлено **1111**, `tnved_not_found` **23**
+- Verify: **1102/1134** с ТН ВЭД (907 exact, 195 близких, 32 пусто)
+- Лог: `data/ozon_tnved_APPLY_SunFlower_2026-09-14_1456.*`
+
+## 2026-09-14 — OZON SunFlower: артикулы из отчёта маркировки
+
+- Отчёт «Скоро скроем» (1190 SKU) → `offer_id` через API OZON SunFlower
+- TXT на Desktop: `OZON_SunFlower_маркировка_артикулы_14.09.2026.txt` (**1172** арт., колонка под ТН ВЭД)
+
+## 2026-09-14 — Ozon ES: заливка ТН ВЭД (маркировка)
+
+- APPLY 1441 арт. через `/v1/product/attributes/update` + dictionary + poll `import/info`
+- Verify: **1438/1441** с ТН ВЭД (1148 exact, 255 близких, 35 замена по словарю категории, 3 skipped)
+
+## 2026-09-14 — OZON ES: артикулы из отчёта маркировки
+
+- Отчёт «Скоро скроем» (1441 SKU) → `offer_id` через API OZON ES
+- TXT на Desktop: `OZON_ES_маркировка_артикулы_14.09.2026.txt` (колонка под ТН ВЭД)
+
+## 2026-09-13 — Ozon KK: код маркировки + добивка ТН ВЭД
+
+- Аудит: пустой ТН ВЭД **239**; 23536 ABSENT **166**; зависания `false` ~335; обязательный `true` **73**
+- Подобраны/залиты ТН ВЭД (донор категории + справочник); `23536=false` + retouch
+- Остаток ~75 = товары с реальной обязательной маркировкой (ЧЗ), список на Desktop
+
+## 2026-09-13 — Ozon KK: ТН ВЭД из вкладки маркировки
+
+- Отчёт «Скоро скроем» → offer_id; APPLY ТН ВЭД на KK
+- Фикс: ТН ВЭД через справочник (`dictionary_value_id`); префикс-поиск + soft к ближайшему коду категории
+- Итог verify: **1964/2013** с ТН ВЭД, осталось **49** (код не в справочнике категории)
+- `app/core/ozon_bulk_chars.py`; логи `data/ozon_tnved_APPLY_KK_*`
+
+## 2026-09-10 — SunFlower: дубли на модерацию через import
+
+- `data/ozon_duplicates_import_moderation.py` → `/v3/product/import`
+- OZON SunFlower: **151** sent, **148 imported** / 3 skipped (`…1705.*`)
+
+## 2026-09-10 — OZON SunFlower локально + дубли
+
+- В локальный `reviews.db`: магазин `OZON SunFlower` (store_id=16, Client-Id 360045)
+- Выгрузка дублей: **151** / 216 validation-fail → `data/ozon_duplicates_OZON_SunFlower_2026-09-10_1625.*`
+
+## 2026-09-10 — Пустые attrs KK: маркировка false + Тип
+
+- Правило 23536 → `false`; APPLY **215** (verify OK)
+- Тип 8229 / ТН ВЭД: ещё **24** через attributes/update (`5599349018`); 5 Тип + 10 ТН ВЭД без авто-решения
+
+## 2026-09-10 — Партномер KK: import вместо attributes/update
+
+- На «Не создан» `attributes/update` не сохраняет 7236
+- `data/ozon_partnumber_import_kk.py`: `/v3/product/import` → **103** в KK STORE, партномер `5G0601171XQI` подтверждён на выборке
+
+## 2026-09-10 — Пустые attrs KK: партномер только по ошибке
+
+- `ozon_empty_attrs_dryrun.py`: attr 7236 → `5G0601171XQI` только если поле в errors; ИИ партномер не трогает
+- APPLY: **103** товара / 119 полей (103 партномер + 16 ТН ВЭД), task_id `5599253472`…
+
+## 2026-09-10 — Аудит VALIDATION_STATE_FAIL Ozon KK+ES
+
+- CLI `data/ozon_validation_errors_audit.py`: выгрузка + бакеты ошибок
+- KK: **817** fail (было ~2162); дублей **0** / 108 ушли; топ — удалённые фото, пустые attrs, бренд
+- ES: **68** fail, дублей **23**
+
+## 2026-09-10 — Дубли KK: touch attributes → модерация
+
+- CLI `data/ozon_duplicates_touch_moderation.py`: 108 offer_id → переотправка того же free-text атрибута (в основном 4191) через `/v1/product/attributes/update`
+- APPLY KK: **108** ок, task_id `5599142176` / `5599142255` / `5599142311`
+
+## 2026-09-10 — Ozon support CDP: antibot + timeout connect
+
+- `open_chrome_cdp.sh`: старт на `about:blank`; флаг `--seed` копирует cookies/Login Data из обычного Chrome Default в `chrome_cdp_profile` (Chrome 136+ нужен отдельный user-data-dir для 9222)
+- `appeal_duplicates.mjs --cdp`: `connectOverCDP` timeout 180с (много вкладок → handshake >30с)
+
+## 2026-09-10 — Fix: ТН ВЭД парсер (не склейка цифр из описания)
+
+- `normalize_tnved_value`: брать ведущий код (`8518103000`), не все цифры из текста справочника
+- APPLY KK по пустым ТН ВЭД (мода категории): **453** ок, 1526 без донора; `data/ozon_tnved_APPLY_KK_2026-09-10_1433.*`
+
+## 2026-09-10 — Ozon KK: APPLY дозаполнения пустых атрибутов
+
+- Из dry-run отправлено **62** товара / **90** полей (`task_id=5598650904`); бренд не трогали; кривой ТН ВЭД (18 цифр) у `223144` пропущен
+- Лог: `data/ozon_empty_attrs_APPLY_KK_2026-09-10_1419.{json,csv}`
+
+## 2026-09-10 — Ozon KK: dry-run пустых атрибутов (бренд skip, ТН ВЭД если пуст)
+
+- CLI `data/ozon_empty_attrs_dryrun.py`: VALIDATION_STATE_FAIL → пустые поля → правила + словарь + OpenAI пачками; **бренд не трогаем**; ТН ВЭД только если пустой
+- Прогон 100 артикулов KK (~1.5 мин): 62 с предложениями / 91 поле / 146 unresolved (часто ТН ВЭД без доноров в категории)
+- Отчёт: `data/ozon_empty_attrs_dryrun_KK_2026-09-10_1416.{json,csv}`
+
+## 2026-09-10 — Ozon: выгрузка товаров с ошибкой дублей (KK Store)
+
+- CLI `data/ozon_duplicate_errors_export.py`: ключи из `reviews.db`, `VALIDATION_STATE_FAIL` → `product/info/list` → фильтр «дубл» / `SPU_ALREADY_EXISTS_*`
+- Прогон на OZON KK Store (`store_id=15`): 2550 validation fail → **109** дублей; CSV + `articles.txt` (+ копия в `ozon_support_duplicates/`)
+- Рядом (вне web-UI): `ozon_support_duplicates/` — Playwright-цикл обращений в поддержку по этим артикулам
+
 ## 2026-09-09 (позже) — Документы WB: магазины снова по одному, пачка крупнее, TTL каталога 7 дней
 
 - Откат параллельных магазинов (`asyncio.gather` + семафоры) по решению пользователя: каталог одного магазина в памяти ≈ 183 МБ на 12 тыс. карточек (замер), три сразу ≈ 550 МБ при 512 МБ инстанса → риск OOM; выигрыш от параллельности после перехода на пачки почти нулевой
@@ -101,6 +227,12 @@
 
 - Догнали mass apply по плану v2 (`category_only`)
 - Лог: `wb_to_ozon_es_MASS_APPLY_03.09.2026.csv` — 587 OK, 0 FAIL
+
+## 2026-09-20 — Avito: ИИ-черновики ответов в Telegram
+
+- Черновик по входящему тексту + inline: Отправить / Изменить / Отклонить
+- В Avito только после подтверждения, с задержкой 45–120 с
+- Наличие → SKIP (без черновика); промпт настраиваемый
 
 ## 2026-09-04 — Avito: товар/имя в алерте + критический баланс
 

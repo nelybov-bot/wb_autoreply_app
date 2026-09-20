@@ -848,6 +848,25 @@ async def poll_store_messages(
                         avito_chat_id=cid,
                         item_title=chat_item_title(chat_meta),
                     )
+                    try:
+                        from .avito_ai_reply import maybe_send_ai_draft
+
+                        await maybe_send_ai_draft(
+                            db,
+                            bot_token=bot_token,
+                            tg_chat_id=chat_id,
+                            store=store,
+                            chat=chat_meta,
+                            msg=m,
+                            avito_chat_id=cid,
+                        )
+                    except Exception:
+                        log.warning(
+                            "avito ai draft failed store=%s chat=%s",
+                            store.id,
+                            cid,
+                            exc_info=True,
+                        )
                 else:
                     log.warning("avito msg tg fail store=%s chat=%s: %s", store.id, cid, err)
                 await asyncio.sleep(0.25)

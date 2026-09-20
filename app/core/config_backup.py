@@ -24,6 +24,8 @@ RUNTIME_SETTING_KEYS = frozenset({
     "avito_notify_seen_json",
     "avito_tg_reply_map_json",
     "avito_balance_state_json",
+    "avito_ai_draft_map_json",
+    "avito_ai_edit_pending_json",
     "telegram_agent_update_offset",
 })
 
@@ -63,6 +65,8 @@ SETTING_KEYS = (
     "avito_messages_notify_enabled",
     "avito_balance_notify_enabled",
     "avito_balance_threshold",
+    "avito_ai_reply_enabled",
+    "avito_ai_reply_prompt",
     "theme",
     "buyer_chat_reply_from_date",
     "buyer_chat_auto_max_age_days",

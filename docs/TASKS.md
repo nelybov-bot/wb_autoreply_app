@@ -61,7 +61,7 @@
 
 | ID | Задача | Статус | Примечание |
 |----|--------|--------|------------|
-| T-040 | Полная поддержка Яндекс.Маркет | in_progress | Связки: API + dry-run WB→YM EUROSTORE; отзывы/вопросы уже есть |
+| T-040 | Полная поддержка Яндекс.Маркет | in_progress | Mass apply WB→YM EUROSTORE: 705/709 OK; UI card-links YM ещё нет |
 | T-041 | История операций card-links (audit) | todo | Есть общий audit_events |
 | T-042 | Откат связки (undo merge) | todo | Есть disconnect/unlink по отдельности |
 | T-043 | PWA offline mode улучшения | todo | `sw.js` есть, покрытие неизвестно |
@@ -70,6 +70,8 @@
 | T-046 | Ozon: массовая замена ТН ВЭД и бренда в «Характеристиках» | done | `ozon_bulk_chars`, `/api/ozon/bulk-chars/apply` |
 | T-047 | Avito: уведомления о заказах и сообщениях в Telegram | done | `avito_client` + `avito_notify`, опрос ~90 с |
 | T-048 | Avito: алерт низкого баланса + фото в TG↔Avito | done | порог в настройках; одно фото за раз |
+| T-049 | Ozon: массовые обращения в поддержку по дублям карточек | in_progress | Выгрузка + Playwright + touch→модерация 108 SKU (task_id 5599142176…) |
+| T-049b | Avito: ИИ-черновики ответов с кнопками в TG | done | Отправить / Изменить / Отклонить; задержка перед Avito |
 
 ---
 
