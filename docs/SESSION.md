@@ -2,6 +2,19 @@
 
 > Обновлено: 2026-09-22
 
+## (2026-09-22) — Telegram: авто-снятие webhook при Conflict
+
+**Симптом:** журнал заспамлен `getUpdates: Conflict… webhook is active` (~каждые 5 с). Reply в Avito не работают.
+
+**Сделано:** `telegram_delete_webhook` + при старте polling и при Conflict снимаем webhook (cooldown 45 с).
+
+### Handoff
+- **Сделано:** автоheal webhook
+- **Осталось:** push/деплой; если goldenherd снова ставит webhook — будет сниматься сам
+- **Следующий шаг:** push
+
+---
+
 ## (2026-09-22) — Avito AI: генерация выключена по умолчанию
 
 **Запрос:** отрубить генерацию ответов нейронки.

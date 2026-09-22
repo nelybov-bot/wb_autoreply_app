@@ -13,11 +13,13 @@ from app.agent.session import AgentSession, clear_session, get_or_create_session
 from app.agent.tools import AgentContext
 from app.core.telegram_notify import (
     download_telegram_file,
+    is_telegram_webhook_conflict,
     normalize_telegram_bot_token,
     normalize_telegram_chat_id,
     resolve_telegram_chat_id,
     send_telegram_message,
     telegram_answer_callback_query,
+    telegram_delete_webhook,
     telegram_edit_message_reply_markup,
     telegram_get_updates,
     telegram_send_chat_action,
@@ -75,6 +77,23 @@ _context_factory: Optional[Callable[[Database], Optional[AgentContext]]] = None
 _get_db_fn: Optional[Callable[[], Database]] = None
 _loop_task: Optional[asyncio.Task] = None
 _bot_identity: dict[str, object] = {"username": "", "id": 0, "fetched_at": 0.0}
+_webhook_clear_mono: float = 0.0
+_WEBHOOK_CLEAR_COOLDOWN_SEC = 45.0
+
+
+async def _ensure_polling_no_webhook(token: str) -> bool:
+    """Снять webhook, если кто-то снова повесил (иначе getUpdates Conflict)."""
+    global _webhook_clear_mono
+    now = time.monotonic()
+    if now - _webhook_clear_mono < _WEBHOOK_CLEAR_COOLDOWN_SEC:
+        return False
+    _webhook_clear_mono = now
+    ok, err = await telegram_delete_webhook(token, drop_pending_updates=False)
+    if ok:
+        log.info("telegram: webhook снят — включён long polling")
+        return True
+    log.warning("telegram deleteWebhook fail: %s", (err or "")[:200])
+    return False
 
 
 def _is_group_chat(chat: dict) -> bool:
@@ -622,6 +641,7 @@ async def telegram_agent_loop() -> None:
     """Фоновый long polling Telegram Bot API (агент + ответы в Avito)."""
     log.info("Telegram agent loop started")
     idle_sleep = 5.0
+    last_token = ""
     while True:
         try:
             if not _get_db_fn:
@@ -639,6 +659,10 @@ async def telegram_agent_loop() -> None:
                 await asyncio.sleep(idle_sleep)
                 continue
 
+            if token != last_token:
+                last_token = token
+                await _ensure_polling_no_webhook(token)
+
             offset = _load_update_offset(db)
             next_offset = offset + 1 if offset else None
             ok, err, updates = await telegram_get_updates(
@@ -648,7 +672,9 @@ async def telegram_agent_loop() -> None:
                 allowed_updates=["message", "callback_query"],
             )
             if not ok:
-                if err and err != "timeout" and "409" not in err:
+                if is_telegram_webhook_conflict(err or ""):
+                    await _ensure_polling_no_webhook(token)
+                elif err and err != "timeout":
                     log.warning("telegram agent getUpdates: %s", err[:200])
                 await asyncio.sleep(idle_sleep)
                 continue

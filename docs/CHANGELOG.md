@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-09-22 — Telegram: авто-снятие webhook
+
+- При Conflict / старте polling вызывается `deleteWebhook` (иначе getUpdates мёртв)
+- Cooldown 45 с, без drop_pending_updates
+
 ## 2026-09-22 — Avito AI: генерация выкл по умолчанию
 
 - `avito_ai_reply_enabled` только при явном `1`; тумблер UI off; `app.js?v=132`

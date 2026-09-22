@@ -546,6 +546,26 @@ async def telegram_get_updates(
     return True, "", [u for u in result if isinstance(u, dict)]
 
 
+async def telegram_delete_webhook(
+    bot_token: str,
+    *,
+    drop_pending_updates: bool = False,
+) -> Tuple[bool, str]:
+    """Снять webhook — иначе getUpdates (polling) даёт Conflict."""
+    payload = {"drop_pending_updates": bool(drop_pending_updates)}
+    ok, err, _, _ = await _telegram_api_call(
+        bot_token,
+        "deleteWebhook",
+        json_payload=payload,
+    )
+    return ok, err
+
+
+def is_telegram_webhook_conflict(err: str) -> bool:
+    low = (err or "").lower()
+    return "webhook" in low or ("conflict" in low and "getupdates" in low)
+
+
 async def telegram_answer_callback_query(
     bot_token: str,
     callback_query_id: str,
