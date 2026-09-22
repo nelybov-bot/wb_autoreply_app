@@ -446,10 +446,8 @@ _STYLE_APPENDIX = """
 
 
 def ai_reply_enabled(db: Database) -> bool:
-    raw = (db.get_setting(SETTING_ENABLED) or "").strip()
-    if raw == "":
-        return True
-    return raw == "1"
+    """Включено только явно ('1'). По умолчанию выключено."""
+    return (db.get_setting(SETTING_ENABLED) or "").strip() == "1"
 
 
 def get_prompt(db: Database) -> str:

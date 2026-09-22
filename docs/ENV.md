@@ -72,7 +72,7 @@ API `GET /api/settings` возвращает секреты **замаскиро
 | `avito_messages_notify_enabled` | `1` / пусто — уведомления о входящих сообщениях (default вкл.) |
 | `avito_balance_notify_enabled` | `1` / пусто — алерт при низком **рекламном** балансе (default вкл.) |
 | `avito_balance_threshold` | Порог ₽ (default `1000`); Ads `balance`+`bonusBalance` |
-| `avito_ai_reply_enabled` | `1` / пусто — ИИ-черновики ответов Avito в TG с кнопками |
+| `avito_ai_reply_enabled` | `1` — ИИ-черновики Avito в TG; иначе выкл (по умолчанию) |
 | `avito_ai_reply_prompt` | Промпт (пусто = встроенный) |
 | `avito_ai_draft_map_json` | Служебный map черновиков |
 | `avito_ai_edit_pending_json` | Ожидание текста после «Изменить» |

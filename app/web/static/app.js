@@ -10364,7 +10364,7 @@
       const avitoBal = document.getElementById('setting-avito_balance_notify_enabled');
       if (avitoBal) avitoBal.checked = String(data.avito_balance_notify_enabled || '1') !== '0';
       const avitoAi = document.getElementById('setting-avito_ai_reply_enabled');
-      if (avitoAi) avitoAi.checked = String(data.avito_ai_reply_enabled || '1') !== '0';
+      if (avitoAi) avitoAi.checked = String(data.avito_ai_reply_enabled || '0') === '1';
       const avitoPrompt = document.getElementById('setting-avito_ai_reply_prompt');
       if (avitoPrompt) avitoPrompt.value = data.avito_ai_reply_prompt || '';
       const tgAgent = document.getElementById('setting-telegram_agent_enabled');
