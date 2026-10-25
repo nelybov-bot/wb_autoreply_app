@@ -1,0 +1,61 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE / OS
+.vscode/
+.idea/
+.cursor/
+*.swp
+*~
+.DS_Store
+
+# Local data and logs — NEVER commit (API keys, user data). Render uses its own disk.
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/*.bundle
+!data/.gitkeep
+logs/
+!logs/.gitkeep
+*.log
+*.bundle
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.example
+
+# PyInstaller / py2app build output (если появится)
+*.spec
+build/
+dist/
+
+# Not published to git
+docs/
+DEPLOY.md

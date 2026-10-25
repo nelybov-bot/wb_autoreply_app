@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" fill="none">
+  <defs>
+    <linearGradient id="wb" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7c3aed" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#a78bfa" stop-opacity="0.2"/>
+    </linearGradient>
+    <linearGradient id="ozon" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f97316" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#0ea5e9" stop-opacity="0.25"/>
+    </linearGradient>
+    <linearGradient id="ym" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ef4444" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#f87171" stop-opacity="0.15"/>
+    </linearGradient>
+    <filter id="blur" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="90"/>
+    </filter>
+  </defs>
+  <!-- WB-?>4>1=0O D>@<0 (D8>;5B>2K9) -->
+  <ellipse cx="220" cy="280" rx="280" ry="220" fill="url(#wb)" filter="url(#blur)"/>
+  <ellipse cx="180" cy="320" rx="200" ry="180" fill="#7c3aed" fill-opacity="0.12" filter="url(#blur)"/>
+  <!-- Ozon-?>4>1=0O D>@<0 (>@0=6/18@N70) -->
+  <ellipse cx="920" cy="220" rx="320" ry="260" fill="url(#ozon)" filter="url(#blur)"/>
+  <ellipse cx="880" cy="180" rx="220" ry="200" fill="#0ea5e9" fill-opacity="0.1" filter="url(#blur)"/>
+  <!-- /=45:A-?>4>1=0O D>@<0 (:@0A=K9) -->
+  <ellipse cx="580" cy="620" rx="340" ry="240" fill="url(#ym)" filter="url(#blur)"/>
+  <ellipse cx="620" cy="580" rx="200" ry="160" fill="#ef4444" fill-opacity="0.08" filter="url(#blur)"/>
+  <!-- &5=B@0;L=>5 <O3:>5 ?OB=> (>1J548=5=85) -->
+  <ellipse cx="600" cy="380" rx="400" ry="320" fill="#7c3aed" fill-opacity="0.04" filter="url(#blur)"/>
+  <ellipse cx="600" cy="380" rx="320" ry="260" fill="#f97316" fill-opacity="0.04" filter="url(#blur)"/>
+</svg>

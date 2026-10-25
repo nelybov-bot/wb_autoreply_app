@@ -1,0 +1,48 @@
+# Render.com — Blueprint: https://render.com/docs/blueprint-spec
+# После push: Dashboard → Sync / Manual Deploy. Секреты — в Environment (sync: false).
+services:
+  - type: web
+    name: wb-autoreply
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements-web.txt
+    startCommand: uvicorn app.web.server:app --host 0.0.0.0 --port $PORT --loop asyncio --http h11
+    disk:
+      name: app-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.15
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: COOKIE_SECURE
+        value: "1"
+      - key: ADMIN_INIT_PASSWORD
+        sync: false
+      - key: ADMIN_RESET_TOKEN
+        sync: false
+      # HTTP-прокси в РФ для pub.fsa.gov.ru (см. deploy/fsa-proxy/README.md)
+      - key: FSA_PROXY_URL
+        sync: false
+      # Alice warehouse → TMS (см. docs/ENV.md, docs/ALICE_SETUP.md)
+      - key: TMS_BASE_URL
+        value: "https://tmsdesk.ru"
+      - key: TMS_API_TOKEN
+        sync: false
+      - key: TMS_OPERATOR
+        value: "Alice-Warehouse"
+      - key: ALICE_WAREHOUSE_DRY_RUN
+        value: "true"
+      - key: ALICE_MAX_STOCK_CHANGE
+        value: "1000"
+      - key: ALICE_SESSION_TTL_SECONDS
+        value: "1800"
+      - key: ALICE_PENDING_TTL_SECONDS
+        value: "60"
+      - key: ALICE_DEDUP_TTL_SECONDS
+        value: "300"
+      - key: ALICE_SKILL_ID
+        sync: false
+      - key: ALICE_WEBHOOK_SECRET
+        sync: false

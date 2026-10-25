@@ -1,0 +1,790 @@
+"""
+Уведомления в Telegram: мгновенные (отзывы 1–3★, packer_issue) и периодические отчёты.
+Использует Bot API: sendMessage. Без доп. зависимостей — aiohttp.
+"""
+from __future__ import annotations
+
+import asyncio
+import html as html_lib
+import json
+import logging
+import re
+from typing import Any, Optional, Tuple, Union
+
+import aiohttp
+
+log = logging.getLogger("telegram")
+
+TELEGRAM_PARSE_MODE = "HTML"
+
+TELEGRAM_API_BASE = "https://api.telegram.org/bot{token}"
+TELEGRAM_FILE_BASE = "https://api.telegram.org/file/bot{token}/{path}"
+TELEGRAM_API = TELEGRAM_API_BASE + "/sendMessage"
+TELEGRAM_API_PHOTO = TELEGRAM_API_BASE + "/sendPhoto"
+_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]{20,}$")
+TELEGRAM_CAPTION_MAX = 1024
+
+SETTING_REPORT_CHAT_ID = "telegram_report_chat_id"
+SETTING_CARD_ERROR_CHAT_ID = "telegram_card_error_chat_id"
+SETTING_OZON_ALERTS_CHAT_ID = "ozon_alerts_telegram_chat_id"
+SETTING_WB_ALERTS_CHAT_ID = "wb_alerts_telegram_chat_id"
+SETTING_BANNED_CARDS_CHAT_ID = "wb_banned_cards_telegram_chat_id"
+SETTING_AVITO_CHAT_ID = "avito_notify_telegram_chat_id"
+SETTING_AGENT_CHAT_ID = "telegram_agent_chat_id"
+
+_CHAT_ID_SETTING_KEYS = (
+    "telegram_chat_id",
+    SETTING_REPORT_CHAT_ID,
+    SETTING_CARD_ERROR_CHAT_ID,
+    SETTING_OZON_ALERTS_CHAT_ID,
+    SETTING_WB_ALERTS_CHAT_ID,
+    SETTING_BANNED_CARDS_CHAT_ID,
+    SETTING_AVITO_CHAT_ID,
+    SETTING_AGENT_CHAT_ID,
+)
+
+
+TELEGRAM_MAX_MESSAGE_LEN = 4096
+
+
+def escape_tg_html(text: str) -> str:
+    """Экранирование для parse_mode=HTML."""
+    return html_lib.escape((text or "").strip() or "—")
+
+
+def tg_blockquote(text: str) -> str:
+    return f"<blockquote>{escape_tg_html(text)}</blockquote>"
+
+
+def template_uses_html(template: str) -> bool:
+    return bool(
+        re.search(r"</?(?:b|i|blockquote|code|pre|u|s)>", template or "", re.I)
+    )
+
+
+def is_plain_telegram_template(template: str) -> bool:
+    """Шаблон без HTML-тегов — подменяем на форматированный по умолчанию."""
+    t = (template or "").strip()
+    return bool(t) and not template_uses_html(t)
+
+
+def normalize_telegram_bot_token(raw: str) -> str:
+    """
+    Токен от @BotFather: 123456789:AAH...
+    Убирает пробелы, префикс Bot и URL, если вставили целиком.
+    """
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    m = re.search(r"bot(\d+:[A-Za-z0-9_-]+)", s, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    if s.lower().startswith("bot "):
+        s = s[4:].strip()
+    elif s.lower().startswith("bot"):
+        s = s[3:].strip()
+    return s.strip()
+
+
+def is_plausible_telegram_token(token: str) -> bool:
+    return bool(_TOKEN_RE.match(normalize_telegram_bot_token(token)))
+
+
+def telegram_migrate_chat_id(data: dict) -> Optional[int]:
+    """Новый chat_id, если Telegram перевёл группу в супергруппу."""
+    params = data.get("parameters")
+    if not isinstance(params, dict):
+        return None
+    raw = params.get("migrate_to_chat_id")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def persist_migrated_chat_id(db, old_chat_id: Union[str, int], new_chat_id: int) -> int:
+    """Обновляет в настройках все поля chat_id, совпадающие со старым значением."""
+    old_s = str(old_chat_id).strip()
+    new_s = str(int(new_chat_id))
+    if not old_s or old_s == new_s:
+        return 0
+    updated = 0
+    for key in _CHAT_ID_SETTING_KEYS:
+        if (db.get_setting(key) or "").strip() == old_s:
+            db.set_setting(key, new_s)
+            updated += 1
+    return updated
+
+
+def describe_telegram_api_error(resp_status: int, data: dict) -> str:
+    """Понятное описание ошибки Telegram для UI и логов."""
+    code = int(data.get("error_code") or resp_status or 0)
+    desc = str(data.get("description") or "ошибка Telegram").strip()
+    low = desc.lower()
+    if code == 404 or resp_status == 404 or low == "not found":
+        return (
+            "неверный токен бота (404 Not Found). "
+            "Скопируйте токен у @BotFather — формат 123456789:AAH..., без слова Bot и без URL"
+        )
+    if code == 401 or "unauthorized" in low:
+        return "токен бота отозван или недействителен — получите новый у @BotFather"
+    if "chat not found" in low:
+        return (
+            f"чат не найден ({desc}). Проверьте chat_id: бот должен быть в чате, "
+            "для группы ID обычно отрицательный (например -100...)"
+        )
+    if "bot was blocked" in low:
+        return "бот заблокирован пользователем — разблокируйте бота в Telegram"
+    if "group chat was upgraded" in low:
+        migrated = telegram_migrate_chat_id(data)
+        if migrated is not None:
+            return (
+                f"группа стала супергруппой — укажите chat_id {migrated} "
+                f"(Telegram вернул migrate_to_chat_id)"
+            )
+        return "группа стала супергруппой — обновите chat_id (часто -100...)"
+    return desc
+
+
+async def _telegram_api_call(
+    token: str,
+    method: str,
+    *,
+    json_payload: Optional[dict] = None,
+    timeout_sec: float = 15,
+) -> Tuple[bool, str, dict, int]:
+    """Вызов метода Bot API. Возвращает (ok, error_text, json_body, http_status)."""
+    tok = normalize_telegram_bot_token(token)
+    if not tok:
+        return False, "токен бота не задан", {}, 0
+    url = TELEGRAM_API_BASE.format(token=tok) + "/" + method.lstrip("/")
+    http_timeout = max(5.0, float(timeout_sec))
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                json=json_payload,
+                timeout=aiohttp.ClientTimeout(total=http_timeout),
+            ) as resp:
+                raw = await resp.text()
+                http_status = int(resp.status)
+                try:
+                    data = json.loads(raw) if raw else {}
+                except json.JSONDecodeError:
+                    if http_status != 200:
+                        return False, f"HTTP {http_status}: {raw[:200]}", {}, http_status
+                    return False, "неверный ответ Telegram", {}, http_status
+                if not isinstance(data, dict):
+                    return False, "неверный ответ Telegram", {}, http_status
+                if not data.get("ok"):
+                    err = describe_telegram_api_error(http_status, data)
+                    return False, err, data, http_status
+                return True, "", data, http_status
+    except asyncio.TimeoutError:
+        log.warning("Telegram API %s: timeout (%.0fs)", method, http_timeout)
+        return False, "timeout", {}, 0
+    except Exception as e:
+        log.warning("Telegram API %s: %s", method, e)
+        return False, str(e), {}, 0
+
+
+async def verify_telegram_bot_token(token: str) -> Tuple[bool, str, Optional[dict[str, Any]]]:
+    """Проверка токена через getMe."""
+    tok = normalize_telegram_bot_token(token)
+    if not tok:
+        return False, "токен бота не задан", None
+    if not is_plausible_telegram_token(tok):
+        return (
+            False,
+            "неверный формат токена (ожидается 123456789:AAH... от @BotFather)",
+            None,
+        )
+    ok, err, data, _ = await _telegram_api_call(tok, "getMe")
+    if not ok:
+        return False, err, None
+    result = data.get("result")
+    return True, "", result if isinstance(result, dict) else None
+
+
+async def test_telegram_delivery(
+    bot_token: str,
+    chat_id: str,
+    *,
+    text: str = (
+        "<b>✅ Тест MarketAI</b>\n\n"
+        "Telegram настроен. <i>Форматирование HTML работает.</i>"
+    ),
+    db=None,
+) -> Tuple[bool, str, Optional[dict[str, Any]]]:
+    """getMe + пробное сообщение в чат."""
+    ok, err, bot = await verify_telegram_bot_token(bot_token)
+    if not ok:
+        return False, err, bot
+    cid = normalize_telegram_chat_id(chat_id)
+    if not cid:
+        return False, "chat_id не задан", bot
+    sent_ok, sent_err, _ = await send_telegram_message(
+        bot_token, chat_id, text, parse_mode=TELEGRAM_PARSE_MODE, db=db
+    )
+    if not sent_ok:
+        return False, sent_err, bot
+    return True, "", bot
+
+
+def normalize_telegram_chat_id(chat_id: Union[str, int]) -> Union[str, int]:
+    """Числовой chat_id — int (группы с минусом); @channel — строка."""
+    if isinstance(chat_id, int):
+        return chat_id
+    cid = (chat_id or "").strip().replace("\u200b", "").replace(" ", "")
+    if not cid:
+        return ""
+    if cid.startswith("@"):
+        return cid
+    if cid.lstrip("-").isdigit():
+        return int(cid)
+    return cid
+
+
+def resolve_telegram_chat_id(db, purpose: str) -> str:
+    """
+    purpose: default — отзывы; report — отчёт; card_error — карточки;
+    ozon_alerts — важные уведомления Ozon; wb_alerts — важные новости WB;
+    banned_cards — заблокированные карточки WB; avito — заказы/сообщения Avito.
+    Для остальных пустое значение = чат по умолчанию (telegram_chat_id).
+    """
+    default = (db.get_setting("telegram_chat_id") or "").strip()
+    if purpose == "default":
+        return default
+    keys = {
+        "report": SETTING_REPORT_CHAT_ID,
+        "card_error": SETTING_CARD_ERROR_CHAT_ID,
+        "ozon_alerts": SETTING_OZON_ALERTS_CHAT_ID,
+        "wb_alerts": SETTING_WB_ALERTS_CHAT_ID,
+        "banned_cards": SETTING_BANNED_CARDS_CHAT_ID,
+        "avito": SETTING_AVITO_CHAT_ID,
+    }
+    key = keys.get(purpose, SETTING_CARD_ERROR_CHAT_ID)
+    specific = (db.get_setting(key) or "").strip()
+    return specific or default
+
+
+async def send_telegram_message(
+    bot_token: str,
+    chat_id: Union[str, int],
+    text: str,
+    *,
+    parse_mode: Optional[str] = None,
+    reply_markup: Optional[dict] = None,
+    reply_to_message_id: Optional[int] = None,
+    db=None,
+) -> Tuple[bool, str, Optional[int]]:
+    """
+    Отправка в Telegram. Возвращает (успех, описание ошибки, message_id).
+    Telegram Bot API часто отвечает HTTP 200 с ok=false — проверяем поле ok в JSON.
+    """
+    token = normalize_telegram_bot_token(bot_token)
+    cid = normalize_telegram_chat_id(chat_id)
+    body = (text or "").strip()
+    if not token or not cid or not body:
+        return False, "не заданы токен, chat_id или текст", None
+    if not is_plausible_telegram_token(token):
+        return (
+            False,
+            "неверный формат токена (ожидается 123456789:AAH... от @BotFather)",
+            None,
+        )
+    url = TELEGRAM_API.format(token=token)
+    chunks = [
+        body[i : i + TELEGRAM_MAX_MESSAGE_LEN]
+        for i in range(0, len(body), TELEGRAM_MAX_MESSAGE_LEN)
+    ]
+    last_message_id: Optional[int] = None
+    try:
+        async with aiohttp.ClientSession() as session:
+            for chunk_i, chunk in enumerate(chunks):
+                sent = False
+                err = ""
+                for attempt in range(2):
+                    payload: dict = {
+                        "chat_id": cid,
+                        "text": chunk,
+                        "disable_web_page_preview": True,
+                    }
+                    if parse_mode:
+                        payload["parse_mode"] = parse_mode
+                    if reply_markup and chunk_i == 0:
+                        payload["reply_markup"] = reply_markup
+                    if reply_to_message_id is not None and chunk_i == 0:
+                        try:
+                            payload["reply_to_message_id"] = int(reply_to_message_id)
+                        except (TypeError, ValueError):
+                            pass
+                    async with session.post(
+                        url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+                    ) as resp:
+                        raw = await resp.text()
+                        try:
+                            data = json.loads(raw) if raw else {}
+                        except json.JSONDecodeError:
+                            if resp.status != 200:
+                                err = f"HTTP {resp.status}: {raw[:200]}"
+                                log.warning("Telegram sendMessage failed: %s", err)
+                                return False, err, None
+                            return False, "неверный ответ Telegram", None
+                        if isinstance(data, dict) and data.get("ok"):
+                            sent = True
+                            result = data.get("result") if isinstance(data.get("result"), dict) else {}
+                            mid = result.get("message_id")
+                            try:
+                                last_message_id = int(mid) if mid is not None else last_message_id
+                            except (TypeError, ValueError):
+                                pass
+                            break
+                        err = describe_telegram_api_error(int(resp.status), data)
+                        migrated = telegram_migrate_chat_id(data) if isinstance(data, dict) else None
+                        if attempt == 0 and migrated is not None and str(cid) != str(migrated):
+                            old_cid = cid
+                            cid = migrated
+                            n = persist_migrated_chat_id(db, old_cid, migrated) if db is not None else 0
+                            log.warning(
+                                "Telegram chat_id migrated %s -> %s (settings updated: %s)",
+                                old_cid,
+                                migrated,
+                                n,
+                            )
+                            continue
+                        log.warning(
+                            "Telegram sendMessage failed: HTTP %s chat_id=%s %s",
+                            resp.status,
+                            cid,
+                            err[:240],
+                        )
+                        return False, err, None
+                if not sent:
+                    return False, err or "не удалось отправить в Telegram", None
+        return True, "", last_message_id
+    except Exception as e:
+        log.exception("Telegram send_telegram_message: %s", e)
+        return False, str(e), None
+
+
+async def send_telegram_photo(
+    bot_token: str,
+    chat_id: Union[str, int],
+    photo_bytes: bytes,
+    *,
+    caption: str = "",
+    parse_mode: Optional[str] = None,
+    filename: str = "photo.jpg",
+    reply_to_message_id: Optional[int] = None,
+    db=None,
+) -> Tuple[bool, str, Optional[int]]:
+    """Отправка одного фото. Возвращает (успех, ошибка, message_id)."""
+    token = normalize_telegram_bot_token(bot_token)
+    cid = normalize_telegram_chat_id(chat_id)
+    if not token or not cid or not photo_bytes:
+        return False, "не заданы токен, chat_id или фото", None
+    if not is_plausible_telegram_token(token):
+        return (
+            False,
+            "неверный формат токена (ожидается 123456789:AAH... от @BotFather)",
+            None,
+        )
+    url = TELEGRAM_API_PHOTO.format(token=token)
+    cap = (caption or "").strip()
+    if len(cap) > TELEGRAM_CAPTION_MAX:
+        cap = cap[: TELEGRAM_CAPTION_MAX - 1] + "…"
+
+    async def _post(target_cid: str) -> Tuple[bool, str, Optional[int], Optional[Any]]:
+        form = aiohttp.FormData()
+        form.add_field("chat_id", str(target_cid))
+        form.add_field(
+            "photo",
+            photo_bytes,
+            filename=filename or "photo.jpg",
+            content_type="image/jpeg",
+        )
+        if cap:
+            form.add_field("caption", cap)
+            if parse_mode:
+                form.add_field("parse_mode", parse_mode)
+        if reply_to_message_id is not None:
+            try:
+                form.add_field("reply_to_message_id", str(int(reply_to_message_id)))
+            except (TypeError, ValueError):
+                pass
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url, data=form, timeout=aiohttp.ClientTimeout(total=60)
+            ) as resp:
+                raw = await resp.text()
+                try:
+                    data = json.loads(raw) if raw else {}
+                except json.JSONDecodeError:
+                    return False, f"HTTP {resp.status}: {raw[:200]}", None, None
+                if isinstance(data, dict) and data.get("ok"):
+                    result = data.get("result") if isinstance(data.get("result"), dict) else {}
+                    mid = result.get("message_id")
+                    try:
+                        return True, "", int(mid) if mid is not None else None, data
+                    except (TypeError, ValueError):
+                        return True, "", None, data
+                err = describe_telegram_api_error(int(resp.status), data)
+                return False, err, None, data if isinstance(data, dict) else None
+
+    try:
+        for attempt in range(2):
+            ok, err, mid, data = await _post(cid)
+            if ok:
+                return True, "", mid
+            migrated = telegram_migrate_chat_id(data) if isinstance(data, dict) else None
+            if attempt == 0 and migrated is not None and str(cid) != str(migrated):
+                old_cid = cid
+                cid = migrated
+                n = persist_migrated_chat_id(db, old_cid, migrated) if db is not None else 0
+                log.warning(
+                    "Telegram chat_id migrated %s -> %s (settings updated: %s)",
+                    old_cid,
+                    migrated,
+                    n,
+                )
+                continue
+            log.warning("Telegram sendPhoto failed: chat_id=%s %s", cid, (err or "")[:240])
+            return False, err or "не удалось отправить фото", None
+        return False, err or "не удалось отправить фото", None
+    except Exception as e:
+        log.exception("Telegram send_telegram_photo: %s", e)
+        return False, str(e), None
+
+
+async def download_url_bytes(
+    url: str,
+    *,
+    max_bytes: int = 20 * 1024 * 1024,
+    timeout_sec: float = 45,
+) -> Tuple[bool, str, bytes, str]:
+    """Скачать URL. Возвращает (ok, error, bytes, content_type)."""
+    src = (url or "").strip()
+    if not src.startswith("http"):
+        return False, "некорректный URL", b"", ""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                src, timeout=aiohttp.ClientTimeout(total=timeout_sec)
+            ) as resp:
+                if resp.status >= 400:
+                    return False, f"HTTP {resp.status}", b"", ""
+                ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
+                data = await resp.read()
+                if not data:
+                    return False, "пустой ответ", b"", ctype
+                if len(data) > max_bytes:
+                    return False, f"файл больше {max_bytes} байт", b"", ctype
+                return True, "", data, ctype
+    except Exception as e:
+        return False, str(e)[:200], b"", ""
+
+
+async def download_telegram_file(
+    bot_token: str,
+    file_id: str,
+    *,
+    max_bytes: int = 20 * 1024 * 1024,
+) -> Tuple[bool, str, bytes, str]:
+    """Скачать файл бота по file_id. Возвращает (ok, error, bytes, filename_hint)."""
+    token = normalize_telegram_bot_token(bot_token)
+    fid = (file_id or "").strip()
+    if not token or not fid:
+        return False, "нет токена или file_id", b"", ""
+    ok, err, data, _ = await _telegram_api_call(
+        token,
+        "getFile",
+        json_payload={"file_id": fid},
+        timeout_sec=20,
+    )
+    if not ok:
+        return False, err or "getFile failed", b"", ""
+    result = data.get("result") if isinstance(data.get("result"), dict) else {}
+    path = str(result.get("file_path") or "").strip()
+    if not path:
+        return False, "нет file_path", b"", ""
+    file_url = TELEGRAM_FILE_BASE.format(token=token, path=path)
+    ok2, err2, raw, _ctype = await download_url_bytes(file_url, max_bytes=max_bytes)
+    if not ok2:
+        return False, err2, b"", ""
+    name = path.rsplit("/", 1)[-1] or "photo.jpg"
+    return True, "", raw, name
+
+
+async def telegram_get_updates(
+    bot_token: str,
+    *,
+    offset: Optional[int] = None,
+    timeout: int = 25,
+    allowed_updates: Optional[list[str]] = None,
+) -> Tuple[bool, str, list[dict]]:
+    """Long polling getUpdates. Возвращает (ok, error, updates)."""
+    poll = max(0, min(int(timeout), 50))
+    payload: dict = {"timeout": poll}
+    if offset is not None:
+        payload["offset"] = int(offset)
+    if allowed_updates:
+        payload["allowed_updates"] = allowed_updates
+    ok, err, data, _ = await _telegram_api_call(
+        bot_token,
+        "getUpdates",
+        json_payload=payload,
+        timeout_sec=poll + 20,
+    )
+    if not ok:
+        return False, err, []
+    result = data.get("result")
+    if not isinstance(result, list):
+        return False, "неверный ответ getUpdates", []
+    return True, "", [u for u in result if isinstance(u, dict)]
+
+
+async def telegram_delete_webhook(
+    bot_token: str,
+    *,
+    drop_pending_updates: bool = False,
+) -> Tuple[bool, str]:
+    """Снять webhook — иначе getUpdates (polling) даёт Conflict."""
+    payload = {"drop_pending_updates": bool(drop_pending_updates)}
+    ok, err, _, _ = await _telegram_api_call(
+        bot_token,
+        "deleteWebhook",
+        json_payload=payload,
+    )
+    return ok, err
+
+
+def is_telegram_webhook_conflict(err: str) -> bool:
+    low = (err or "").lower()
+    return "webhook" in low or ("conflict" in low and "getupdates" in low)
+
+
+async def telegram_answer_callback_query(
+    bot_token: str,
+    callback_query_id: str,
+    *,
+    text: str = "",
+    show_alert: bool = False,
+) -> Tuple[bool, str]:
+    payload: dict = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text[:200]
+    if show_alert:
+        payload["show_alert"] = True
+    ok, err, _, _ = await _telegram_api_call(bot_token, "answerCallbackQuery", json_payload=payload)
+    return ok, err
+
+
+async def telegram_send_chat_action(
+    bot_token: str,
+    chat_id: Union[str, int],
+    action: str = "typing",
+) -> None:
+    cid = normalize_telegram_chat_id(chat_id)
+    if not cid:
+        return
+    await _telegram_api_call(
+        bot_token,
+        "sendChatAction",
+        json_payload={"chat_id": cid, "action": action},
+    )
+
+
+async def telegram_edit_message_reply_markup(
+    bot_token: str,
+    chat_id: Union[str, int],
+    message_id: int,
+    *,
+    reply_markup: Optional[dict] = None,
+) -> None:
+    cid = normalize_telegram_chat_id(chat_id)
+    if not cid:
+        return
+    payload: dict = {"chat_id": cid, "message_id": int(message_id)}
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    await _telegram_api_call(bot_token, "editMessageReplyMarkup", json_payload=payload)
+
+
+async def telegram_edit_message_text(
+    bot_token: str,
+    chat_id: Union[str, int],
+    message_id: int,
+    text: str,
+    *,
+    parse_mode: Optional[str] = None,
+    reply_markup: Optional[dict] = None,
+) -> Tuple[bool, str]:
+    cid = normalize_telegram_chat_id(chat_id)
+    body = (text or "").strip()
+    if not cid or not body:
+        return False, "нет chat_id или текста"
+    payload: dict = {
+        "chat_id": cid,
+        "message_id": int(message_id),
+        "text": body[:TELEGRAM_MAX_MESSAGE_LEN],
+        "disable_web_page_preview": True,
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    ok, err, _, _ = await _telegram_api_call(bot_token, "editMessageText", json_payload=payload)
+    return ok, err
+
+
+def _ru_review_word(n: int) -> str:
+    n = abs(int(n))
+    mod10, mod100 = n % 10, n % 100
+    if mod10 == 1 and mod100 != 11:
+        return "отзыв"
+    if mod10 in (2, 3, 4) and mod100 not in (12, 13, 14):
+        return "отзыва"
+    return "отзывов"
+
+
+def format_activity_report(
+    stats: dict,
+    *,
+    period_label: str,
+    interval: str,
+    include_card_errors: bool = True,
+    banned_cards_summary: Optional[dict] = None,
+) -> str:
+    """Текст периодического отчёта для Telegram (HTML)."""
+    from .wb_banned_cards import format_banned_cards_report_block
+
+    reviews = int(stats.get("reviews_sent") or 0)
+    questions = int(stats.get("questions_sent") or 0)
+    wb_chats = int(stats.get("wb_chat_replies") or 0)
+    ozon_chats = int(stats.get("ozon_chat_replies") or 0)
+    chat_total = int(stats.get("chat_replies_total") or 0) or (wb_chats + ozon_chats)
+    removed = int(stats.get("ozon_products_removed") or 0)
+    added = int(stats.get("ozon_products_added") or 0)
+    kept = int(stats.get("ozon_promo_kept") or 0)
+    skipped_data = int(stats.get("ozon_promo_skipped_data") or 0)
+    card_errors = int(stats.get("card_errors") or 0)
+    cert_products = int(stats.get("ozon_cert_requests_products") or 0)
+    hidden_products = int(stats.get("ozon_hidden_products") or 0)
+    threat_hide = int(stats.get("ozon_threat_hide_products") or 0)
+    threat_fine = int(stats.get("ozon_threat_fine_products") or 0)
+    threat_fine_by_amount = stats.get("ozon_threat_fine_by_amount") or {}
+    interval_ru = "за час" if interval == "hour" else "за сутки"
+    period = escape_tg_html(period_label)
+    lines = [
+        f"<b>📊 Отчёт MarketAI</b> <i>({escape_tg_html(interval_ru)})</i>",
+        "",
+        f"<b>Период:</b> {period}",
+        "",
+        f"<b>Отзывы:</b> отвечено {reviews}",
+    ]
+    if interval == "day":
+        by_rating = stats.get("reviews_by_rating") or {}
+        if isinstance(by_rating, dict):
+            for star in sorted((int(k) for k in by_rating.keys() if int(k) >= 1), reverse=True):
+                cnt = int(by_rating.get(star) or by_rating.get(str(star)) or 0)
+                if cnt <= 0:
+                    continue
+                lines.append(
+                    f"  ⭐{star} — {cnt} {_ru_review_word(cnt)} за сутки"
+                )
+    lines.extend([
+        f"<b>Вопросы:</b> отвечено {questions}",
+        f"<b>Чаты с покупателями:</b> {chat_total} "
+        f"<i>(WB: {wb_chats}, Ozon: {ozon_chats})</i>",
+    ])
+    ozon_lines: list[str] = []
+    if cert_products:
+        ozon_lines.append(
+            f"<b>Запросы документов {escape_tg_html(interval_ru)}:</b> {cert_products} товаров"
+        )
+    if threat_hide:
+        ozon_lines.append(
+            f"<b>Угроза скрытия {escape_tg_html(interval_ru)}:</b> {threat_hide} товаров"
+        )
+    if threat_fine:
+        ozon_lines.append(
+            f"<b>Угроза со штрафом {escape_tg_html(interval_ru)}:</b> {threat_fine} товаров"
+        )
+        if isinstance(threat_fine_by_amount, dict):
+            for amt, cnt in sorted(threat_fine_by_amount.items(), key=lambda x: -int(x[1]))[:5]:
+                ozon_lines.append(f"  · {escape_tg_html(amt)} — {int(cnt)}")
+    if hidden_products:
+        ozon_lines.append(
+            f"<b>Снято с продажи {escape_tg_html(interval_ru)}:</b> {hidden_products} товаров"
+        )
+    if ozon_lines:
+        lines.append("")
+        lines.append("<b>Ozon:</b>")
+        lines.extend(ozon_lines)
+    if added or kept or skipped_data:
+        lines.append(
+            f"<b>Акции Ozon:</b> −{removed} / +{added}, оставлено {kept}, пропусков данных {skipped_data}"
+        )
+    elif removed:
+        lines.append(f"<b>Акции Ozon:</b> снято товаров {removed}")
+    if include_card_errors:
+        lines.append(f"<b>Ошибки в карточках:</b> {card_errors}")
+    lines.extend(format_banned_cards_report_block(banned_cards_summary))
+    return "\n".join(lines)
+
+
+async def send_activity_report(
+    bot_token: str,
+    chat_id: str,
+    stats: dict,
+    *,
+    period_label: str,
+    interval: str,
+    include_card_errors: bool = True,
+    banned_cards_summary: Optional[dict] = None,
+    db=None,
+) -> Tuple[bool, str]:
+    body = format_activity_report(
+        stats,
+        period_label=period_label,
+        interval=interval,
+        include_card_errors=include_card_errors,
+        banned_cards_summary=banned_cards_summary,
+    )
+    ok, err, _ = await send_telegram_message(
+        bot_token, chat_id, body, parse_mode=TELEGRAM_PARSE_MODE, db=db
+    )
+    return ok, err
+
+
+async def send_review_to_chat(
+    bot_token: str,
+    chat_id: str,
+    product_title: str,
+    review_text: str,
+    *,
+    store_name: Optional[str] = None,
+    alert_title: str = "Упаковка / пересорт",
+    db=None,
+) -> Tuple[bool, str]:
+    """Мгновенное уведомление по отзыву (упаковка, пересорт)."""
+    token = normalize_telegram_bot_token(bot_token)
+    cid = (chat_id or "").strip()
+    if not token or not cid:
+        return False, "не заданы токен или chat_id"
+
+    title = (product_title or "").strip() or "—"
+    text = (review_text or "").strip() or "—"
+    parts = [f"<b>⚠️ {escape_tg_html(alert_title)}</b>", ""]
+    if store_name:
+        parts.append(f"<b>Магазин:</b> {escape_tg_html(store_name)}")
+    parts.append(f"<b>Товар:</b> {escape_tg_html(title)}")
+    parts.append("")
+    parts.append("<b>Отзыв:</b>")
+    parts.append(tg_blockquote(text))
+    body = "\n".join(parts)
+    ok, err, _ = await send_telegram_message(token, cid, body, parse_mode=TELEGRAM_PARSE_MODE, db=db)
+    return ok, err

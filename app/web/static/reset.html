@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2563eb">
+  <title>MarketAI — Reset</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="shortcut icon" href="/static/icon.svg">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    body.reset-page { display: block; overflow: auto; }
+    body.reset-page::after { opacity: 0.42; animation: none; }
+    body.reset-page .bg-noise { opacity: 0.02; }
+    .reset-page .reset-wrap {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      position: relative;
+      z-index: 1;
+    }
+    .reset-card {
+      width: min(440px, 100%);
+      background: rgba(255,255,255,0.78);
+      border: 1px solid rgba(226,232,240,0.9);
+      border-radius: 16px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.10);
+      padding: 28px;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+    .reset-title { margin-bottom: 8px; }
+    .reset-title h1 { margin: 0; font-size: 1.55rem; color: #0f172a; font-family: var(--font-heading, system-ui); letter-spacing: -0.02em; }
+    .reset-sub {
+      color: #64748b;
+      font-size: 0.9rem;
+      margin: 0 0 20px;
+      line-height: 1.4;
+    }
+    .reset-card .form-group { margin-bottom: 16px; }
+    .reset-card .form-group label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: #475569;
+      margin-bottom: 6px;
+    }
+    .reset-card .form-group input {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 1rem;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: #fff;
+      color: #0f172a;
+      box-sizing: border-box;
+    }
+    .reset-card .form-group input:focus {
+      outline: none;
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+    }
+    .reset-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 20px;
+      flex-wrap: wrap;
+    }
+    .reset-actions .btn { min-width: 100px; }
+    .reset-actions .btn-secondary {
+      background: rgba(15, 23, 42, 0.06);
+      color: #0f172a;
+      border: 1px solid rgba(15, 23, 42, 0.10);
+      box-shadow: none;
+      text-decoration: none;
+    }
+    .reset-err { color: #b91c1c; font-size: 0.9rem; margin-top: 12px; display: none; }
+    .reset-ok { color: #065f46; font-size: 0.9rem; margin-top: 12px; display: none; }
+    .reset-links { margin-top: 16px; font-size: 0.85rem; }
+    .reset-links a { color: #2563eb; text-decoration: none; }
+    .reset-links a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body class="reset-page">
+  <div class="bg-noise" aria-hidden="true"></div>
+  <div class="reset-wrap">
+    <div class="reset-card">
+      <div class="reset-title">
+        <h1>Сброс пароля <span class="title-gradient">admin</span></h1>
+      </div>
+      <p class="reset-sub">Нужен токен из Render: <b>ADMIN_RESET_TOKEN</b>. Введите его и новый пароль для admin.</p>
+
+      <div class="form-group">
+        <label for="reset-token">Токен сброса</label>
+        <input type="password" id="reset-token" autocomplete="off" placeholder="значение ADMIN_RESET_TOKEN">
+      </div>
+      <div class="form-group">
+        <label for="reset-password">Новый пароль admin</label>
+        <input type="password" id="reset-password" autocomplete="new-password" placeholder="новый пароль">
+      </div>
+      <div class="reset-actions">
+        <a class="btn btn-secondary" href="/login">Назад</a>
+        <button type="button" class="btn btn-primary" id="btn-reset">Сброс</button>
+      </div>
+      <div class="reset-err" id="reset-err"></div>
+      <div class="reset-ok" id="reset-ok">Готово. Теперь войди на странице входа.</div>
+      <div class="reset-links">
+        <a href="/login">Вход</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var errEl = document.getElementById('reset-err');
+      var okEl = document.getElementById('reset-ok');
+      var tokenEl = document.getElementById('reset-token');
+      var passEl = document.getElementById('reset-password');
+      var btnEl = document.getElementById('btn-reset');
+
+      function showError(msg) {
+        okEl.style.display = 'none';
+        errEl.textContent = msg || 'Ошибка';
+        errEl.style.display = 'block';
+      }
+
+      function doReset() {
+        errEl.style.display = 'none';
+        okEl.style.display = 'none';
+        var token = (tokenEl.value || '').trim();
+        var password = passEl.value || '';
+        if (!token || !password) {
+          showError('Введите токен и новый пароль');
+          return;
+        }
+        if (password.length < 6) {
+          showError('Пароль минимум 6 символов');
+          return;
+        }
+        btnEl.disabled = true;
+        fetch('/api/auth/admin-reset', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reset_token: token, new_password: password })
+        })
+          .then(function (res) {
+            if (res.ok) {
+              okEl.style.display = 'block';
+              btnEl.disabled = false;
+              return;
+            }
+            return res.json().then(function (j) { return Promise.reject(j.detail || res.statusText); });
+          })
+          .catch(function (msg) {
+            showError(typeof msg === 'string' ? msg : 'Ошибка сброса');
+            btnEl.disabled = false;
+          });
+      }
+
+      if (btnEl) btnEl.addEventListener('click', doReset);
+      if (passEl) passEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') doReset(); });
+      if (tokenEl) setTimeout(function () { tokenEl.focus(); }, 100);
+    })();
+  </script>
+</body>
+</html>

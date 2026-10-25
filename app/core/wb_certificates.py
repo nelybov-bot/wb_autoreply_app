@@ -1,0 +1,908 @@
+"""Заполнение сертификатов/деклараций WB по артикулу продавца (cards/list + cards/update)."""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+
+from .compliance_docs import (
+    CertInputRow,
+    detect_doc_type,
+    doc_type_label,
+    filter_cert_rows,
+    parse_certificates_file,
+    parse_certificates_text,
+    _norm_vendor,
+)
+from .net import HttpStatusError, NetworkUnavailableError
+from .wb_content_client import WbContentClient
+
+log = logging.getLogger("wb.certificates")
+
+ProgressCb = Callable[[int, int, str], None]
+
+_RE_DOC_NUMBER = re.compile(
+    r"номер.*(сертификат|декларац)|(сертификат|декларац).*номер|"
+    r"регистрационн.*номер|номер.*документ|документ.*номер",
+    re.I,
+)
+_RE_VALID_UNTIL = re.compile(
+    r"действует.*до|действител(ен|ьн[оа]).*до|годен.*до|"
+    r"дата.*окончан|окончан.*действ|срок.*действ|конец.*действ",
+    re.I,
+)
+_RE_REG_DATE = re.compile(
+    r"дата.*регистрац|регистрац.*дата|дата.*начала|начал.*действ|"
+    r"действует\s*от|дата.*выдач|дата.*принят",
+    re.I,
+)
+
+_ROLE_NUMBER = "number"
+_ROLE_REG_DATE = "reg_date"
+_ROLE_VALID_UNTIL = "valid_until"
+
+# Карточек в одном cards/update. WB принимает до 3000; берём с запасом по
+# размеру тела — 500 строк уходят одним запросом. Если WB пачку отвергнет,
+# update_cards_batched поделит её пополам и найдёт виновную карточку.
+_CERT_BATCH_SIZE = 1000
+
+# Имя поля → к какому типу документа оно относится
+_SCOPE_PREFIXES = {
+    "declaration": ("decl",),
+    "certificate": ("cert",),
+    "both": ("decl", "cert"),
+    "generic": ("generic",),
+}
+
+
+@dataclass
+class CertFieldMap:
+    subject_id: int
+    decl_number_id: Optional[int] = None
+    decl_reg_date_id: Optional[int] = None
+    decl_valid_until_id: Optional[int] = None
+    cert_number_id: Optional[int] = None
+    cert_reg_date_id: Optional[int] = None
+    cert_valid_until_id: Optional[int] = None
+    generic_number_id: Optional[int] = None
+    generic_reg_date_id: Optional[int] = None
+    generic_valid_until_id: Optional[int] = None
+    # имена полей (для отчёта)
+    decl_number_name: str = ""
+    cert_number_name: str = ""
+    generic_number_name: str = ""
+
+    def ok(self) -> bool:
+        return bool(
+            self.decl_number_id or self.cert_number_id or self.generic_number_id
+            or self.decl_reg_date_id or self.cert_reg_date_id or self.generic_reg_date_id
+            or self.decl_valid_until_id or self.cert_valid_until_id or self.generic_valid_until_id
+        )
+
+
+@dataclass
+class CertApplyRowResult:
+    vendor_code: str
+    nm_id: int = 0
+    status: str = "pending"  # ok | skipped | error | not_found | no_fields
+    message: str = ""
+    doc_type: str = ""
+    mapped_fields: Optional[List[str]] = None
+
+
+def _charc_id(ch: dict) -> int:
+    for key in ("charcID", "charcId", "id"):
+        try:
+            val = int(ch.get(key) or 0)
+        except (TypeError, ValueError):
+            val = 0
+        if val:
+            return val
+    return 0
+
+
+def _charc_name(ch: dict) -> str:
+    return str(ch.get("name") or "").strip()
+
+
+def _match_charc(ch: dict, pattern: re.Pattern[str]) -> bool:
+    return bool(pattern.search(_charc_name(ch)))
+
+
+def _charc_role(name: str) -> Optional[str]:
+    """Роль поля по имени. Срок действия проверяется раньше даты регистрации:
+    «Дата окончания действия декларации» — это срок, а не дата начала."""
+    if _RE_VALID_UNTIL.search(name):
+        return _ROLE_VALID_UNTIL
+    if _RE_REG_DATE.search(name):
+        return _ROLE_REG_DATE
+    if _RE_DOC_NUMBER.search(name):
+        return _ROLE_NUMBER
+    return None
+
+
+def _charc_scope(name: str) -> str:
+    """declaration | certificate | both | generic — по упоминанию типа документа в имени."""
+    low = name.casefold()
+    has_decl = "декларац" in low
+    has_cert = "сертификат" in low
+    if has_decl and has_cert:
+        return "both"
+    if has_decl:
+        return "declaration"
+    if has_cert:
+        return "certificate"
+    return "generic"
+
+
+def _assign_charc(m: CertFieldMap, cid: int, name: str) -> None:
+    """Заполняет слот карты полей. Первое подходящее поле выигрывает —
+    иначе поле срока действия перетирает уже найденную дату регистрации."""
+    role = _charc_role(name)
+    if not role:
+        return
+    for prefix in _SCOPE_PREFIXES[_charc_scope(name)]:
+        attr = f"{prefix}_{role}_id"
+        if getattr(m, attr, None):
+            continue
+        setattr(m, attr, cid)
+        if role == _ROLE_NUMBER:
+            setattr(m, f"{prefix}_number_name", name)
+
+
+def _map_fields_from_charcs(charcs: List[dict]) -> CertFieldMap:
+    subject_id = 0
+    for ch in charcs:
+        try:
+            subject_id = int(ch.get("subjectID") or ch.get("subjectId") or 0)
+        except (TypeError, ValueError):
+            subject_id = 0
+        if subject_id:
+            break
+    m = CertFieldMap(subject_id=subject_id)
+    for ch in charcs:
+        if not isinstance(ch, dict):
+            continue
+        cid = _charc_id(ch)
+        if cid:
+            _assign_charc(m, cid, _charc_name(ch))
+    return m
+
+
+def _map_fields_from_card(card: dict) -> CertFieldMap:
+    try:
+        subject_id = int(card.get("subjectID") or card.get("subjectId") or 0)
+    except (TypeError, ValueError):
+        subject_id = 0
+    m = CertFieldMap(subject_id=subject_id)
+    for ch in card.get("characteristics") or []:
+        if not isinstance(ch, dict):
+            continue
+        cid = _charc_id(ch)
+        if cid:
+            _assign_charc(m, cid, _charc_name(ch))
+    return m
+
+
+def _empty_char_value(existing: Any) -> Any:
+    if isinstance(existing, list):
+        return []
+    return ""
+
+
+def _build_cert_patch_ids(row: CertInputRow, fmap: CertFieldMap) -> Tuple[Dict[int, Any], List[str]]:
+    """Патч characteristics: правильные поля по типу документа + очистка «чужого» типа."""
+    doc_number = str(row.doc_number or "").strip()
+    doc_type = detect_doc_type(doc_number)
+    patches: Dict[int, Any] = {}
+    mapped: List[str] = []
+
+    def _set(cid: Optional[int], val: str, label: str) -> bool:
+        if not cid or not val:
+            return False
+        if cid in patches:
+            # одно поле не может получить и номер, и дату — приоритет у первой записи
+            return False
+        patches[cid] = val
+        mapped.append(label)
+        return True
+
+    def _clear(cid: Optional[int], label: str) -> None:
+        if not cid or cid in patches:
+            return
+        patches[cid] = ""
+        mapped.append(f"очистка: {label}")
+
+    def _generic_ok_for_decl() -> bool:
+        name = (fmap.generic_number_name or "").casefold()
+        if not fmap.generic_number_id:
+            return False
+        if "декларац" in name and "сертификат" in name:
+            return True
+        return "декларац" in name or "сертификат" not in name
+
+    def _generic_ok_for_cert() -> bool:
+        name = (fmap.generic_number_name or "").casefold()
+        if not fmap.generic_number_id:
+            return False
+        if "декларац" in name and "сертификат" in name:
+            return True
+        return "сертификат" in name or "декларац" not in name
+
+    wrote_number = False
+    if doc_type == "declaration":
+        if fmap.decl_number_id:
+            wrote_number = _set(fmap.decl_number_id, doc_number, f"декларация номер ({fmap.decl_number_name or fmap.decl_number_id})")
+        elif _generic_ok_for_decl():
+            wrote_number = _set(fmap.generic_number_id, doc_number, f"номер ({fmap.generic_number_name or fmap.generic_number_id})")
+        elif fmap.decl_number_id is None and fmap.generic_number_id and not _generic_ok_for_decl():
+            mapped.append(
+                f"⚠ нет поля декларации; «{fmap.generic_number_name}» похоже на сертификат — номер не записан"
+            )
+        if fmap.decl_valid_until_id:
+            _set(fmap.decl_valid_until_id, row.valid_until, "декларация действует до")
+        elif fmap.generic_valid_until_id:
+            _set(fmap.generic_valid_until_id, row.valid_until, "действует до")
+        if fmap.decl_reg_date_id:
+            _set(fmap.decl_reg_date_id, row.reg_date, "декларация дата рег.")
+        elif fmap.generic_reg_date_id:
+            _set(fmap.generic_reg_date_id, row.reg_date, "дата рег.")
+        if wrote_number:
+            _clear(fmap.cert_number_id, "номер сертификата")
+            _clear(fmap.cert_reg_date_id, "дата сертификата")
+            _clear(fmap.cert_valid_until_id, "срок сертификата")
+    elif doc_type == "certificate":
+        if fmap.cert_number_id:
+            wrote_number = _set(fmap.cert_number_id, doc_number, f"сертификат номер ({fmap.cert_number_name or fmap.cert_number_id})")
+        elif _generic_ok_for_cert():
+            wrote_number = _set(fmap.generic_number_id, doc_number, f"номер ({fmap.generic_number_name or fmap.generic_number_id})")
+        if fmap.cert_valid_until_id:
+            _set(fmap.cert_valid_until_id, row.valid_until, "сертификат действует до")
+        elif fmap.generic_valid_until_id:
+            _set(fmap.generic_valid_until_id, row.valid_until, "действует до")
+        if fmap.cert_reg_date_id:
+            _set(fmap.cert_reg_date_id, row.reg_date, "сертификат дата рег.")
+        elif fmap.generic_reg_date_id:
+            _set(fmap.generic_reg_date_id, row.reg_date, "дата рег.")
+        if wrote_number:
+            _clear(fmap.decl_number_id, "номер декларации")
+            _clear(fmap.decl_reg_date_id, "дата декларации")
+            _clear(fmap.decl_valid_until_id, "срок декларации")
+    else:
+        cid = fmap.generic_number_id or fmap.decl_number_id or fmap.cert_number_id
+        _set(cid, doc_number, "номер (тип не определён)")
+        uid = fmap.generic_valid_until_id or fmap.decl_valid_until_id or fmap.cert_valid_until_id
+        _set(uid, row.valid_until, "действует до")
+        rid = fmap.generic_reg_date_id or fmap.decl_reg_date_id or fmap.cert_reg_date_id
+        _set(rid, row.reg_date, "дата рег.")
+
+    if not patches:
+        mapped.append(
+            f"⚠ в категории нет полей для «{doc_type_label(doc_type)}» — карточка не изменена"
+        )
+    elif row.reg_date and not any(str(v).strip() == row.reg_date for v in patches.values()):
+        mapped.append("⚠ в категории нет поля даты регистрации — дата начала не записана")
+
+    return patches, mapped
+
+
+def _value_nonempty(val: Any) -> bool:
+    if val is None:
+        return False
+    if isinstance(val, list):
+        return any(str(x).strip() for x in val)
+    return bool(str(val).strip())
+
+
+def _char_value(val: str, existing: Any) -> Any:
+    if isinstance(existing, list):
+        return [val] if val else (existing if existing is not None else [])
+    return val
+
+
+def _dim_wb_value(v: Any) -> int | float:
+    n = round(float(v), 2)
+    if n == int(n):
+        return int(n)
+    return n
+
+
+def _dim_cm_value(v: Any) -> int:
+    """Габариты упаковки в см — WB принимает целые числа."""
+    import math
+
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        n = 0.0
+    if n <= 0:
+        return 1
+    return max(1, int(math.floor(n + 0.5)))
+
+
+def collect_named_field_char_ids(charcs: List[dict]) -> Set[int]:
+    """ID характеристик с existNamedField — их нельзя дублировать в characteristics[]."""
+    out: Set[int] = set()
+    for ch in charcs:
+        if not isinstance(ch, dict) or not ch.get("existNamedField"):
+            continue
+        cid = _charc_id(ch)
+        if cid:
+            out.add(cid)
+    return out
+
+
+def _is_packaging_dimension_char(ch: dict) -> bool:
+    """Габариты упаковки — только в dimensions, не в characteristics[]."""
+    name = _charc_name(ch).casefold()
+    if name in (
+        "height", "length", "width", "weight", "weightbrutto",
+        "длина", "ширина", "высота", "вес",
+    ):
+        return True
+    if any(
+        k in name
+        for k in ("длина упаков", "ширина упаков", "высота упаков", "вес упаков", "вес брутто")
+    ):
+        return True
+    return False
+
+
+def sanitize_wb_card_update_payload(
+    payload: dict,
+    *,
+    strip_char_ids: Optional[Set[int]] = None,
+) -> dict:
+    """Привести тело cards/update к формату WB: без isValid, только id/value в characteristics."""
+    has_dims = isinstance(payload.get("dimensions"), dict) and bool(payload.get("dimensions"))
+    out: Dict[str, Any] = {
+        "nmID": int(payload.get("nmID") or payload.get("nmId") or 0),
+        "vendorCode": str(payload.get("vendorCode") or ""),
+        "brand": str(payload.get("brand") or ""),
+        "title": str(payload.get("title") or "")[:60],
+        "description": str(payload.get("description") or ""),
+        "kizMarked": bool(payload.get("kizMarked", False)),
+    }
+    dims = payload.get("dimensions")
+    if isinstance(dims, dict) and dims:
+        clean_dims: Dict[str, Any] = {}
+        for key in ("length", "width", "height", "weightBrutto"):
+            if dims.get(key) is None:
+                clean_dims = {}
+                break
+            if key == "weightBrutto":
+                clean_dims[key] = _dim_wb_value(dims[key])
+            else:
+                clean_dims[key] = _dim_cm_value(dims[key])
+        if clean_dims:
+            out["dimensions"] = clean_dims
+    chars_out: List[dict] = []
+    seen_char_ids: Set[int] = set()
+    for ch in payload.get("characteristics") or []:
+        if not isinstance(ch, dict):
+            continue
+        cid = _charc_id(ch)
+        if not cid or cid in seen_char_ids:
+            continue
+        if strip_char_ids and cid in strip_char_ids:
+            continue
+        val = ch.get("value")
+        if val is None:
+            val = ""
+        chars_out.append({"id": cid, "value": val})
+        seen_char_ids.add(cid)
+    out["characteristics"] = chars_out
+    out["sizes"] = _normalize_sizes({"sizes": payload.get("sizes") or []})
+    return out
+
+
+def _format_wb_error(e: HttpStatusError) -> str:
+    if isinstance(e, NetworkUnavailableError):
+        return e.body
+    body = (e.body or "").strip()
+    if not body:
+        return f"Ошибка WB {e.status}"
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return f"Ошибка WB {e.status}: {body[:350]}"
+    if isinstance(data, dict):
+        parts: List[str] = []
+        for key in ("errorText", "message", "detail", "title"):
+            v = data.get(key)
+            if v:
+                parts.append(str(v))
+        extra = data.get("additionalErrors") or data.get("errors")
+        if isinstance(extra, list):
+            parts.extend(str(x) for x in extra[:4])
+        elif extra:
+            parts.append(str(extra))
+        if parts:
+            return f"Ошибка WB {e.status}: {'; '.join(parts)}"[:400]
+    return f"Ошибка WB {e.status}: {body[:350]}"
+
+
+def _normalize_sizes(card: dict) -> List[dict]:
+    out: List[dict] = []
+    for sz in card.get("sizes") or []:
+        if not isinstance(sz, dict):
+            continue
+        item: Dict[str, Any] = {}
+        if sz.get("chrtID") is not None:
+            try:
+                item["chrtID"] = int(sz["chrtID"])
+            except (TypeError, ValueError):
+                pass
+        if sz.get("techSize") is not None:
+            item["techSize"] = str(sz["techSize"])
+        wb_size = str(sz.get("wbSize") or "").strip()
+        if wb_size:
+            item["wbSize"] = wb_size
+        skus = [str(x).strip() for x in (sz.get("skus") or []) if str(x).strip()]
+        if skus:
+            item["skus"] = skus
+        if item.get("chrtID") or item.get("skus"):
+            out.append(item)
+    return out
+
+
+def build_card_update_payload(
+    card: dict,
+    row: CertInputRow,
+    fmap: CertFieldMap,
+    *,
+    patch_ids: Optional[Dict[int, Any]] = None,
+) -> dict:
+    """Собирает тело cards/update с сохранением остальных полей карточки."""
+    if patch_ids is None:
+        patch_ids, _ = _build_cert_patch_ids(row, fmap)
+    nm = int(card.get("nmID") or card.get("nmId") or 0)
+    payload: Dict[str, Any] = {
+        "nmID": nm,
+        "vendorCode": str(card.get("vendorCode") or card.get("supplierVendorCode") or row.vendor_code),
+        "brand": str(card.get("brand") or ""),
+        "title": str(card.get("title") or ""),
+        "description": str(card.get("description") or ""),
+    }
+    payload["kizMarked"] = bool(card.get("kizMarked", False))
+
+    dims = card.get("dimensions")
+    if isinstance(dims, dict) and dims:
+        payload["dimensions"] = {
+            k: dims[k]
+            for k in ("length", "width", "height", "weightBrutto")
+            if dims.get(k) is not None
+        }
+    has_dims = isinstance(payload.get("dimensions"), dict) and bool(payload.get("dimensions"))
+
+    patch_ids = dict(patch_ids or {})
+    chars_out: List[dict] = []
+    seen: Set[int] = set()
+    for ch in card.get("characteristics") or []:
+        if not isinstance(ch, dict):
+            continue
+        cid = _charc_id(ch)
+        if not cid:
+            continue
+        if has_dims and _is_packaging_dimension_char(ch):
+            continue
+        val = ch.get("value")
+        if cid in patch_ids:
+            pval = patch_ids[cid]
+            if pval == "" or pval is None:
+                val = _empty_char_value(val)
+            elif pval:
+                val = _char_value(str(pval), val)
+        chars_out.append({"id": cid, "value": val})
+        seen.add(cid)
+
+    for cid, pval in patch_ids.items():
+        if not cid or cid in seen:
+            continue
+        if pval == "" or pval is None:
+            chars_out.append({"id": cid, "value": ""})
+        elif pval:
+            chars_out.append({"id": cid, "value": pval})
+
+    payload["characteristics"] = chars_out
+    payload["sizes"] = _normalize_sizes(card)
+    return sanitize_wb_card_update_payload(payload)
+
+
+def build_card_char_patches_payload(
+    card: dict,
+    patches: Dict[int, Any],
+    *,
+    vendor_code: str = "",
+    strip_char_ids: Optional[Set[int]] = None,
+) -> dict:
+    """cards/update с подстановкой произвольных characteristics по id."""
+    nm = int(card.get("nmID") or card.get("nmId") or 0)
+    vc = str(
+        card.get("vendorCode")
+        or card.get("supplierVendorCode")
+        or vendor_code
+        or ""
+    )
+    payload: Dict[str, Any] = {
+        "nmID": nm,
+        "vendorCode": vc,
+        "brand": str(card.get("brand") or ""),
+        "title": str(card.get("title") or ""),
+        "description": str(card.get("description") or ""),
+    }
+    payload["kizMarked"] = bool(card.get("kizMarked", False))
+
+    dims = card.get("dimensions")
+    if isinstance(dims, dict) and dims:
+        payload["dimensions"] = {
+            k: dims[k]
+            for k in ("length", "width", "height", "weightBrutto")
+            if dims.get(k) is not None
+        }
+    has_dims = isinstance(payload.get("dimensions"), dict) and bool(payload.get("dimensions"))
+
+    chars_out: List[dict] = []
+    seen: Set[int] = set()
+    for ch in card.get("characteristics") or []:
+        if not isinstance(ch, dict):
+            continue
+        cid = _charc_id(ch)
+        if not cid:
+            continue
+        if has_dims and _is_packaging_dimension_char(ch):
+            continue
+        if strip_char_ids and cid in strip_char_ids:
+            continue
+        val = ch.get("value")
+        if cid in patches and patches[cid] is not None and _value_nonempty(patches[cid]):
+            val = _char_value(patches[cid], val)
+        chars_out.append({"id": cid, "value": val})
+        seen.add(cid)
+
+    for cid, pval in patches.items():
+        if cid and cid not in seen and pval is not None and _value_nonempty(pval):
+            chars_out.append({"id": int(cid), "value": pval})
+
+    payload["characteristics"] = chars_out
+    payload["sizes"] = _normalize_sizes(card)
+    return sanitize_wb_card_update_payload(payload)
+
+
+async def _load_field_maps(
+    client: WbContentClient,
+    cards: List[dict],
+    cache: Dict[int, CertFieldMap],
+) -> None:
+    subjects: Set[int] = set()
+    for card in cards:
+        try:
+            sid = int(card.get("subjectID") or card.get("subjectId") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        if sid:
+            subjects.add(sid)
+    def _map_from_own_cards(sid: int) -> CertFieldMap:
+        """Запасной вариант: поля берём из характеристик уже загруженных карточек."""
+        for card in cards:
+            try:
+                cs = int(card.get("subjectID") or card.get("subjectId") or 0)
+            except (TypeError, ValueError):
+                cs = 0
+            if cs == sid:
+                fmap = _map_fields_from_card(card)
+                if fmap.ok():
+                    return fmap
+        return CertFieldMap(subject_id=sid)
+
+    for sid in sorted(subjects):
+        if sid in cache:
+            continue
+        try:
+            charcs = await client.get_subject_charcs(sid)
+            fmap = _map_fields_from_charcs(charcs)
+            if not fmap.ok():
+                fmap = _map_from_own_cards(sid)
+            cache[sid] = fmap
+        except HttpStatusError as e:
+            # в т.ч. NetworkUnavailableError: схему категории не получили —
+            # работаем по полям карточки, а не роняем весь магазин
+            log.warning("WB charcs subject %s: %s", sid, (e.body or "")[:200])
+            cache[sid] = _map_from_own_cards(sid)
+        await asyncio.sleep(0.65)
+
+
+async def apply_certificates_for_store(
+    api_key: str,
+    *,
+    rows: List[CertInputRow],
+    dry_run: bool = False,
+    store_id: Optional[int] = None,
+    db: Any = None,
+    refresh_catalog: bool = False,
+    progress_cb: Optional[ProgressCb] = None,
+) -> dict:
+    """Сопоставляет артикулы с карточками WB и обновляет поля сертификата."""
+    from .packaging_dims import (
+        _build_card_index,
+        _fetch_full_catalog_from_wb,
+        _load_wb_cards_for_compare,
+        _lookup_card,
+    )
+
+    client = WbContentClient(api_key, timeout_s=120.0)
+    vendor_codes = list(dict.fromkeys(_norm_vendor(r.vendor_code) for r in rows if _norm_vendor(r.vendor_code)))
+
+    if progress_cb:
+        progress_cb(0, max(len(rows), 1), "Загрузка каталога WB…")
+
+    field_cache: Dict[int, CertFieldMap] = {}
+    matched_cards: List[dict] = []
+    row_cards: List[Tuple[CertInputRow, Optional[dict]]] = []
+
+    if store_id and db is not None:
+        by_vendor, by_nm_id, by_barcode, _meta = await _load_wb_cards_for_compare(
+            client,
+            vendor_codes,
+            store_id=store_id,
+            db=db,
+            force_refresh=refresh_catalog,
+            # каталог обновляется только по кнопке — иначе новые артикулы
+            # запускали полную перезакачку посреди отправки
+            auto_reload_on_miss=False,
+            progress_cb=progress_cb,
+        )
+    else:
+        cards, _meta = await _fetch_full_catalog_from_wb(client, progress_cb=progress_cb)
+        by_vendor, by_nm_id, by_barcode = _build_card_index(cards)
+        del cards
+
+    for row in rows:
+        card = _lookup_card(by_vendor, by_nm_id, by_barcode, row.vendor_code)
+        row_cards.append((row, card))
+        if card is not None:
+            matched_cards.append(card)
+
+    # каталог целиком больше не нужен: дальше работаем только с найденными
+    # карточками, остальные 11.5 тыс. можно отдать сборщику мусора
+    del by_vendor, by_nm_id, by_barcode
+
+    await _load_field_maps(client, matched_cards, field_cache)
+
+    results: List[CertApplyRowResult] = []
+    updates: List[dict] = []
+    pending_results: List[CertApplyRowResult] = []
+    total = len(rows)
+    done = 0
+
+    for row, card in row_cards:
+        done += 1
+        if not card:
+            results.append(CertApplyRowResult(
+                vendor_code=row.vendor_code,
+                status="not_found",
+                message="Артикул не найден в каталоге магазина",
+            ))
+            if progress_cb:
+                progress_cb(done, total, f"Не найден: {row.vendor_code}")
+            continue
+
+        nm = int(card.get("nmID") or card.get("nmId") or 0)
+        try:
+            sid = int(card.get("subjectID") or card.get("subjectId") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        fmap = field_cache.get(sid) or _map_fields_from_card(card)
+        if not fmap.ok():
+            results.append(CertApplyRowResult(
+                vendor_code=row.vendor_code,
+                nm_id=nm,
+                status="no_fields",
+                message="В категории не найдены поля сертификата/декларации",
+            ))
+            if progress_cb:
+                progress_cb(done, total, f"Нет полей: {row.vendor_code}")
+            continue
+
+        patch_ids, mapped = _build_cert_patch_ids(row, fmap)
+        doc_type = detect_doc_type(row.doc_number)
+        if not patch_ids:
+            results.append(CertApplyRowResult(
+                vendor_code=row.vendor_code,
+                nm_id=nm,
+                status="no_fields",
+                message=f"В категории нет полей для «{doc_type_label(doc_type)}»",
+                doc_type=doc_type,
+                mapped_fields=mapped,
+            ))
+            if progress_cb:
+                progress_cb(done, total, f"Нет полей: {row.vendor_code}")
+            continue
+        payload = build_card_update_payload(card, row, fmap, patch_ids=patch_ids)
+        if not payload.get("sizes"):
+            results.append(CertApplyRowResult(
+                vendor_code=row.vendor_code,
+                nm_id=nm,
+                status="error",
+                message="В карточке нет размеров (chrtID/skus) для обновления",
+            ))
+            if progress_cb:
+                progress_cb(done, total, f"Нет sizes: {row.vendor_code}")
+            continue
+
+        updates.append(payload)
+        preview_msg = "Будет отправлено"
+        if dry_run:
+            parts = [doc_type_label(doc_type)]
+            if mapped:
+                parts.append("; ".join(mapped))
+            preview_msg = " · ".join(parts)
+
+        res_row = CertApplyRowResult(
+            vendor_code=row.vendor_code,
+            nm_id=nm,
+            status="ok" if not dry_run else "preview",
+            message=preview_msg if dry_run else "Отправка…",
+            doc_type=doc_type,
+            mapped_fields=mapped,
+        )
+        pending_results.append(res_row)
+        results.append(res_row)
+        if progress_cb:
+            progress_cb(done, total, f"Подготовлено: {row.vendor_code}")
+
+    sent = 0
+    errors: List[dict] = []
+    if not dry_run and updates:
+        def _send_progress(cur: int, tot: int, detail: str) -> None:
+            if progress_cb:
+                progress_cb(total, total, f"Отправка на WB: {detail}")
+
+        sent, send_errors = await client.update_cards_batched(
+            updates, batch_size=_CERT_BATCH_SIZE, progress_cb=_send_progress
+        )
+
+        # один и тот же артикул может встретиться в таблице дважды — ошибку
+        # получают все его строки, а не только последняя
+        res_by_nm: Dict[int, List[CertApplyRowResult]] = {}
+        for payload, res in zip(updates, pending_results):
+            nm = int(payload.get("nmID") or 0)
+            if nm:
+                res_by_nm.setdefault(nm, []).append(res)
+
+        failed_nm: Set[int] = set()
+        for err in send_errors:
+            try:
+                nm = int(err.get("nm_id") or 0)
+            except (TypeError, ValueError):
+                nm = 0
+            err_status = int(err.get("status") or 0)
+            err_body = str(err.get("body") or "")
+            msg = _format_wb_error(
+                NetworkUnavailableError(err_status, err_body)
+                if err_status == 504
+                else HttpStatusError(err_status, err_body)
+            )
+            hit_rows = res_by_nm.get(nm) or []
+            if hit_rows:
+                failed_nm.add(nm)
+            for res in hit_rows:
+                res.status = "error"
+                res.message = msg
+            errors.append({
+                "vendor_code": err.get("vendor_code") or (hit_rows[0].vendor_code if hit_rows else ""),
+                "nm_id": nm,
+                "status": err.get("status"),
+                "body": str(err.get("body") or "")[:500],
+            })
+            log.warning("WB cards/update %s nm=%s: %s", err.get("vendor_code"), nm, msg)
+
+        for payload, res in zip(updates, pending_results):
+            nm = int(payload.get("nmID") or 0)
+            if nm not in failed_nm and res.status != "error":
+                res.message = "Отправлено"
+
+    ok_n = sum(1 for r in results if r.status in ("ok", "preview"))
+    return {
+        "dry_run": dry_run,
+        "catalog": {
+            "cards_count": int(_meta.get("cards_loaded") or _meta.get("cards_count") or 0),
+            "catalog_at": str(_meta.get("catalog_at") or ""),
+            "cache_hit": _meta.get("cache_hit"),
+            "not_found_in_cache": int(_meta.get("not_found_in_cache") or 0),
+        },
+        "parsed": len(rows),
+        "cards_found": len({id(c) for c in matched_cards}),
+        "prepared": len(updates),
+        "sent": sent,
+        "errors": errors,
+        "rows": [
+            {
+                "vendor_code": r.vendor_code,
+                "nm_id": r.nm_id,
+                "status": r.status,
+                "message": r.message,
+                "doc_type": r.doc_type,
+                "mapped_fields": r.mapped_fields or [],
+            }
+            for r in results
+        ],
+    }
+
+
+async def apply_certificates_multi_store(
+    stores: List[Tuple[int, str, str]],
+    *,
+    rows: List[CertInputRow],
+    dry_run: bool = False,
+    db: Any = None,
+    refresh_catalog: bool = False,
+    progress_cb: Optional[ProgressCb] = None,
+) -> dict:
+    """stores: (store_id, store_name, api_key). Магазины обрабатываются по одному:
+    каталог магазина занимает в памяти ~180 МБ на 12 тыс. карточек."""
+    out_stores: List[dict] = []
+    total_stores = len(stores)
+    row_total = max(len(rows), 1)
+    grand_total = max(total_stores * row_total, 1)
+
+    for i, (store_id, store_name, api_key) in enumerate(stores):
+        store_offset = i * row_total
+
+        def _cb(
+            cur: int,
+            tot: int,
+            detail: str,
+            _offset=store_offset,
+            _name=store_name,
+            _si=i,
+        ) -> None:
+            if progress_cb:
+                safe_tot = max(int(tot or 0), 1)
+                safe_cur = max(0, min(int(cur or 0), safe_tot))
+                progress_cb(
+                    _offset + int(safe_cur * row_total / safe_tot),
+                    grand_total,
+                    f"Магазин {_si + 1}/{total_stores} · {_name}: {detail}",
+                )
+
+        if progress_cb:
+            progress_cb(
+                store_offset,
+                grand_total,
+                f"Магазин {i + 1}/{total_stores}: {store_name}…",
+            )
+
+        try:
+            part = await apply_certificates_for_store(
+                api_key,
+                rows=rows,
+                dry_run=dry_run,
+                store_id=store_id,
+                db=db,
+                refresh_catalog=refresh_catalog,
+                progress_cb=_cb if progress_cb else None,
+            )
+            part["store_id"] = store_id
+            part["store_name"] = store_name
+            out_stores.append(part)
+        except HttpStatusError as e:
+            out_stores.append({
+                "store_id": store_id,
+                "store_name": store_name,
+                "error": str(e.body or e)[:400],
+                "rows": [],
+            })
+        except Exception as e:
+            log.exception("wb certificates store %s: %s", store_id, e)
+            out_stores.append({
+                "store_id": store_id,
+                "store_name": store_name,
+                "error": str(e)[:400],
+                "rows": [],
+            })
+
+    return {"stores": out_stores}

@@ -1,0 +1,2071 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#2563eb">
+  <title>MarketAI</title>
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="shortcut icon" href="/static/icon.svg">
+  <link rel="apple-touch-icon" href="/static/icon.svg">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+  <link rel="stylesheet" href="/static/styles.css?v=49">
+  <link rel="stylesheet" href="/static/fx-widgets.css?v=5">
+</head>
+<body>
+  <script>try{if(localStorage.getItem('ui_sidebar_expanded')==='1')document.body.classList.add('sidebar-expanded')}catch(e){}</script>
+  <div class="bg-noise" aria-hidden="true"></div>
+  <div class="brand-watermarks" aria-hidden="true" hidden>
+    <span class="wm wm-wb">WB</span>
+    <span class="wm wm-ozon">OZON</span>
+    <span class="wm wm-ym">ЯМ</span>
+  </div>
+  <div class="app-header-util" hidden aria-hidden="true">
+    <div class="fx-lamp fx-lamp--header" id="fx-lamp" aria-label="Тема оформления">
+      <div class="fx-lamp__wire" aria-hidden="true"></div>
+      <button type="button" class="fx-lamp__cord-hit" id="fx-lamp-cord" aria-label="Потянуть за шнур — сменить тему" title="Потянуть за шнур — сменить тему"></button>
+      <svg class="fx-lamp__svg" viewBox="0 0 40 52" width="36" height="46" aria-hidden="true">
+        <ellipse class="fx-lamp__glow-el" cx="20" cy="22" rx="18" ry="20" fill="url(#fxLampGlow)"/>
+        <path class="fx-lamp__glass" d="M20 8 C12 8 8 16 8 24 C8 32 12 38 20 40 C28 38 32 32 32 24 C32 16 28 8 20 8 Z" fill="currentColor"/>
+        <path class="fx-lamp__base" d="M14 40 H26 V44 H14 Z" fill="currentColor" opacity="0.85"/>
+        <rect class="fx-lamp__socket" x="16" y="44" width="8" height="4" rx="1" fill="currentColor" opacity="0.7"/>
+        <path class="fx-lamp__filament-el" d="M17 26 Q20 20 23 26 Q20 32 17 26" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <defs>
+          <radialGradient id="fxLampGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#fbbf24" stop-opacity="0.55"/>
+            <stop offset="100%" stop-color="#fbbf24" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+      </svg>
+    </div>
+  </div>
+
+  <nav class="sidebar" id="app-sidebar" aria-label="Разделы приложения">
+    <div class="si-logo">
+      <span class="si-logo-mark" aria-hidden="true">M</span>
+      <span class="si-label si-logo-text">MarketAI</span>
+    </div>
+
+    <div class="si active" data-tab="summary" title="Сводка" role="button" tabindex="0">
+      <i class="ti ti-layout-dashboard" aria-hidden="true"></i>
+      <span class="si-label">Сводка</span>
+    </div>
+    <div class="si" data-tab="reviews" title="Отзывы" role="button" tabindex="0">
+      <i class="ti ti-star" aria-hidden="true"></i>
+      <span class="si-label">Отзывы</span>
+    </div>
+    <div class="si" data-tab="questions" title="Вопросы" role="button" tabindex="0">
+      <i class="ti ti-help-circle" aria-hidden="true"></i>
+      <span class="si-label">Вопросы</span>
+    </div>
+    <div class="si" data-tab="wb-chats" title="Чаты" role="button" tabindex="0">
+      <i class="ti ti-message-2" aria-hidden="true"></i>
+      <span class="si-label">Чаты</span>
+    </div>
+    <div class="si" data-tab="ozon-actions" title="Акции Ozon" role="button" tabindex="0">
+      <i class="ti ti-tag" aria-hidden="true"></i>
+      <span class="si-label">Акции Ozon</span>
+    </div>
+    <div class="si" data-tab="card-links" title="Связки карточек" role="button" tabindex="0">
+      <i class="ti ti-link" aria-hidden="true"></i>
+      <span class="si-label">Связки</span>
+    </div>
+    <div class="si" data-tab="compliance" title="Документы WB и Ozon" role="button" tabindex="0">
+      <i class="ti ti-certificate" aria-hidden="true"></i>
+      <span class="si-label">Документы</span>
+    </div>
+    <div class="si" data-tab="packaging-dims" title="Габариты упаковки WB" role="button" tabindex="0">
+      <i class="ti ti-ruler-measure" aria-hidden="true"></i>
+      <span class="si-label">Габариты</span>
+    </div>
+    <div class="si" data-tab="wb-bulk-chars" title="Массовое редактирование характеристик WB и Ozon" role="button" tabindex="0">
+      <i class="ti ti-forms" aria-hidden="true"></i>
+      <span class="si-label">Характеристики</span>
+    </div>
+
+    <div class="si" data-tab="auto" title="Автозапуск" role="button" tabindex="0">
+      <i class="ti ti-player-play" aria-hidden="true"></i>
+      <span class="si-label">Автозапуск</span>
+    </div>
+    <div class="si" data-tab="agent" title="AI-ассистент" role="button" tabindex="0">
+      <i class="ti ti-sparkles" aria-hidden="true"></i>
+      <span class="si-label">AI-ассистент</span>
+    </div>
+
+    <div class="si-spacer"></div>
+
+    <div class="si" data-tab="ozon-alerts" title="Уведомления и ошибки" role="button" tabindex="0">
+      <i class="ti ti-bell" aria-hidden="true"></i>
+      <span class="si-label">Уведомления</span>
+    </div>
+    <div class="si" data-tab="stores" title="Магазины" role="button" tabindex="0">
+      <i class="ti ti-building-store" aria-hidden="true"></i>
+      <span class="si-label">Магазины</span>
+    </div>
+    <div class="si" data-tab="settings" title="Настройки" role="button" tabindex="0">
+      <i class="ti ti-settings" aria-hidden="true"></i>
+      <span class="si-label">Настройки</span>
+    </div>
+    <div class="si" data-tab="log" title="Журнал" role="button" tabindex="0">
+      <i class="ti ti-clipboard-list" aria-hidden="true"></i>
+      <span class="si-label">Журнал</span>
+    </div>
+
+    <button type="button" class="si si-toggle" id="btn-sidebar-toggle" aria-label="Развернуть меню" aria-expanded="false" title="Развернуть меню">
+      <i class="ti ti-chevrons-right si-toggle-icon" aria-hidden="true"></i>
+      <span class="si-label">Свернуть</span>
+    </button>
+  </nav>
+
+  <main class="main">
+    <!-- Сводка -->
+    <section id="panel-summary" class="panel active">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Сводка</div>
+        </div>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-quality" title="Обновить показатели с маркетплейсов">Обновить показатели</button>
+        </div>
+      </div>
+      <div class="summary-kpi-section">
+        <div class="summary-section-head">
+          <h3 class="summary-section-title">Сегодня</h3>
+          <p class="form-hint summary-section-hint" id="summary-ops-toggle-meta">загрузка…</p>
+        </div>
+        <div class="stats-grid stats-grid--summary" id="stats-cards">
+          <div class="stat-card highlight">
+            <div class="value" id="stat-today">—</div>
+            <div class="label">Отправлено сегодня</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-queue-reviews">—</div>
+            <div class="label">Новых отзывов</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-queue-questions">—</div>
+            <div class="label">Новых вопросов</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-wb-chats-today">—</div>
+            <div class="label">Чаты WB сегодня</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-ozon-chats-today">—</div>
+            <div class="label">Чаты Ozon сегодня</div>
+          </div>
+        </div>
+      </div>
+      <section class="quality-section" aria-labelledby="quality-section-title">
+        <div class="quality-section-head">
+          <h3 id="quality-section-title" class="quality-section-title">Показатели качества</h3>
+          <p class="form-hint quality-section-hint" id="quality-updated-hint">Загрузка…</p>
+        </div>
+        <div class="quality-mp-col" data-mp="ozon">
+          <header class="quality-mp-col-head">
+            <span class="mp-pill mp-ozon">OZON</span>
+            <span class="quality-mp-col-title">Ozon</span>
+            <span class="quality-mp-col-note">рейтинг + индекс ошибок (14 дн.)</span>
+          </header>
+          <div class="quality-panel-body" id="quality-ozon-stores"></div>
+        </div>
+      </section>
+      <section class="summary-ops-section" aria-labelledby="summary-ops-title">
+        <h3 id="summary-ops-title" class="summary-section-title">Очередь и автозапуск</h3>
+        <div class="summary-ops-card">
+          <div class="summary-grid" id="summary-grid"></div>
+        </div>
+      </section>
+    </section>
+
+    <!-- Магазины -->
+    <section id="panel-stores" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Магазины</div>
+        </div>
+        <div class="panel-actions"></div>
+      </div>
+      <div class="stores-layout">
+        <div class="form-card stores-form">
+          <h2>Добавить магазин</h2>
+          <form id="form-store">
+            <div class="form-group">
+              <label>Маркетплейс</label>
+              <select name="marketplace" required>
+                <option value="wb">Wildberries</option>
+                <option value="yam">Яндекс.Маркет</option>
+                <option value="ozon">Ozon</option>
+                <option value="avito">Avito</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Название</label>
+              <input type="text" name="name" required placeholder="Мой магазин">
+            </div>
+            <div class="form-group">
+              <label id="label-api-key">API-ключ</label>
+              <input type="password" name="api_key" required placeholder="••••••••">
+            </div>
+            <div class="form-group" id="wrap-business-id" style="display: none;">
+              <label>Business ID (Яндекс)</label>
+              <input type="number" name="business_id" placeholder="12345">
+            </div>
+            <div class="form-group" id="wrap-client-id" style="display: none;">
+              <label id="label-client-id">Client ID (Ozon)</label>
+              <input type="text" name="client_id" placeholder="client-id">
+            </div>
+            <div class="form-group">
+              <div class="toggle-row"><span class="toggle-label">Активен</span><label class="switch"><input type="checkbox" class="toggle-input" name="active" checked><span class="switch-track"></span></label></div>
+            </div>
+            <button type="submit" class="btn btn-primary">Добавить</button>
+          </form>
+        </div>
+        <div class="stores-list-wrap">
+          <div class="stores-head">
+            <h2 class="stores-title">Магазины</h2>
+          </div>
+          <div id="stores-list" class="stores-grid"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Отзывы -->
+    <section id="panel-reviews" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Отзывы</div>
+        </div>
+        <div class="panel-actions"></div>
+      </div>
+      <div class="panel-toolbar">
+        <div class="toolbar-field">
+          <label for="reviews-store">Магазин</label>
+          <select id="reviews-store" class="select-md">
+            <option value="">Все магазины</option>
+          </select>
+        </div>
+        <div class="toolbar-field">
+          <label for="reviews-status">Статус</label>
+          <select id="reviews-status" class="select-lg">
+            <option value="new,generated">Новые + Сгенерированные</option>
+            <option value="new">Новые</option>
+            <option value="generated">Сгенерированные</option>
+            <option value="sent">Отправленные</option>
+            <option value="all">Все статусы</option>
+          </select>
+        </div>
+        <div class="toolbar-field">
+          <label for="reviews-generate-mode">ИИ</label>
+          <select id="reviews-generate-mode" class="select-lg" title="Режим генерации">
+            <option value="new_only">Только новые</option>
+            <option value="all">С перезаписью</option>
+          </select>
+        </div>
+        <div class="toolbar-field toolbar-field--grow">
+          <label for="reviews-template-rating">Шаблон без ИИ</label>
+          <div class="toolbar-inline">
+            <select id="reviews-template-rating" class="select-md" title="Фильтр по оценке">
+              <option value="all">Все оценки</option>
+              <option value="1">1★</option>
+              <option value="2">2★</option>
+              <option value="3">3★</option>
+              <option value="4-5">4–5★</option>
+              <option value="none">Без оценки</option>
+            </select>
+            <input type="text" id="reviews-template-text" class="input-grow" placeholder="Текст шаблонного ответа">
+          </div>
+        </div>
+        <div class="toolbar-actions">
+          <button type="button" class="btn btn-primary" id="btn-load-reviews">Загрузить новые</button>
+          <button type="button" class="btn btn-secondary" id="btn-generate-reviews">Сгенерировать</button>
+          <button type="button" class="btn btn-secondary" id="btn-send-reviews">Отправить</button>
+          <button type="button" class="btn btn-secondary" id="btn-apply-template">Применить шаблон</button>
+        </div>
+      </div>
+      <div class="progress-container" id="progress-reviews" hidden></div>
+      <div class="items-table-wrap">
+        <table class="items-table">
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" id="check-all-reviews" title="Выбрать все"></th>
+              <th class="col-date">Дата</th>
+              <th class="col-rating">Рейтинг</th>
+              <th>Товар / Текст</th>
+              <th class="col-status">Статус</th>
+            </tr>
+          </thead>
+          <tbody id="reviews-tbody"></tbody>
+        </table>
+      </div>
+      <div id="reviews-empty" class="empty-state" style="display: none;">
+        <i class="ti ti-inbox" aria-hidden="true"></i>
+        <p>Нет отзывов со статусом «Новый» или «Сгенерирован».</p>
+        <button type="button" class="btn btn-primary" id="btn-load-reviews-2">Загрузить новые</button>
+      </div>
+      <div class="panel-toolbar panel-toolbar--center">
+        <button type="button" class="btn btn-secondary" id="btn-more-reviews">Показать ещё</button>
+      </div>
+    </section>
+
+    <!-- Вопросы -->
+    <section id="panel-questions" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Вопросы</div>
+        </div>
+        <div class="panel-actions"></div>
+      </div>
+      <div class="panel-toolbar">
+        <div class="toolbar-field">
+          <label for="questions-store">Магазин</label>
+          <select id="questions-store" class="select-md">
+            <option value="">Все магазины</option>
+          </select>
+        </div>
+        <div class="toolbar-field">
+          <label for="questions-status">Статус</label>
+          <select id="questions-status" class="select-lg">
+            <option value="new,generated">Новые + Сгенерированные</option>
+            <option value="new">Новые</option>
+            <option value="generated">Сгенерированные</option>
+            <option value="sent">Отправленные</option>
+            <option value="all">Все статусы</option>
+          </select>
+        </div>
+        <div class="toolbar-field">
+          <label for="questions-generate-mode">ИИ</label>
+          <select id="questions-generate-mode" class="select-lg" title="Режим генерации">
+            <option value="new_only">Только новые</option>
+            <option value="all">С перезаписью</option>
+          </select>
+        </div>
+        <div class="toolbar-actions">
+          <button type="button" class="btn btn-primary" id="btn-load-questions">Загрузить новые</button>
+          <button type="button" class="btn btn-secondary" id="btn-generate-questions">Сгенерировать</button>
+          <button type="button" class="btn btn-secondary" id="btn-send-questions">Отправить</button>
+        </div>
+      </div>
+      <div class="progress-container" id="progress-questions" hidden></div>
+      <div class="items-table-wrap">
+        <table class="items-table">
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" id="check-all-questions" title="Выбрать все"></th>
+              <th class="col-date">Дата</th>
+              <th>Товар / Вопрос</th>
+              <th class="col-status">Статус</th>
+            </tr>
+          </thead>
+          <tbody id="questions-tbody"></tbody>
+        </table>
+      </div>
+      <div id="questions-empty" class="empty-state" style="display: none;">
+        <i class="ti ti-inbox" aria-hidden="true"></i>
+        <p>Нет вопросов со статусом «Новый» или «Сгенерирован».</p>
+        <button type="button" class="btn btn-primary" id="btn-load-questions-2">Загрузить новые</button>
+      </div>
+      <div class="panel-toolbar panel-toolbar--center">
+        <button type="button" class="btn btn-secondary" id="btn-more-questions">Показать ещё</button>
+      </div>
+    </section>
+
+    <!-- Чаты WB -->
+    <section id="panel-wb-chats" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Чаты</div>
+        </div>
+        <div class="panel-actions"></div>
+      </div>
+      <div class="panel-toolbar">
+        <div class="toolbar-group">
+          <span class="toolbar-label">Магазин</span>
+          <select id="wb-chats-store" class="select-md" title="Магазин WB"></select>
+        </div>
+        <div class="toolbar-group toolbar-group--actions">
+          <button type="button" class="btn btn-primary" id="btn-wb-chats-refresh">Обновить чаты</button>
+          <button type="button" class="btn btn-secondary" id="btn-wb-chats-mass" title="До 50 чатов за раз: ИИ + сразу отправка в WB">Массовый автоответ</button>
+        </div>
+      </div>
+      <div id="wb-chats-status-bar" class="chat-status-bar" role="status" aria-live="polite" hidden></div>
+      <div class="progress-container" id="wb-chats-loading" aria-live="polite" hidden></div>
+      <div class="wb-chats-layout">
+        <div class="wb-chats-list-wrap">
+          <h3 class="wb-chats-subtitle">Чаты</h3>
+          <div id="wb-chats-list" class="wb-chats-list"></div>
+        </div>
+        <div class="wb-chats-detail">
+          <div class="form-hint" id="wb-chats-hint">Выберите чат слева.</div>
+          <div id="wb-chats-detail-body" class="chat-detail-body" style="display:none;">
+            <div class="form-group">
+              <label>Товар (из данных WB)</label>
+              <div id="wb-chats-product-title" class="wb-chats-product"></div>
+            </div>
+            <div class="form-group">
+              <label>Переписка</label>
+              <div id="wb-chats-thread" class="wb-chats-thread"></div>
+            </div>
+            <div class="form-hint" id="wb-chats-status-hint"></div>
+            <div class="form-group chat-compose">
+              <label>Ответ</label>
+              <textarea id="wb-chats-draft" class="chat-compose-input" rows="6" placeholder="Текст ответа покупателю (до 1000 символов)"></textarea>
+              <div class="form-hint chat-compose-hint">При отправке автоматически добавится: Ответ продавца: «ваш текст» — так в переписке видно, кто писал последним.</div>
+            </div>
+            <div class="chat-toolbar">
+              <button type="button" class="btn btn-secondary" id="btn-wb-chats-load-thread">Обновить переписку</button>
+              <button type="button" class="btn btn-secondary" id="btn-wb-chats-more-history" title="Больше страниц ленты WB (медленнее, реже 429)">Больше истории</button>
+              <button type="button" class="btn btn-secondary" id="btn-wb-chats-generate">Сгенерировать</button>
+              <button type="button" class="btn btn-primary" id="btn-wb-chats-send">Отправить в WB</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Чаты Ozon -->
+    <section id="panel-ozon-chats" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Чаты Ozon</div>
+        </div>
+        <div class="panel-actions"></div>
+      </div>
+      <div class="segmented" id="ozon-chats-filter" role="tablist" aria-label="Тип чатов Ozon">
+        <button type="button" class="active" data-filter="buyers" role="tab">Покупатели</button>
+        <button type="button" data-filter="support" role="tab">Поддержка и новости</button>
+        <button type="button" data-filter="all" role="tab">Все сообщения</button>
+      </div>
+      <div class="panel-toolbar">
+        <div class="toolbar-group">
+          <span class="toolbar-label">Магазин</span>
+          <select id="ozon-chats-store" class="select-md" title="Магазин Ozon"></select>
+        </div>
+        <div class="toolbar-group toolbar-group--actions">
+          <button type="button" class="btn btn-primary" id="btn-ozon-chats-refresh">Обновить чаты</button>
+          <button type="button" class="btn btn-secondary" id="btn-ozon-chats-mass" title="До 50 чатов за раз: ИИ + сразу отправка в Ozon">Массовый автоответ</button>
+        </div>
+      </div>
+      <div id="ozon-chats-status-bar" class="chat-status-bar" role="status" aria-live="polite" hidden></div>
+      <div class="progress-container" id="ozon-chats-loading" aria-live="polite" hidden></div>
+      <div class="wb-chats-layout">
+        <div class="wb-chats-list-wrap">
+          <h3 class="wb-chats-subtitle">Чаты</h3>
+          <div id="ozon-chats-list" class="wb-chats-list"></div>
+        </div>
+        <div class="wb-chats-detail">
+          <div class="form-hint" id="ozon-chats-hint">Выберите чат слева.</div>
+          <div id="ozon-chats-detail-body" class="chat-detail-body" style="display:none;">
+            <div class="form-group">
+              <label>Товар</label>
+              <div id="ozon-chats-product-title" class="wb-chats-product"></div>
+            </div>
+            <div class="form-group">
+              <label>Переписка</label>
+              <div id="ozon-chats-thread" class="wb-chats-thread"></div>
+            </div>
+            <div class="form-hint" id="ozon-chats-status-hint"></div>
+            <div id="ozon-chats-reply-tools">
+              <div class="form-group chat-compose">
+                <label>Ответ</label>
+                <textarea id="ozon-chats-draft" class="chat-compose-input" rows="6" placeholder="Текст ответа покупателю"></textarea>
+              </div>
+              <div class="chat-toolbar">
+                <button type="button" class="btn btn-secondary" id="btn-ozon-chats-load-thread">Обновить переписку</button>
+                <button type="button" class="btn btn-secondary" id="btn-ozon-chats-generate">Сгенерировать</button>
+                <button type="button" class="btn btn-primary" id="btn-ozon-chats-send">Отправить в Ozon</button>
+              </div>
+            </div>
+            <div class="form-hint chat-readonly-hint" id="ozon-chats-readonly-hint" style="display:none;">Только просмотр</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Акции Ozon -->
+    <section id="panel-ozon-actions" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Акции Ozon</div>
+        </div>
+        <div class="panel-actions"></div>
+      </div>
+      <div class="ozon-actions-layout">
+        <div class="form-card form-card-wide" id="ozon-actions-list">
+          <h2>Список акций</h2>
+          <div class="panel-toolbar">
+            <div class="toolbar-group">
+              <span class="toolbar-label">Магазин</span>
+              <select id="ozon-actions-store" class="select-md" title="Магазин Ozon"></select>
+            </div>
+            <button type="button" class="btn btn-primary" id="btn-ozon-actions-load">Загрузить акции</button>
+          </div>
+          <div id="ozon-actions-status" class="form-hint" role="status">Выберите магазин Ozon и нажмите «Загрузить акции».</div>
+          <div class="progress-container" id="ozon-actions-loading" aria-live="polite" hidden></div>
+          <div class="items-table-wrap ozon-actions-table-wrap ozon-actions-table-block">
+            <table class="items-table ozon-actions-table" id="ozon-actions-table">
+              <thead>
+                <tr>
+                  <th class="col-check"><input type="checkbox" id="ozon-actions-check-all" title="Выбрать все"></th>
+                  <th class="col-id">ID</th>
+                  <th class="col-title">Название</th>
+                  <th class="col-type">Тип</th>
+                  <th class="col-period">Период</th>
+                  <th class="col-count">Товаров</th>
+                  <th class="col-part">Участие</th>
+                </tr>
+              </thead>
+              <tbody id="ozon-actions-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="form-card form-card-wide" id="ozon-actions-settings">
+          <h2>Настройки синхронизации</h2>
+          <p class="form-hint ozon-settings-intro">Правила применяются при ручном запуске и автозапуске для выбранного магазина Ozon.</p>
+          <div class="form-group ozon-settings-block">
+            <label for="ozon-actions-sync-mode">Режим работы</label>
+            <select id="ozon-actions-sync-mode" class="select-lg">
+              <option value="discount_threshold">По порогу скидки (рекомендуется)</option>
+              <option value="legacy_auto_remove">Старое автоудаление</option>
+            </select>
+            <p class="form-hint">«По порогу» — снимает товары со скидкой выше порога и добавляет подходящие. Legacy — только удаление из автоакций.</p>
+          </div>
+          <div id="ozon-actions-discount-fields" class="ozon-settings-block">
+            <div class="form-group">
+              <label for="ozon-actions-threshold">Порог скидки, %</label>
+              <input type="number" id="ozon-actions-threshold" min="0" max="99" step="0.1" value="3" class="input-md ozon-threshold-input">
+              <p class="form-hint">≤ порога — оставить или добавить в акцию; &gt; порога — снять. SKU с нулевыми или странными ценами пропускаются.</p>
+            </div>
+            <div class="settings-option-list">
+              <div class="settings-option">
+                <div class="settings-option-body">
+                  <div class="settings-option-title">Снимать товары с высокой скидкой</div>
+                  <p class="settings-option-desc">Удалять из акций товары, у которых скидка превышает порог.</p>
+                </div>
+                <label class="switch switch--lg" title="Снимать товары с высокой скидкой"><input type="checkbox" class="toggle-input" id="ozon-actions-sync-remove" checked><span class="switch-track"></span></label>
+              </div>
+              <div class="settings-option">
+                <div class="settings-option-body">
+                  <div class="settings-option-title">Добавлять подходящие кандидаты</div>
+                  <p class="settings-option-desc">Автоматически включать в акции товары со скидкой не выше порога.</p>
+                </div>
+                <label class="switch switch--lg" title="Добавлять подходящие кандидаты"><input type="checkbox" class="toggle-input" id="ozon-actions-sync-add" checked><span class="switch-track"></span></label>
+              </div>
+              <div class="settings-option">
+                <div class="settings-option-body">
+                  <div class="settings-option-title">Исключить ваучерные акции</div>
+                  <p class="settings-option-desc">Не трогать промо с ваучерами и подарочными сертификатами.</p>
+                </div>
+                <label class="switch switch--lg" title="Исключить ваучерные акции"><input type="checkbox" class="toggle-input" id="ozon-actions-exclude-voucher"><span class="switch-track"></span></label>
+              </div>
+            </div>
+            <div class="form-group ozon-actions-ids-field">
+              <label for="ozon-actions-exclude-ids">ID акций для исключения</label>
+              <input type="text" id="ozon-actions-exclude-ids" placeholder="12345, 67890">
+              <p class="form-hint">Через запятую. Эти акции синхронизация полностью пропустит.</p>
+            </div>
+          </div>
+          <div id="ozon-actions-legacy-fields" class="ozon-settings-block">
+            <div class="settings-option-list">
+              <div class="settings-option">
+                <div class="settings-option-body">
+                  <div class="settings-option-title">Только автоакции</div>
+                  <p class="settings-option-desc">Ozon сам добавляет товары в такие акции — legacy-режим работает только с ними.</p>
+                </div>
+                <label class="switch switch--lg" title="Только автоакции"><input type="checkbox" class="toggle-input" id="ozon-actions-only-auto" checked><span class="switch-track"></span></label>
+              </div>
+            </div>
+          </div>
+          <div class="form-group ozon-settings-block ozon-actions-ids-field">
+            <label for="ozon-actions-watched-ids">ID акций для отслеживания</label>
+            <input type="text" id="ozon-actions-watched-ids" placeholder="71342, 66011">
+            <p class="form-hint">Пусто — все акции магазина. Иначе только перечисленные ID.</p>
+          </div>
+          <div class="ozon-settings-block ozon-actions-auto-stores-block">
+            <h3 class="settings-subhead">Автозапуск: магазины для синхронизации акций</h3>
+            <p class="form-hint">Какие магазины Ozon обрабатывать при автозапуске (галочка «Синхронизация акций»). Пусто — все Ozon из раздела «Автозапуск».</p>
+            <div id="ozon-actions-auto-store-list" class="auto-store-list auto-store-list--compact"></div>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-actions-save-auto-stores">Сохранить список для автозапуска</button>
+          </div>
+          <button type="button" class="btn btn-primary" id="btn-ozon-actions-save-settings">Сохранить настройки</button>
+        </div>
+        <div class="form-card form-card-wide" id="ozon-actions-manual">
+          <h2>Запуск вручную</h2>
+          <p class="form-hint ozon-settings-intro">Сначала выберите магазин и при необходимости отметьте акции в таблице выше.</p>
+          <div class="action-card-list ozon-actions-buttons">
+            <div class="action-card">
+              <div class="action-card-body">
+                <div class="action-card-title">Синхронизировать по порогу</div>
+                <p class="action-card-desc">Проверить все акции и применить правила из настроек синхронизации.</p>
+              </div>
+              <button type="button" class="btn btn-primary" id="btn-ozon-actions-sync-discount">Запустить</button>
+            </div>
+            <div class="action-card">
+              <div class="action-card-body">
+                <div class="action-card-title">Автоудаление (legacy)</div>
+                <p class="action-card-desc">Старый режим: только снятие товаров из автоакций без добавления.</p>
+              </div>
+              <button type="button" class="btn btn-secondary" id="btn-ozon-actions-auto-remove">Запустить</button>
+            </div>
+            <div class="action-card">
+              <div class="action-card-body">
+                <div class="action-card-title">Удалить из выбранных акций</div>
+                <p class="action-card-desc">Снять товары только из акций, отмеченных галочками в таблице.</p>
+              </div>
+              <button type="button" class="btn btn-secondary" id="btn-ozon-actions-remove-selected">Удалить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Документы: сертификаты и декларации WB / Ozon -->
+    <section id="panel-compliance" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Документы</div>
+        </div>
+        <div class="panel-actions"></div>
+      </div>
+      <div class="form-card form-card-wide">
+        <p class="form-hint">Сертификаты и декларации для Wildberries и Ozon. Общая таблица ниже; отправка — на вкладке нужной площадки.</p>
+        <div class="segmented compliance-mp-filter" id="compliance-mp-filter" role="tablist" aria-label="Маркетплейс">
+          <button type="button" class="active" data-mp="wb" role="tab" aria-selected="true">Wildberries</button>
+          <button type="button" data-mp="ozon" role="tab" aria-selected="false">Ozon</button>
+        </div>
+
+        <div class="compliance-shared-block">
+          <div class="compliance-input-block">
+            <div class="compliance-toolbar">
+              <span class="toolbar-label">Таблица</span>
+              <div class="compliance-toolbar-actions">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-parse">Разобрать таблицу</button>
+                <label class="btn btn-secondary btn-sm card-links-file-btn">
+                  Загрузить файл
+                  <input type="file" id="compliance-file" accept=".csv,.txt,.tsv,text/plain" hidden>
+                </label>
+              </div>
+            </div>
+            <p class="form-hint">Колонки: <strong>артикул продавца</strong>, <strong>номер документа</strong>, <strong>дата регистрации</strong>, <strong>действует до</strong>. WB: vendor_code, Ozon: offer_id.</p>
+            <textarea id="compliance-text" class="compliance-textarea" rows="10" placeholder="807758&#9;ЕАЭС N RU Д-DE.РА01.В.12345/25&#9;21.11.2025&#9;20.11.2030"></textarea>
+          </div>
+          <div id="compliance-rows-wrap" class="compliance-rows-wrap" hidden>
+            <div class="compliance-toolbar">
+              <span class="toolbar-label">Строки для обработки</span>
+              <div class="compliance-toolbar-actions">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-rows-all">Выбрать все</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-rows-none">Снять все</button>
+              </div>
+            </div>
+            <p class="form-hint" id="compliance-rows-hint"></p>
+            <div class="table-wrap compliance-rows-scroll">
+              <table class="items-table compliance-rows-table" id="compliance-rows-table">
+                <thead>
+                  <tr>
+                    <th class="col-check"><input type="checkbox" id="compliance-rows-check-all" title="Все"></th>
+                    <th>Артикул</th>
+                    <th>Тип</th>
+                    <th>Номер документа</th>
+                    <th>Дата рег.</th>
+                    <th>Действует до</th>
+                    <th class="compliance-col-ozon">ФСА</th>
+                    <th class="compliance-col-ozon">PDF</th>
+                  </tr>
+                </thead>
+                <tbody id="compliance-rows-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div id="compliance-pane-wb" class="compliance-mp-pane">
+          <p class="form-hint compliance-mp-hint">Wildberries: PDF не нужен — номер и даты записываются в карточку товара.</p>
+          <div class="compliance-stores-block">
+            <div class="compliance-toolbar">
+              <span class="toolbar-label">Магазины WB</span>
+              <div class="compliance-toolbar-actions">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-wb-stores-all">Все</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-wb-stores-none">Снять</button>
+              </div>
+            </div>
+            <div id="compliance-wb-store-list" class="auto-store-list auto-store-list--compact"></div>
+          </div>
+          <div class="compliance-stores-block">
+            <div class="compliance-toolbar">
+              <span class="toolbar-label">Каталог WB</span>
+              <div class="compliance-toolbar-actions">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-wb-catalog-refresh">Обновить каталог</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-wb-catalog-restore" hidden>Вернуть предыдущий</button>
+              </div>
+            </div>
+            <p class="form-hint" id="compliance-wb-catalog-info">Каталог берётся из сохранённой копии и сам не перезагружается — обновляйте кнопкой.</p>
+          </div>
+          <div class="progress-container" id="progress-compliance-wb-catalog" hidden></div>
+          <div class="progress-container" id="progress-compliance-wb" hidden></div>
+          <div class="compliance-actions">
+            <button type="button" class="btn btn-primary" id="btn-compliance-wb-apply">Проверить и отправить на выбранные магазины WB</button>
+            <button type="button" class="btn btn-secondary" id="btn-compliance-wb-preview">Только проверить (без отправки)</button>
+            <button type="button" class="btn btn-secondary" id="btn-compliance-wb-drafts">Черновики WB — что дозаполнить</button>
+            <button type="button" class="btn btn-secondary" id="btn-compliance-wb-drafts-ai">Подобрать ИИ (просмотр)</button>
+            <button type="button" class="btn btn-primary" id="btn-compliance-wb-drafts-apply" disabled>Отправить подобранное на WB</button>
+          </div>
+          <div id="compliance-wb-result" class="compliance-result" hidden></div>
+          <div id="compliance-wb-drafts-result" class="compliance-result" hidden></div>
+          <div id="compliance-wb-drafts-fill-result" class="compliance-result" hidden></div>
+        </div>
+
+        <div id="compliance-pane-ozon" class="compliance-mp-pane" hidden>
+          <p class="form-hint compliance-mp-hint">Ozon: PDF и привязка по <strong>offer_id</strong>. С <strong>облачного сервера</strong> (Render) российские сайты открываются только через <code>FSA_PROXY_URL</code> (VPS/прокси в РФ). <strong>Локально</strong> на Mac (<code>run.command</code>) — через ваш интернет в РФ без прокси.</p>
+          <div id="compliance-fsa-status" class="compliance-fsa-status" hidden></div>
+          <div class="compliance-stores-block">
+            <div class="compliance-toolbar">
+              <span class="toolbar-label">Магазины Ozon</span>
+              <div class="compliance-toolbar-actions">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-ozon-stores-all">Все</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-compliance-ozon-stores-none">Снять</button>
+              </div>
+            </div>
+            <div id="compliance-ozon-store-list" class="auto-store-list auto-store-list--compact"></div>
+          </div>
+          <div class="progress-container" id="progress-compliance-ozon" hidden></div>
+          <div class="compliance-toolbar" style="margin-bottom:10px;">
+            <span class="toolbar-label">Источник PDF</span>
+            <select id="compliance-ozon-pdf-source" class="form-select" style="max-width:420px;">
+              <option value="fsa" selected>ФСА — pub.fsa.gov.ru</option>
+              <option value="mirror">Зеркало — декларации-соответствия.рус</option>
+            </select>
+          </div>
+          <div class="compliance-actions">
+            <button type="button" class="btn btn-secondary" id="btn-compliance-ozon-check-fsa">Проверить PDF (ФСА)</button>
+            <button type="button" class="btn btn-secondary" id="btn-compliance-ozon-check-mirror">Проверить PDF (зеркало)</button>
+            <button type="button" class="btn btn-primary" id="btn-compliance-ozon-apply-fsa">Загрузить на Ozon (ФСА)</button>
+            <button type="button" class="btn btn-primary" id="btn-compliance-ozon-apply-mirror">Загрузить на Ozon (зеркало)</button>
+            <button type="button" class="btn btn-secondary" id="btn-compliance-ozon-preview">Только проверить (без загрузки)</button>
+          </div>
+          <div id="compliance-ozon-result" class="compliance-result" hidden></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Габариты упаковки WB -->
+    <section id="panel-packaging-dims" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Габариты упаковки</div>
+        </div>
+        <div class="panel-actions"></div>
+      </div>
+      <div class="form-card form-card-wide">
+        <p class="form-hint">Вставьте таблицу из Google Sheets: фактические габариты упаковки. Колонка <strong>sku</strong> — артикул продавца (vendorCode) или nmID с WB. Каталог магазина выгружается <strong>целиком</strong> (до 15&nbsp;000 карточек, ~2–3&nbsp;мин при первой загрузке или «Обновить каталог»). Повторное сравнение — из кэша на диске. Замена на WB — пачками по 100.</p>
+        <div class="compliance-input-block">
+          <div class="compliance-toolbar">
+            <span class="toolbar-label">Таблица</span>
+            <div class="compliance-toolbar-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-packaging-dims-parse">Разобрать таблицу</button>
+              <label class="btn btn-secondary btn-sm card-links-file-btn">
+                Загрузить файл
+                <input type="file" id="packaging-dims-file" accept=".csv,.txt,.tsv,text/plain" hidden>
+              </label>
+            </div>
+          </div>
+          <p class="form-hint">Колонки: <strong>sku</strong> (артикул продавца), <strong>fact_length</strong>, <strong>fact_width</strong>, <strong>fact_height</strong>. Можно копировать с заголовком из Sheets.</p>
+          <textarea id="packaging-dims-text" class="compliance-textarea" rows="10" placeholder="sku	fact_length	fact_width	fact_height&#10;528657	10.0	10.0	3.0&#10;528658	17.0	3.0	2.0"></textarea>
+        </div>
+        <div id="packaging-dims-rows-wrap" class="compliance-rows-wrap" hidden>
+          <div class="compliance-toolbar">
+            <span class="toolbar-label">Строки для сравнения</span>
+            <div class="compliance-toolbar-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-packaging-dims-rows-all">Выбрать все</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-packaging-dims-rows-none">Снять все</button>
+            </div>
+          </div>
+          <p class="form-hint" id="packaging-dims-rows-hint"></p>
+          <div class="table-wrap">
+            <table class="items-table compliance-rows-table" id="packaging-dims-rows-table">
+              <thead>
+                <tr>
+                  <th class="col-check"><input type="checkbox" id="packaging-dims-rows-check-all" title="Все"></th>
+                  <th>Артикул</th>
+                  <th>Длина (факт)</th>
+                  <th>Ширина (факт)</th>
+                  <th>Высота (факт)</th>
+                </tr>
+              </thead>
+              <tbody id="packaging-dims-rows-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="compliance-stores-block">
+          <div class="compliance-toolbar">
+            <span class="toolbar-label">Магазины WB</span>
+            <div class="compliance-toolbar-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-packaging-dims-stores-all">Все</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-packaging-dims-stores-none">Снять</button>
+            </div>
+          </div>
+          <div id="packaging-dims-store-list" class="auto-store-list auto-store-list--compact"></div>
+        </div>
+        <div class="progress-container" id="progress-packaging-dims" hidden></div>
+        <label class="packaging-dims-only-mismatch">
+          <input type="checkbox" id="packaging-dims-only-mismatch" checked>
+          Заменять только где расхождение (совпадающие не трогать)
+        </label>
+        <label class="packaging-dims-only-mismatch">
+          <input type="checkbox" id="packaging-dims-refresh-catalog">
+          Обновить каталог с WB (иначе с диска, копия живёт 7 дней; сравнение и отправка используют один кэш)
+        </label>
+        <div class="compliance-actions">
+          <button type="button" class="btn btn-primary" id="btn-packaging-dims-compare">Сравнить с WB</button>
+          <button type="button" class="btn btn-secondary" id="btn-packaging-dims-apply-preview">Проверить замену</button>
+          <button type="button" class="btn btn-primary" id="btn-packaging-dims-apply">Заменить габариты на WB</button>
+          <button type="button" class="btn btn-secondary" id="btn-packaging-dims-copy" disabled title="Скопировать результат сравнения — вставьте в Google Таблицы">Скопировать для Google Таблиц</button>
+        </div>
+        <div id="packaging-dims-result" class="compliance-result" hidden></div>
+      </div>
+    </section>
+
+    <!-- Массовое редактирование характеристик WB / Ozon -->
+    <section id="panel-wb-bulk-chars" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">WB · Ozon</div>
+          <div class="panel-heading">Массовое редактирование характеристик</div>
+        </div>
+      </div>
+      <div class="form-card form-card-wide">
+        <p class="form-hint">Подставить одно значение в характеристику для многих карточек (например <strong>Ставка НДС → 5</strong>). Каталог грузится целиком (~2–5&nbsp;мин при 5–6&nbsp;тыс. карточек). <strong>Снимите «Обновить каталог с WB»</strong>, если уже грузили в «Габариты» — будет из кэша за секунды. Сначала «Проверить», затем «Применить на WB».</p>
+        <div class="wb-bulk-chars-fields">
+          <label class="wb-bulk-chars-field">
+            <span class="toolbar-label">Название характеристики</span>
+            <input type="text" id="wb-bulk-chars-name" class="input-md" value="Ставка НДС" placeholder="Ставка НДС">
+          </label>
+          <label class="wb-bulk-chars-field">
+            <span class="toolbar-label">Новое значение</span>
+            <input type="text" id="wb-bulk-chars-value" class="input-md" value="5" placeholder="5">
+          </label>
+          <div class="wb-bulk-chars-presets">
+            <span class="toolbar-label">Быстро:</span>
+            <button type="button" class="btn btn-secondary btn-sm" data-wb-bulk-preset="nds-5">НДС 5%</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-wb-bulk-preset="nds-10">НДС 10%</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-wb-bulk-preset="nds-20">НДС 20%</button>
+          </div>
+        </div>
+        <label class="packaging-dims-only-mismatch">
+          <input type="checkbox" id="wb-bulk-chars-all-catalog" checked>
+          Весь каталог магазина
+        </label>
+        <label class="packaging-dims-only-mismatch">
+          <input type="checkbox" id="wb-bulk-chars-only-diff" checked>
+          Только если значение отличается
+        </label>
+        <label class="packaging-dims-only-mismatch">
+          <input type="checkbox" id="wb-bulk-chars-refresh-catalog">
+          Обновить каталог с WB (снято = взять с диска, если уже грузили в «Габариты»)
+        </label>
+        <div class="compliance-input-block" id="wb-bulk-chars-list-wrap" hidden>
+          <div class="compliance-input-toolbar">
+            <span class="toolbar-label">Артикулы (если не весь каталог)</span>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-wb-bulk-chars-parse">Разобрать список</button>
+            <label class="btn btn-secondary btn-sm">
+              Файл
+              <input type="file" id="wb-bulk-chars-file" accept=".csv,.txt,.tsv,text/plain" hidden>
+            </label>
+          </div>
+          <textarea id="wb-bulk-chars-text" class="compliance-textarea" rows="8" placeholder="807773&#10;807774&#10;или колонка sku из таблицы"></textarea>
+        </div>
+        <div class="compliance-stores-block">
+          <div class="compliance-stores-toolbar">
+            <span class="toolbar-label">Магазины WB</span>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-wb-bulk-chars-stores-all">Все</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-wb-bulk-chars-stores-none">Снять</button>
+          </div>
+          <div id="wb-bulk-chars-store-list" class="auto-store-list auto-store-list--compact"></div>
+        </div>
+        <div class="progress-container" id="progress-wb-bulk-chars" hidden></div>
+        <div class="compliance-actions">
+          <button type="button" class="btn btn-secondary" id="btn-wb-bulk-chars-preview">Проверить (dry-run)</button>
+          <button type="button" class="btn btn-primary" id="btn-wb-bulk-chars-apply">Применить на WB</button>
+          <button type="button" class="btn btn-secondary" id="btn-wb-bulk-chars-stop" title="Остановить текущую задачу и снять блокировку магазина">Стоп / сбросить</button>
+        </div>
+        <div id="wb-bulk-chars-result" class="compliance-result" hidden></div>
+      </div>
+
+      <!-- Ozon: ТН ВЭД и бренд -->
+      <div class="form-card form-card-wide" style="margin-top:1.5rem">
+        <p class="form-hint" style="font-weight:600;margin-bottom:.5rem">Ozon — замена ТН ВЭД и бренда</p>
+        <p class="form-hint">Можно проставить <strong>одно значение всем</strong> или вставить <strong>таблицу</strong>, где у каждого артикула свой бренд и/или ТН ВЭД. Бренд ищется в справочнике Ozon. Сначала «Проверить», затем «Применить».</p>
+        <div class="wb-bulk-chars-fields">
+          <label class="wb-bulk-chars-field">
+            <span class="toolbar-label">Режим</span>
+            <select id="ozon-bulk-chars-mode" class="select-md">
+              <option value="table" selected>Таблица: артикул → бренд / ТН ВЭД</option>
+              <option value="single">Одно значение на всех</option>
+            </select>
+          </label>
+        </div>
+        <div id="ozon-bulk-chars-single-fields" class="wb-bulk-chars-fields" hidden>
+          <label class="wb-bulk-chars-field">
+            <span class="toolbar-label">Поле</span>
+            <select id="ozon-bulk-chars-field" class="select-md">
+              <option value="tnved">ТН ВЭД (код ЕАЭС)</option>
+              <option value="brand">Бренд</option>
+            </select>
+          </label>
+          <label class="wb-bulk-chars-field">
+            <span class="toolbar-label">Новое значение</span>
+            <input type="text" id="ozon-bulk-chars-value" class="input-md" value="" placeholder="3304990000 или название бренда">
+          </label>
+          <div class="wb-bulk-chars-presets">
+            <span class="toolbar-label">Быстро:</span>
+            <button type="button" class="btn btn-secondary btn-sm" data-ozon-bulk-preset="tnved">ТН ВЭД</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-ozon-bulk-preset="brand">Бренд</button>
+          </div>
+        </div>
+        <label class="packaging-dims-only-mismatch" id="ozon-bulk-chars-all-wrap" hidden>
+          <input type="checkbox" id="ozon-bulk-chars-all-catalog">
+          Весь каталог магазина
+        </label>
+        <label class="packaging-dims-only-mismatch">
+          <input type="checkbox" id="ozon-bulk-chars-only-diff" checked>
+          Только если значение отличается
+        </label>
+        <div class="compliance-input-block" id="ozon-bulk-chars-list-wrap">
+          <div class="compliance-input-toolbar">
+            <span class="toolbar-label" id="ozon-bulk-chars-list-label">Таблица (артикул + бренд и/или ТН ВЭД)</span>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-bulk-chars-parse">Разобрать</button>
+            <label class="btn btn-secondary btn-sm">
+              Файл
+              <input type="file" id="ozon-bulk-chars-file" accept=".csv,.txt,.tsv,text/plain" hidden>
+            </label>
+          </div>
+          <textarea id="ozon-bulk-chars-text" class="compliance-textarea" rows="10" placeholder="820305 balea&#10;или с табом: offer_id&#9;бренд&#9;тн вэд&#10;807773&#9;Balea&#9;3304990000"></textarea>
+          <div id="ozon-bulk-chars-parse-preview" class="form-hint" hidden></div>
+        </div>
+        <div class="compliance-stores-block">
+          <div class="compliance-stores-toolbar">
+            <span class="toolbar-label">Магазины Ozon</span>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-bulk-chars-stores-all">Все</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-bulk-chars-stores-none">Снять</button>
+          </div>
+          <div id="ozon-bulk-chars-store-list" class="auto-store-list auto-store-list--compact"></div>
+        </div>
+        <div class="progress-container" id="progress-ozon-bulk-chars" hidden></div>
+        <div class="compliance-actions">
+          <button type="button" class="btn btn-secondary" id="btn-ozon-bulk-chars-preview">Проверить (dry-run)</button>
+          <button type="button" class="btn btn-primary" id="btn-ozon-bulk-chars-apply">Применить на Ozon</button>
+          <button type="button" class="btn btn-secondary" id="btn-ozon-bulk-chars-stop" title="Остановить текущую задачу и снять блокировку магазина">Стоп / сбросить</button>
+        </div>
+        <div id="ozon-bulk-chars-result" class="compliance-result" hidden></div>
+      </div>
+
+      <!-- Черновики WB: дозаполнение характеристик -->
+      <div class="form-card form-card-wide" style="margin-top:1.5rem">
+        <p class="form-hint" style="font-weight:600;margin-bottom:.5rem">Черновики WB — дозаполнение обязательных характеристик</p>
+        <p class="form-hint">Найти товары в черновике из-за незаполненных обязательных полей, подобрать значения через ИИ, отредактировать и отправить на WB.</p>
+        <div class="compliance-actions" style="margin-bottom:.75rem">
+          <button type="button" class="btn btn-secondary" id="btn-wb-drafts-scan">Найти черновики</button>
+          <button type="button" class="btn btn-secondary" id="btn-wb-drafts-ai" disabled>Подобрать ИИ</button>
+          <button type="button" class="btn btn-primary" id="btn-wb-drafts-send" disabled>Отправить на WB</button>
+        </div>
+        <div class="progress-container" id="progress-wb-drafts" hidden></div>
+        <div id="wb-drafts-scan-result" class="compliance-result" hidden></div>
+        <div id="wb-drafts-fill-table" hidden></div>
+      </div>
+    </section>
+
+    <!-- Связки карточек WB / Ozon -->
+    <section id="panel-card-links" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Связки карточек</div>
+        </div>
+        <div class="panel-actions"></div>
+      </div>
+      <div class="form-card form-card-wide card-links-shell">
+        <div class="panel-toolbar card-links-toolbar">
+          <div class="toolbar-group">
+            <span class="toolbar-label">Маркетплейс</span>
+            <select id="card-links-marketplace" class="select-md">
+              <option value="wb">Wildberries</option>
+              <option value="ozon">Ozon</option>
+            </select>
+          </div>
+          <div class="toolbar-group">
+            <span class="toolbar-label">Магазин</span>
+            <select id="card-links-store" class="select-md"></select>
+          </div>
+          <div class="toolbar-group toolbar-group--actions">
+            <button type="button" class="btn btn-primary" id="btn-card-links-load">Загрузить каталог</button>
+            <button type="button" class="btn btn-secondary" id="btn-card-links-refresh" title="Обновить каталог с площадки">Обновить</button>
+          </div>
+          <details class="card-links-more card-links-toolbar-more">
+            <summary>Ещё</summary>
+            <label class="card-links-scope-toggle">
+              <input type="checkbox" id="card-links-articles-only">
+              Только по списку артикулов
+            </label>
+            <div id="card-links-articles-wrap" class="card-links-articles-wrap" hidden>
+              <div class="card-links-articles-toolbar">
+                <label class="btn btn-secondary btn-sm card-links-file-btn">
+                  Файл
+                  <input type="file" id="card-links-articles-file" accept=".txt,.csv,.tsv,text/plain" hidden>
+                </label>
+              </div>
+              <textarea id="card-links-articles" class="card-links-articles-input" rows="3" placeholder="Артикулы…"></textarea>
+            </div>
+            <div class="card-links-full-only" id="card-links-optional-filter">
+              <textarea id="card-links-articles-optional" class="card-links-articles-input" rows="2" placeholder="Опционально сузить полную загрузку по артикулам"></textarea>
+            </div>
+            <div class="card-links-qty-wrap card-links-ozon-only" id="card-links-ozon-more">
+              <span class="toolbar-label">Ozon TMS 1/2/3 шт</span>
+              <textarea id="card-links-qty-table" class="card-links-articles-input" rows="4" placeholder="offer1&#9;offer2&#9;offer3"></textarea>
+              <div class="card-links-qty-actions">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-qty-check">Проверить</button>
+                <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-qty-link">Связать строки</button>
+              </div>
+            </div>
+          </details>
+        </div>
+
+        <div id="card-links-kpi" class="card-links-kpi" hidden>
+          <button type="button" class="card-links-kpi-item" data-cl-goto="catalog">
+            <span class="card-links-kpi-val" id="card-links-kpi-total-val">0</span>
+            <span class="card-links-kpi-lbl">Всего</span>
+          </button>
+          <button type="button" class="card-links-kpi-item card-links-kpi-item--accent" data-cl-goto="singles">
+            <span class="card-links-kpi-val" id="card-links-kpi-unlinked-val">0</span>
+            <span class="card-links-kpi-lbl">Без связки</span>
+          </button>
+          <button type="button" class="card-links-kpi-item" data-cl-goto="catalog">
+            <span class="card-links-kpi-val" id="card-links-kpi-groups-val">0</span>
+            <span class="card-links-kpi-lbl">Связок</span>
+          </button>
+        </div>
+
+        <div id="card-links-status" class="form-hint card-links-status" role="status">Выберите магазин и нажмите «Загрузить каталог».</div>
+        <div class="progress-wrap" id="card-links-loading" aria-live="polite" hidden>
+          <div class="progress-bar indeterminate" id="card-links-loading-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="fill" id="card-links-loading-fill" style="width: 0%"></div>
+          </div>
+          <div class="progress-foot">
+            <span class="progress-label" id="card-links-loading-text">Загрузка…</span>
+            <span class="progress-pct" id="card-links-loading-pct" hidden></span>
+          </div>
+        </div>
+
+        <div class="card-links-nav">
+          <div class="view-tabs card-links-view-tabs" role="tablist" aria-label="Режим">
+            <button type="button" class="view-tab card-links-tab card-links-wb-only active" data-cl-view="singles" role="tab">Одиночки<span id="card-links-singles-badge" class="card-links-tab-badge" hidden></span></button>
+            <button type="button" class="view-tab card-links-tab" data-cl-view="catalog" role="tab">Каталог</button>
+            <button type="button" class="view-tab card-links-tab" data-cl-view="ai" role="tab">ИИ<span id="card-links-ai-badge" class="card-links-tab-badge" hidden></span></button>
+            <button type="button" class="view-tab card-links-tab" data-cl-view="review" role="tab">Перепроверка<span id="card-links-review-badge" class="card-links-tab-badge" hidden></span></button>
+            <button type="button" class="view-tab card-links-tab card-links-wb-only" data-cl-view="master" role="tab">Мастер</button>
+          </div>
+        </div>
+
+        <div id="card-links-singles-bar" class="card-links-mode-bar" hidden>
+          <div class="card-links-mode-bar-row">
+            <div class="card-links-mode-switch" role="tablist" aria-label="Режим одиночек">
+              <button type="button" class="btn btn-secondary btn-sm card-links-singles-mode active" data-singles-mode="list">Список без связки</button>
+              <button type="button" class="btn btn-secondary btn-sm card-links-singles-mode" data-singles-mode="suggest">Предложения</button>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-singles-check">Подобрать связки</button>
+            <label class="card-links-work-toggle" title="Перекачать каталог с WB перед проверкой">
+              <input type="checkbox" id="card-links-singles-force-refresh"> С WB
+            </label>
+          </div>
+          <p id="card-links-singles-label" class="card-links-mode-status">Сначала загрузите каталог.</p>
+          <div class="card-links-mode-bar-row card-links-singles-apply-row" id="card-links-singles-apply-row" hidden>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-apply-select-all-singles">Выбрать все</button>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-apply-run-singles">Применить выбранные</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-apply-clear-singles">Снять</button>
+          </div>
+        </div>
+        <div class="progress-container" id="card-links-singles-progress" aria-live="polite" hidden></div>
+
+        <div id="card-links-master-panel" class="card-links-master-panel" hidden>
+          <div class="steps-row card-links-master-steps" role="tablist" aria-label="Шаги мастера">
+            <button type="button" class="step-item clm-step" data-clm-step="load"><span class="step-num">1</span><span class="step-label">Загрузить WB</span></button>
+            <button type="button" class="step-item clm-step" data-clm-step="brands"><span class="step-num">2</span><span class="step-label">Бренды</span></button>
+            <button type="button" class="step-item clm-step" data-clm-step="segment"><span class="step-num">3</span><span class="step-label">Сегмент</span></button>
+            <button type="button" class="step-item clm-step" data-clm-step="classify"><span class="step-num">4</span><span class="step-label">Тип / модель</span></button>
+            <button type="button" class="step-item clm-step" data-clm-step="plan"><span class="step-num">5</span><span class="step-label">План</span></button>
+            <button type="button" class="step-item clm-step" data-clm-step="apply"><span class="step-num">6</span><span class="step-label">Применить</span></button>
+          </div>
+          <p id="card-links-master-stats" class="form-hint card-links-master-stats">Шаг 1 — загрузка до 15&nbsp;000 карточек в кэш мастера.</p>
+          <div class="progress-container" id="card-links-master-progress" aria-live="polite" hidden></div>
+          <div id="card-links-master-log" class="card-links-master-log" hidden></div>
+          <div class="card-links-master-filters">
+            <label><span class="toolbar-label">Сегмент</span>
+              <select id="clm-filter-segment" class="select-md"><option value="">Все</option><option value="cosmetic">Косметика</option><option value="home">Дом</option><option value="ikea">IKEA</option><option value="parts">Запчасти</option></select>
+            </label>
+            <label><span class="toolbar-label">Категория WB</span>
+              <select id="clm-filter-category" class="select-md"><option value="">Все</option></select>
+            </label>
+            <label><span class="toolbar-label">Бренд</span>
+              <select id="clm-filter-brand" class="select-md"><option value="">Все</option></select>
+            </label>
+            <label><span class="toolbar-label">На странице</span>
+              <select id="clm-page-size" class="select-md"><option value="100" selected>100</option><option value="200">200</option><option value="0">Все</option></select>
+            </label>
+            <label class="clm-filter-dense-wrap"><span class="toolbar-label">
+              <input type="checkbox" id="clm-filter-dense" value="1">
+              Категории с ≥
+            </span>
+              <select id="clm-filter-dense-min" class="select-md"><option value="2">2</option><option value="3" selected>3</option><option value="5">5</option><option value="10">10</option></select>
+              <span class="toolbar-label">связками</span>
+            </label>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-clm-refresh">Обновить список</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-clm-select-all">Выбрать все</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-clm-clear">Снять</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-clm-merge-selected" disabled title="Выберите 2+ связки одной категории WB">Объединить выбранные</button>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-clm-apply-selected">Применить выбранные</button>
+          </div>
+          <div id="card-links-master-pagination" class="card-links-ai-pagination">
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-clm-page-prev">←</button>
+            <span id="clm-page-label" class="card-links-ai-page-label"></span>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-clm-page-next">→</button>
+          </div>
+          <div id="card-links-master-list" class="card-links-master-list"></div>
+        </div>
+
+        <details id="card-links-work-filter" class="card-links-work-filter" hidden>
+          <summary class="card-links-work-filter-summary">Фильтры</summary>
+          <div class="card-links-work-filter-body">
+          <div class="card-links-work-filter-row">
+            <label class="card-links-work-filter-field">
+              <span class="toolbar-label">Бренд</span>
+              <select id="card-links-filter-brand" class="select-md"><option value="">Все бренды</option></select>
+            </label>
+            <label class="card-links-work-filter-field">
+              <span class="toolbar-label">Категория</span>
+              <select id="card-links-filter-category" class="select-md"><option value="">Все категории</option></select>
+            </label>
+            <label class="card-links-work-filter-field card-links-work-filter-field--grow">
+              <span class="toolbar-label">Скрыть категории</span>
+              <select id="card-links-filter-exclude-categories" class="select-md card-links-exclude-multi" multiple size="3"></select>
+            </label>
+          </div>
+          <div class="card-links-work-filter-row card-links-work-filter-toggles">
+            <label class="card-links-work-toggle"><input type="checkbox" id="card-links-filter-unlinked-only"> Только без связки</label>
+            <label class="card-links-work-toggle"><input type="checkbox" id="card-links-filter-singles-only"> Только одиночки</label>
+            <label class="card-links-work-toggle"><input type="checkbox" id="card-links-filter-hide-small-bundles"> Скрыть мелкие связки (2 шт.)</label>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-filter-reset">Сбросить</button>
+            <span id="card-links-filter-stats" class="card-links-filter-stats form-hint"></span>
+          </div>
+          </div>
+        </details>
+
+        <div id="card-links-ai-bar" class="card-links-ai-wrap" hidden>
+          <div class="card-links-ai-toolbar">
+            <p id="card-links-ai-label" class="card-links-ai-lead"></p>
+            <div class="card-links-ai-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-ai-run">Запустить ИИ</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-select-all">Все</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-merge-two" title="Отметьте 2 связки в одной категории">Склеить 2</button>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-ai-apply">Применить</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-clear">Снять</button>
+            </div>
+          </div>
+          <details class="card-links-ai-settings" id="card-links-ai-settings">
+            <summary>Настройки ИИ</summary>
+            <div class="card-links-ai-settings-grid">
+              <label class="card-links-work-toggle"><input type="checkbox" id="card-links-ai-include-linked" checked> Уже связанные</label>
+              <label class="card-links-work-filter-field">
+                <span class="toolbar-label">Охват</span>
+                <select id="card-links-ai-scope" class="select-md">
+                  <option value="all">Весь каталог</option>
+                  <option value="unlinked">Только без связки</option>
+                  <option value="linked">Только в связках</option>
+                </select>
+              </label>
+              <label class="card-links-work-filter-field">
+                <span class="toolbar-label">Лимит в категории</span>
+                <select id="card-links-ai-batch-size" class="select-md">
+                  <option value="60" selected>60</option>
+                  <option value="80">80</option>
+                  <option value="100">100</option>
+                  <option value="120">120</option>
+                  <option value="150">150</option>
+                </select>
+              </label>
+              <label class="card-links-work-filter-field">
+                <span class="toolbar-label">Макс. товаров</span>
+                <select id="card-links-ai-max-products" class="select-md">
+                  <option value="0" selected>Весь каталог</option>
+                  <option value="500">500</option>
+                  <option value="1000">1000</option>
+                  <option value="2000">2000</option>
+                  <option value="5000">5000</option>
+                </select>
+              </label>
+              <label class="card-links-work-filter-field">
+                <span class="toolbar-label">Макс. категорий</span>
+                <select id="card-links-ai-max-batches" class="select-md">
+                  <option value="6">6</option>
+                  <option value="12" selected>12</option>
+                  <option value="20">20</option>
+                  <option value="40">40</option>
+                  <option value="0">Без лимита</option>
+                </select>
+              </label>
+              <label class="card-links-work-toggle"><input type="checkbox" id="card-links-ai-deterministic-packs" checked> Фасовки 1/2/3</label>
+              <label class="card-links-work-toggle"><input type="checkbox" id="card-links-ai-split-oversized" checked> Делить &gt;30</label>
+            </div>
+            <div class="card-links-ai-prompt-wrap">
+              <div class="card-links-ai-prompt-head">
+                <span class="toolbar-label">Промпт (<span id="card-links-ai-prompt-mp-label">WB</span>)</span>
+                <span id="card-links-ai-prompt-status" class="form-hint card-links-ai-prompt-status"></span>
+              </div>
+              <textarea id="card-links-ai-prompt" class="card-links-ai-prompt-input" rows="10" spellcheck="false" placeholder="Загрузка…"></textarea>
+              <div class="card-links-ai-prompt-actions">
+                <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-ai-prompt-save">Сохранить</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-prompt-reset">Встроенный</button>
+              </div>
+            </div>
+          </details>
+          <div id="card-links-ai-pagination" class="card-links-ai-pagination" hidden>
+            <label class="card-links-ai-page-size-wrap" for="card-links-ai-page-size">На странице</label>
+            <select id="card-links-ai-page-size" class="select-md card-links-ai-page-size" aria-label="Товаров на странице">
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="200">200</option>
+              <option value="0">Все</option>
+            </select>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-page-prev" aria-label="Предыдущая страница">←</button>
+            <span id="card-links-ai-page-label" class="card-links-ai-page-label"></span>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-ai-page-next" aria-label="Следующая страница">→</button>
+          </div>
+        </div>
+
+        <div id="card-links-review-bar" class="card-links-review-wrap" hidden>
+          <span id="card-links-review-label" class="card-links-combine-label"></span>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-review-refresh">Запустить перепроверку</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-review-select-all">Все</button>
+          <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-review-apply">Применить</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-review-clear">Снять</button>
+        </div>
+
+        <div id="card-links-apply-bar" class="card-links-apply-wrap" hidden>
+          <span id="card-links-apply-label" class="card-links-combine-label"></span>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-apply-select-all">Все</button>
+          <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-apply-run">Применить</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-apply-clear">Снять</button>
+        </div>
+        <div id="card-links-combine-bar" class="card-links-combine-wrap" hidden>
+          <span id="card-links-combine-label" class="card-links-combine-label"></span>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-combine-select-all">Все</button>
+          <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-combine-candidates">Объединить</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-combine-clear">Снять</button>
+        </div>
+        <div id="card-links-merge-bar" class="card-links-merge-wrap" hidden>
+          <div class="card-links-merge-compact">
+            <div id="card-links-merge-picker-wrap" class="card-links-merge-picker-wrap card-links-wb-only input-grow"></div>
+            <div id="card-links-ozon-picker-wrap" class="card-links-merge-picker-wrap card-links-ozon-only input-grow" hidden></div>
+            <input type="text" id="card-links-model-name" class="input-grow card-links-ozon-only" placeholder="или новое название модели" hidden>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-merge">Связать</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-disconnect">Разъединить</button>
+          </div>
+        </div>
+        <div id="card-links-catalog-filter" class="card-links-catalog-filter" hidden>
+          <input type="search" id="card-links-catalog-search" class="input-grow" placeholder="Поиск по названию или артикулу" autocomplete="off">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-catalog-select-all">Выбрать на экране</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-catalog-select-unlinked">Выбрать без связки</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-card-links-catalog-clear-checks">Снять</button>
+          <button type="button" class="btn btn-primary btn-sm" id="btn-card-links-auto-link-unlinked">Автосвязка</button>
+        </div>
+        <div id="card-links-auto-link-log" class="card-links-auto-link-log" hidden></div>
+        <div id="card-links-guide-panel" class="card-links-guide-panel" hidden>
+          <div id="card-links-guide-content" class="card-links-guide-content"></div>
+        </div>
+        <div id="card-links-next-hint" hidden></div>
+        <div class="table-scroll" id="card-links-table-wrap">
+          <table class="items-table card-links-table card-links--catalog" id="card-links-table">
+            <thead>
+              <tr>
+                <th class="col-check"><input type="checkbox" id="card-links-check-all" title="Выбрать все"></th>
+                <th class="col-photo">Фото</th>
+                <th>Артикул</th>
+                <th>ID МП</th>
+                <th class="card-links-col-brand">Бренд</th>
+                <th class="card-links-col-cat">Категория</th>
+                <th>Название</th>
+                <th>Связка</th>
+              </tr>
+            </thead>
+            <tbody id="card-links-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Автозапуск -->
+    <section id="panel-auto" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Автозапуск</div>
+        </div>
+        <div class="panel-actions"></div>
+      </div>
+      <div class="auto-layout">
+        <div class="auto-grid">
+          <div class="form-card auto-card-section">
+            <h3>Включение и расписание</h3>
+            <div class="form-group">
+              <div class="toggle-row toggle-row-prominent">
+                <span class="toggle-label">Включить автозапуск</span>
+                <label class="switch">
+                  <input type="checkbox" class="toggle-input" id="auto-enabled">
+                  <span class="switch-track"></span>
+                </label>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Режим расписания</label>
+              <select id="auto-schedule-mode">
+                <option value="slots">По времени (слоты)</option>
+                <option value="interval">По интервалу (каждые N часов)</option>
+              </select>
+            </div>
+            <div class="form-group" id="auto-slots-wrap">
+              <label>Слоты времени (MSK)</label>
+              <input type="text" id="auto-slots" placeholder="09:00, 13:30, 21:00">
+            </div>
+            <div class="form-group" id="auto-interval-wrap" style="display:none;">
+              <label>Интервал запуска</label>
+              <select id="auto-interval-hours">
+                <option value="1">Каждый 1 час</option>
+                <option value="2">Каждые 2 часа</option>
+                <option value="3">Каждые 3 часа</option>
+                <option value="4">Каждые 4 часа</option>
+                <option value="6">Каждые 6 часов</option>
+                <option value="8">Каждые 8 часов</option>
+                <option value="12">Каждые 12 часов</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-card auto-card-section auto-card-tasks">
+            <h3>Что запускать в цикле</h3>
+            <div class="auto-task-groups">
+              <div class="auto-task-group">
+                <div class="auto-task-group-head">
+                  <span class="mp-pill mp-wb">WB</span>
+                  <span class="auto-task-group-title">Wildberries</span>
+                </div>
+                <div class="toggle-row"><span class="toggle-label">Отзывы</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-reviews-wb" checked><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Вопросы</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-questions-wb" checked><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Чаты с покупателями</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-wb-chats"><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Уведомления WB</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-wb-alerts"><span class="switch-track"></span></label></div>
+                <div class="auto-task-stores">
+                  <div class="auto-task-stores-label">Магазины WB</div>
+                  <div class="form-hint">Пусто — из общего списка ниже</div>
+                  <div id="auto-wb-store-list" class="auto-store-list auto-store-list--compact"></div>
+                </div>
+              </div>
+              <div class="auto-task-group">
+                <div class="auto-task-group-head">
+                  <span class="mp-pill mp-yam">ЯМ</span>
+                  <span class="auto-task-group-title">Яндекс.Маркет</span>
+                </div>
+                <div class="toggle-row"><span class="toggle-label">Отзывы</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-reviews-yam" checked><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Вопросы</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-questions-yam" checked><span class="switch-track"></span></label></div>
+                <div class="auto-task-stores">
+                  <div class="auto-task-stores-label">Магазины ЯМ</div>
+                  <div class="form-hint">Пусто — из общего списка ниже</div>
+                  <div id="auto-yam-store-list" class="auto-store-list auto-store-list--compact"></div>
+                </div>
+              </div>
+              <div class="auto-task-group">
+                <div class="auto-task-group-head">
+                  <span class="mp-pill mp-ozon">OZON</span>
+                  <span class="auto-task-group-title">Ozon</span>
+                </div>
+                <div class="toggle-row"><span class="toggle-label">Отзывы <em class="toggle-hint">отдельная подписка API</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-reviews-ozon"><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Вопросы</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-questions-ozon" checked><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Чаты с покупателями</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-ozon-chats"><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Уведомления Ozon</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-ozon-alerts"><span class="switch-track"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Синхронизация акций Ozon <em class="toggle-hint">по порогу скидки или legacy</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-ozon-actions-remove"><span class="switch-track"></span></label></div>
+                <div class="auto-task-stores">
+                  <div class="auto-task-stores-label">Магазины Ozon (отзывы, чаты, уведомления)</div>
+                  <div class="form-hint">Пусто — из общего списка ниже</div>
+                  <div id="auto-ozon-store-list" class="auto-store-list auto-store-list--compact"></div>
+                </div>
+                <div class="auto-task-stores">
+                  <div class="auto-task-stores-label">Магазины Ozon (только акции)</div>
+                  <div class="form-hint">Пусто — как список Ozon выше или общий</div>
+                  <div id="auto-ozon-actions-store-list" class="auto-store-list auto-store-list--compact"></div>
+                </div>
+              </div>
+            </div>
+            <p class="form-hint auto-task-hint">
+              Проверка карточек выполняется вместе с генерацией ответов, если включена в «Настройки → Карточки».
+            </p>
+          </div>
+          <div class="form-card auto-card-section auto-card-stores">
+            <h3>Магазины для авто (общий)</h3>
+            <p class="form-hint">Базовый список для всех задач. Можно сузить отдельно в блоках WB / ЯМ / Ozon выше.</p>
+            <div id="auto-store-list" class="auto-store-list"></div>
+          </div>
+          <div class="form-card auto-card-section">
+            <h3>Статус и управление</h3>
+            <div class="form-group">
+              <label>Статус</label>
+              <div class="form-hint" id="auto-status-text">—</div>
+            </div>
+            <div class="progress-container" id="auto-run-progress" aria-live="polite" hidden></div>
+            <div class="settings-actions auto-card-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-save-auto">Сохранить автозапуск</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-run-auto-now">Запустить сейчас</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-stop-auto">Остановить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Настройки -->
+    <section id="panel-settings" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Настройки</div>
+        </div>
+        <div class="panel-actions panel-actions--user">
+          <span class="panel-user-label" id="auth-user-label-header">—</span>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-logout-header">Выйти</button>
+        </div>
+      </div>
+      <div class="settings-panel">
+        <div class="segmented settings-segments" id="settings-filter" role="tablist" aria-label="Разделы настроек">
+          <button type="button" class="segment-tab active" data-settings-section="connection" role="tab">Подключение</button>
+          <button type="button" class="segment-tab" data-settings-section="openai" role="tab">OpenAI</button>
+          <button type="button" class="segment-tab" data-settings-section="chats" role="tab">Чаты</button>
+          <button type="button" class="segment-tab" data-settings-section="telegram" role="tab">Telegram</button>
+          <button type="button" class="segment-tab" data-settings-section="card-check" role="tab">Карточки</button>
+          <button type="button" class="segment-tab" data-settings-section="ozon-alerts" role="tab">Ozon</button>
+          <button type="button" class="segment-tab" data-settings-section="wb-alerts" role="tab">WB</button>
+          <button type="button" class="segment-tab" data-settings-section="ui" role="tab">Интерфейс</button>
+          <button type="button" class="segment-tab" data-settings-section="users" id="settings-seg-users" role="tab">Пользователи</button>
+          <button type="button" class="segment-tab" data-settings-section="prompts" role="tab">Промпты</button>
+        </div>
+
+        <div id="settings-section-connection" class="settings-section form-card">
+          <h2>Подключение</h2>
+          <div class="form-group">
+            <label>Адрес API</label>
+            <input type="url" id="setting-api_base" placeholder="http://192.168.1.5:8000" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label>Пользователь</label>
+            <div class="form-hint" id="auth-user-label">—</div>
+          </div>
+          <h3 class="settings-subhead">Резервная копия настроек</h3>
+          <p class="form-hint">
+            Один файл: магазины, Telegram, расписание автозапуска, Ozon-акции и промпты.
+            API-ключи в файл не попадают — при импорте на другой сервер их нужно ввести заново.
+          </p>
+          <div class="settings-actions settings-actions--tight">
+            <button type="button" class="btn btn-secondary" id="btn-config-export">Выгрузить настройки</button>
+            <button type="button" class="btn btn-secondary" id="btn-config-import">Загрузить настройки</button>
+            <input type="file" id="config-import-file" accept="application/json,.json" hidden>
+          </div>
+        </div>
+
+        <div id="settings-section-openai" class="settings-section form-card" hidden>
+          <h2>OpenAI</h2>
+          <div class="form-group">
+            <label>API-ключ</label>
+            <input type="password" id="setting-openai_key" placeholder="sk-..." autocomplete="off">
+            <p class="form-hint">Ключ после сохранения нельзя прочитать в интерфейсе. Оставьте поле пустым, чтобы не менять.</p>
+          </div>
+          <div class="settings-actions">
+            <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
+          </div>
+        </div>
+
+        <div id="settings-section-chats" class="settings-section form-card" hidden>
+          <h2>Чаты</h2>
+          <div class="form-group">
+            <label>Отвечать на сообщения с даты</label>
+            <input type="date" id="setting-buyer_chat_reply_from_date">
+          </div>
+          <div class="form-group">
+            <label>Автоответ: только сообщения не старше (дней)</label>
+            <input type="number" id="setting-buyer_chat_auto_max_age_days" min="1" max="30" step="1" placeholder="3">
+          </div>
+          <div class="settings-actions">
+            <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
+          </div>
+        </div>
+
+        <div id="settings-section-telegram" class="settings-section form-card" hidden>
+          <h2>Telegram</h2>
+          <p class="form-hint settings-lead">Один бот — все уведомления и отчёты. Пустой «отдельный» чат = используется основной ID чата.</p>
+
+          <h3 class="settings-subhead">Бот и чаты</h3>
+          <div class="form-group">
+            <label>Токен бота</label>
+            <input type="password" id="setting-telegram_bot_token" placeholder="123456789:AAH..." autocomplete="off">
+            <div class="form-hint">Только строка от @BotFather. После сохранения токен нельзя прочитать — пустое поле = не менять.</div>
+          </div>
+          <div class="form-group">
+            <label>ID чата по умолчанию</label>
+            <input type="text" id="setting-telegram_chat_id" placeholder="chat_id">
+            <div class="form-hint">Используется, если не задан отдельный чат ниже.</div>
+          </div>
+          <div class="form-group">
+            <label>Чат для периодических отчётов</label>
+            <input type="text" id="setting-telegram_report_chat_id" placeholder="необязательно">
+          </div>
+          <div class="form-group">
+            <label>Чат для ошибок в карточках</label>
+            <input type="text" id="setting-telegram_card_error_chat_id" placeholder="необязательно">
+          </div>
+          <div class="form-group">
+            <label>Чат для важных уведомлений Ozon</label>
+            <input type="text" id="setting-ozon_alerts_telegram_chat_id" placeholder="необязательно">
+          </div>
+          <div class="form-group">
+            <label>Чат для важных новостей WB</label>
+            <input type="text" id="setting-wb_alerts_telegram_chat_id" placeholder="необязательно">
+          </div>
+          <div class="form-group">
+            <label>Чат для заблокированных карточек WB</label>
+            <input type="text" id="setting-wb_banned_cards_telegram_chat_id" placeholder="необязательно — иначе основной / отчёты">
+            <div class="form-hint">Отдельная беседа, куда уходит только число заблокированных (включая 0). В сводный отчёт блок тоже добавляется.</div>
+          </div>
+          <div class="form-group">
+            <label>Чат для Avito (заказы и сообщения)</label>
+            <input type="text" id="setting-avito_notify_telegram_chat_id" placeholder="необязательно — иначе основной ID чата">
+            <div class="form-hint">Беседа для новых заказов, сообщений и низкого баланса Avito. На уведомление о сообщении можно <b>ответить текстом или одним фото</b> — уйдёт покупателю в Avito. Магазин: «Магазины» (client_id + client_secret).</div>
+          </div>
+          <div class="form-group">
+            <label>Порог рекламного баланса Avito (₽)</label>
+            <input type="number" id="setting-avito_balance_threshold" min="0" step="100" placeholder="1000">
+            <div class="form-hint">Если сумма рекламного баланса (основные + бонусы) станет ниже порога — одно короткое уведомление с суммой. Повтор — только после роста выше порога и нового падения.</div>
+          </div>
+
+          <h3 class="settings-subhead">AI-ассистент в Telegram</h3>
+            <p class="form-hint">Пишите боту в указанном чате — те же команды, что во вкладке AI. <b>В группе</b> обращайтесь через @бот или ответ на его сообщение.</p>
+          <div class="form-group">
+            <label>Telegram user_id ассистента</label>
+            <input type="text" id="setting-telegram_agent_user_id" placeholder="например 123456789">
+            <div class="form-hint">Только этот пользователь может управлять ассистентом. Несколько ID через запятую. Узнать свой ID: команда /id боту. Если пусто — любой в разрешённом чате.</div>
+          </div>
+          <div class="form-group">
+            <label>Чат для команд ассистенту</label>
+            <input type="text" id="setting-telegram_agent_chat_id" placeholder="необязательно — иначе основной ID чата">
+            <div class="form-hint">Только этот chat_id может управлять. Несколько ID через запятую. Бот должен быть добавлен в чат.</div>
+          </div>
+          <div class="settings-toggle-list">
+            <div class="toggle-row"><span class="toggle-label">Управление через Telegram <em class="toggle-hint">long polling</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-telegram_agent_enabled"><span class="switch-track"></span></label></div>
+          </div>
+
+          <h3 class="settings-subhead">Что отправлять</h3>
+          <div class="settings-toggle-list">
+            <div class="toggle-row"><span class="toggle-label">Отзывы 1–3★ и упаковка <em class="toggle-hint">мгновенно</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-telegram_enabled"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Ошибки в карточках <em class="toggle-hint">мгновенно</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-card_check_telegram_enabled" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Важные уведомления Ozon <em class="toggle-hint">мгновенно</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-ozon_alerts_telegram_enabled" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Важные новости WB <em class="toggle-hint">мгновенно</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_alerts_telegram_enabled" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Периодический сводный отчёт</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-telegram_report_enabled"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Ошибки карточек в отчёте</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-card_check_include_in_periodic_report" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Заблокированные карточки WB в сводном отчёте</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_banned_cards_in_report" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Отдельные уведомления: заблокированные WB <em class="toggle-hint">обязательно для авто</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_banned_cards_enabled"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Уведомления Avito <em class="toggle-hint">заказы + сообщения + баланс, опрос ~1.5 мин</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_notify_enabled"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Avito: новые заказы</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_orders_notify_enabled" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Avito: входящие сообщения</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_messages_notify_enabled" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Avito: низкий рекламный баланс</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_balance_notify_enabled" checked><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Avito: ИИ-черновики ответов <em class="toggle-hint">кнопки Отправить / Изменить / Отклонить</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_ai_reply_enabled"><span class="switch-track"></span></label></div>
+          </div>
+          <div class="form-group">
+            <label>Промпт ИИ для ответов Avito</label>
+            <textarea id="setting-avito_ai_reply_prompt" rows="10" placeholder="Пусто = встроенный промпт (доставка, характеристики, цена, скидка 10% от 2 шт…)"></textarea>
+            <div class="form-hint">Черновик уходит в беседку Avito с кнопками. В Avito покупателю — только после «Отправить» (задержка до ~1 мин). «Изменить» — только reply на карточку. Наличие (SKIP) — без черновика.</div>
+          </div>
+          <div class="form-group">
+            <label>Период отчёта</label>
+            <select id="setting-telegram_report_interval">
+              <option value="hour">Раз в час (за прошедший час)</option>
+              <option value="day">Раз в сутки (за прошедшие сутки)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Расписание заблокированных карточек WB</label>
+            <div class="form-hint">
+              <b>Важно:</b> галочка выше должна быть включена — иначе автоцикл молчит (кнопка «сейчас» работает и без неё).
+              <br>
+              <b>Живой запрос к WB — каждый час</b> (все активные магазины).
+              Если после проверки число изменилось — сразу в беседку:
+              «СРОЧНО СТАЛО БОЛЬШЕ…» или «РАЗБЛОКИРОВАЛИ КАРТОЧКИ…» (с разбивкой по магазинам).
+              <br>
+              <b>Плановая сводка</b> (включая 0) — <b>09:00</b>, <b>15:00</b>, <b>21:00</b> МСК
+              (если сервис спал — слот догоняется при следующем запуске).
+              В часовой сводный отчёт MarketAI идёт последний снимок без лишнего запроса к WB.
+            </div>
+          </div>
+
+          <h3 class="settings-subhead">Шаблоны мгновенных сообщений (HTML)</h3>
+          <p class="form-hint settings-lead">Все сообщения в Telegram с <code>parse_mode=HTML</code>. Теги: <code>&lt;b&gt;</code> жирный, <code>&lt;i&gt;</code> курсив, <code>&lt;blockquote&gt;</code> цитата. Переменные подставляются с экранированием.</p>
+          <div class="form-group">
+            <label>Ошибки в карточках</label>
+            <textarea id="setting-card_check_telegram_template" class="code-field" rows="8" placeholder="Шаблон уведомления"></textarea>
+            <div class="form-hint">{store_name}, {product_title}, {source_label}, {customer_text}, {error_kind}, {explanation}</div>
+          </div>
+          <div class="form-group">
+            <label>Важные уведомления Ozon</label>
+            <textarea id="setting-ozon_alerts_telegram_template" class="code-field" rows="10"></textarea>
+            <div class="form-hint">{telegram_title}, {store_name}, {deadline}, {consequence}, {summary} в &lt;blockquote&gt;, {action_needed}…</div>
+          </div>
+          <div class="form-group">
+            <label>Важные новости WB</label>
+            <textarea id="setting-wb_alerts_telegram_template" class="code-field" rows="8"></textarea>
+            <div class="form-hint">{telegram_title}, {store_name}, {news_types}, {summary}, {action_needed}, {news_date}, {header}</div>
+          </div>
+
+          <div class="settings-actions">
+            <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
+            <button type="button" class="btn btn-secondary" id="btn-telegram-test">Проверить бота</button>
+            <button type="button" class="btn btn-secondary" id="btn-telegram-report-now">Отправить отчёт сейчас</button>
+            <button type="button" class="btn btn-secondary" id="btn-telegram-wb-banned-now">Заблокированные WB сейчас</button>
+            <button type="button" class="btn btn-secondary" id="btn-telegram-avito-now">Avito сейчас</button>
+          </div>
+        </div>
+
+        <div id="settings-section-ui" class="settings-section form-card" hidden>
+          <h2>Интерфейс</h2>
+          <div class="settings-toggle-list">
+            <div class="toggle-row"><span class="toggle-label">Компактный режим</span><label class="switch"><input type="checkbox" class="toggle-input" id="ui-compact"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Приглушить фон</span><label class="switch"><input type="checkbox" class="toggle-input" id="ui-dim-bg"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Уменьшить анимации</span><label class="switch"><input type="checkbox" class="toggle-input" id="ui-reduce-motion"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Движение фона</span><label class="switch"><input type="checkbox" class="toggle-input" id="ui-bg-motion"><span class="switch-track"></span></label></div>
+            <div class="toggle-row toggle-row-prominent"><span class="toggle-label">Тёмная тема</span><label class="switch"><input type="checkbox" class="toggle-input" id="theme-dark"><span class="switch-track"></span></label></div>
+            <div class="toggle-row"><span class="toggle-label">Подтверждать удаления</span><label class="switch"><input type="checkbox" class="toggle-input" id="ui-confirm-danger"><span class="switch-track"></span></label></div>
+          </div>
+          <div class="form-group settings-ui-toast">
+            <label>Длительность уведомлений</label>
+            <select id="ui-toast-duration">
+              <option value="2500">2.5 сек</option>
+              <option value="4000">4 сек</option>
+              <option value="7000">7 сек</option>
+            </select>
+          </div>
+          <div class="settings-actions">
+            <button type="button" class="btn btn-secondary btn-sm" id="ui-reset">Сбросить настройки UI</button>
+          </div>
+        </div>
+
+        <div id="settings-section-users" class="settings-section form-card" hidden>
+          <h2>Пользователи</h2>
+          <div id="users-admin-only" style="display:none;">
+            <div class="form-group">
+              <label>Новый пользователь</label>
+              <div class="users-add-grid">
+                <input type="text" id="new-user-username" placeholder="логин">
+                <input type="password" id="new-user-password" placeholder="пароль">
+                <button type="button" class="btn btn-primary" id="btn-create-user">Создать</button>
+              </div>
+            </div>
+            <div id="users-list" class="stores-grid users-grid"></div>
+          </div>
+          <div id="users-no-access" class="form-hint">Только для администратора</div>
+        </div>
+
+        <div id="settings-section-card-check" class="settings-section form-card" hidden>
+          <h2>Проверка ошибок в карточке</h2>
+          <p class="form-hint settings-lead">При генерации ответа (вручную и в автозапуске) ИИ одним запросом формирует ответ и проверяет, нет ли в тексте покупателя признаков ошибки в карточке товара. Уведомления в Telegram — в разделе <button type="button" class="link-btn" data-settings-section="telegram">Telegram</button>.</p>
+          <div class="settings-toggle-list">
+            <div class="toggle-row toggle-row-prominent"><span class="toggle-label">Включить проверку карточки</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-card_check_enabled" checked><span class="switch-track"></span></label></div>
+          </div>
+          <div class="settings-actions">
+            <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
+          </div>
+        </div>
+
+        <div id="settings-section-ozon-alerts" class="settings-section form-card" hidden>
+          <h2>Важные уведомления Ozon</h2>
+          <p class="form-hint settings-lead">Сканирует чаты «Поддержка и новости» Ozon (штрафы, ИС, блокировки). ИИ анализирует сообщения с выбранной даты. Отправка в Telegram — в разделе <button type="button" class="link-btn" data-settings-section="telegram">Telegram</button>.</p>
+          <div class="settings-toggle-list">
+            <div class="toggle-row toggle-row-prominent"><span class="toggle-label">Включить проверку уведомлений</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-ozon_alerts_enabled"><span class="switch-track"></span></label></div>
+          </div>
+          <div class="form-group">
+            <label>Проверять сообщения с даты</label>
+            <input type="date" id="setting-ozon_alerts_check_from_date">
+            <div class="form-hint">Пусто — все сообщения в выборке истории чата.</div>
+          </div>
+          <div class="form-group">
+            <label>Промпт ИИ</label>
+            <div class="form-hint">Редактируется во вкладке «Настройки → Промпты» — группа «Уведомления Ozon».</div>
+          </div>
+          <div class="settings-actions">
+            <select id="ozon-alerts-scan-store" class="select-md" title="Магазин Ozon"></select>
+            <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
+            <button type="button" class="btn btn-secondary" id="btn-ozon-alerts-scan-now">Проверить чаты</button>
+            <button type="button" class="btn btn-secondary" id="btn-ozon-alerts-rescan-now" title="Сбросить пометки «не важно»">Пересканировать</button>
+          </div>
+          <div class="progress-container" id="ozon-alerts-scan-progress" aria-live="polite" hidden></div>
+        </div>
+
+        <div id="settings-section-wb-alerts" class="settings-section form-card" hidden>
+          <h2>Уведомления Wildberries</h2>
+          <p class="form-hint settings-lead">Загружает новости портала продавца WB (common-api). Автоматически скрывает шум: новые заказы и уведомления о скорой отмене. ИИ отбирает важные новости; отправка в Telegram — в разделе <button type="button" class="link-btn" data-settings-section="telegram">Telegram</button>. Промпт — в <button type="button" class="link-btn" data-settings-section="prompts">Промпты</button> (группа «Уведомления WB»).</p>
+          <div class="settings-toggle-list">
+            <div class="toggle-row toggle-row-prominent"><span class="toggle-label">Включить загрузку уведомлений WB</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-wb_alerts_enabled"><span class="switch-track"></span></label></div>
+          </div>
+          <div class="form-group">
+            <label>Рассматривать новости с даты</label>
+            <input type="date" id="setting-wb_alerts_check_from_date">
+            <div class="form-hint">Пусто — последние 30 дней. Новости старше даты не анализируются. Не более 100 новостей за запрос API.</div>
+          </div>
+          <div class="settings-actions">
+            <select id="wb-alerts-scan-store" class="select-md" title="Магазин WB"></select>
+            <button type="button" class="btn btn-primary btn-save-server-settings">Сохранить</button>
+            <button type="button" class="btn btn-secondary" id="btn-wb-alerts-scan-now">Загрузить новости</button>
+            <button type="button" class="btn btn-secondary" id="btn-wb-alerts-rescan-now" title="Сбросить скрытые (заказы/отмены) и загрузить снова">Перезагрузить</button>
+          </div>
+        </div>
+
+        <div id="settings-section-prompts" class="settings-section form-card" hidden>
+          <h2>Промпты</h2>
+          <p class="form-hint settings-lead">Промпт «Проверка карточки» добавляется к каждой генерации. «Чаты» — для WB и Ozon.</p>
+          <div id="prompts-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Уведомления Ozon -->
+    <section id="panel-ozon-alerts" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Уведомления</div>
+        </div>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-ozon-alerts">Обновить</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-alerts-scan-wb" hidden>Загрузить WB</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-ozon-alerts-rescan-panel" title="Ozon: сбросить «не важно»">Пересканировать Ozon</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-wb-alerts-rescan-panel" title="WB: перезагрузить с фильтром" hidden>Перезагрузить WB</button>
+        </div>
+      </div>
+      <div class="panel-toolbar">
+        <div class="toolbar-group">
+          <span class="toolbar-label">Площадка</span>
+          <select id="alerts-marketplace" class="select-md">
+            <option value="">Все</option>
+            <option value="ozon">Ozon</option>
+            <option value="wb">Wildberries</option>
+          </select>
+        </div>
+        <div class="toolbar-group">
+          <span class="toolbar-label">Магазин</span>
+          <select id="ozon-alerts-store" class="select-md">
+            <option value="">Все магазины</option>
+          </select>
+        </div>
+        <div class="toolbar-group" id="alerts-wb-from-wrap" hidden>
+          <span class="toolbar-label">Новости с даты</span>
+          <input type="date" id="alerts-wb-from-date" class="input-date-toolbar" title="С какой даты загружать и анализировать новости WB">
+        </div>
+        <div class="toolbar-group">
+          <span class="toolbar-label">Статус</span>
+          <select id="ozon-alerts-status" class="select-lg">
+            <option value="">Важные (без «не важно»)</option>
+            <option value="new">Только новые</option>
+            <option value="resolved">Обработанные</option>
+          </select>
+        </div>
+      </div>
+      <div class="progress-container" id="ozon-alerts-panel-scan-progress" aria-live="polite" hidden></div>
+      <div id="ozon-alerts-wrap" class="ops-log-table-wrap"></div>
+    </section>
+
+    <!-- Ошибки карточек -->
+    <section id="panel-card-errors" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Ошибки карточек</div>
+        </div>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-card-errors">Обновить</button>
+        </div>
+      </div>
+      <div class="panel-toolbar">
+        <div class="toolbar-group">
+          <span class="toolbar-label">Магазин</span>
+          <select id="card-errors-store" class="select-md">
+            <option value="">Все магазины</option>
+          </select>
+        </div>
+        <div class="toolbar-group">
+          <span class="toolbar-label">Статус</span>
+          <select id="card-errors-status" class="select-md">
+            <option value="">Все статусы</option>
+            <option value="new">Новые</option>
+            <option value="resolved">Обработанные</option>
+          </select>
+        </div>
+      </div>
+      <div id="card-errors-wrap" class="ops-log-table-wrap"></div>
+    </section>
+
+    <!-- AI-ассистент -->
+    <section id="panel-agent" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">AI-ассистент</div>
+        </div>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-agent-clear">Новый диалог</button>
+        </div>
+      </div>
+      <div class="agent-chat">
+        <div class="agent-suggestions" id="agent-suggestions">
+          <button type="button" class="agent-chip" data-agent-prompt="Покажи список магазинов">Магазины</button>
+          <button type="button" class="agent-chip" data-agent-prompt="Какая статистика очереди?">Статистика</button>
+          <button type="button" class="agent-chip" data-agent-prompt="Покажи новые отзывы без ответа">Новые отзывы</button>
+          <button type="button" class="agent-chip" data-agent-prompt="Статус автозапуска">Автозапуск</button>
+          <button type="button" class="agent-chip" data-agent-prompt="Ответь на все новые отзывы">Цикл: отзывы</button>
+          <button type="button" class="agent-chip" data-agent-prompt="Проверь чаты покупателей по всем магазинам">Чаты</button>
+          <button type="button" class="agent-chip" data-agent-prompt="Ответь в чатах WB и Ozon">Ответить в чатах</button>
+          <button type="button" class="agent-chip" data-agent-prompt="Проверь автоакции Ozon по всем магазинам">Акции Ozon</button>
+          <button type="button" class="agent-chip" data-agent-prompt="Показатели качества Ozon по магазинам">Качество Ozon</button>
+        </div>
+        <div class="agent-messages" id="agent-messages" aria-live="polite">
+          <div class="agent-welcome">
+            <p>Напишите, что нужно сделать. Для опасных действий (загрузка, генерация, отправка) ассистент запросит подтверждение.</p>
+          </div>
+        </div>
+        <div class="agent-pending" id="agent-pending" hidden>
+          <p class="agent-pending-text" id="agent-pending-text"></p>
+          <div class="agent-pending-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="btn-agent-confirm">Подтвердить</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-agent-cancel">Отмена</button>
+          </div>
+        </div>
+        <form class="agent-compose" id="agent-form">
+          <textarea id="agent-input" class="agent-input" rows="2" placeholder="Например: загрузи новые отзывы для всех магазинов"></textarea>
+          <button type="submit" class="btn btn-primary" id="btn-agent-send">Отправить</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Лог -->
+    <section id="panel-log" class="panel">
+      <div class="panel-toprow">
+        <div>
+          <div class="panel-eyebrow">MarketAI</div>
+          <div class="panel-heading">Журнал</div>
+        </div>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-log">Обновить</button>
+        </div>
+      </div>
+      <div class="panel-toolbar">
+        <div class="toolbar-group">
+          <span class="toolbar-label">Режим</span>
+          <select id="log-mode" class="select-md">
+          <option value="ops">Операционный</option>
+          <option value="dev">Dev (админ)</option>
+        </select>
+        </div>
+        <div class="toolbar-group">
+          <span class="toolbar-label">Магазин</span>
+          <select id="log-store" class="select-md" title="Магазин">
+          <option value="">Все магазины</option>
+        </select>
+        </div>
+        <div class="toolbar-group">
+          <span class="toolbar-label">Действие</span>
+          <select id="log-action" class="select-lg">
+          <option value="">Все действия</option>
+          <option value="store_auto">Автозапуск: по магазину</option>
+          <option value="auto_run">Автозапуск: итог слота</option>
+          <option value="auto_run_skipped">Автозапуск: пропуск</option>
+          <option value="load_new">Загрузка новых</option>
+          <option value="generate">Генерация</option>
+          <option value="send">Отправка</option>
+          <option value="template_apply">Шаблон</option>
+          <option value="store_wb_chats_auto">Чаты WB: авто</option>
+          <option value="wb_buyer_chat_send">Чаты WB: отправка</option>
+          <option value="wb_buyer_chat_mass_send">Чаты WB: массово</option>
+          <option value="store_ozon_chats_auto">Чаты Ozon: авто</option>
+          <option value="ozon_buyer_chat_send">Чаты Ozon: отправка</option>
+          <option value="ozon_buyer_chat_mass_send">Чаты Ozon: массово</option>
+          <option value="ozon_actions_auto_remove">Акции Ozon: автоудаление</option>
+          <option value="telegram_report">Telegram: отчёт</option>
+          <option value="card_error_detected">Ошибка карточки</option>
+          <option value="ozon_alert_detected">Ozon: важное уведомление</option>
+          <option value="store_ozon_alerts_auto">Автозапуск: уведомления Ozon</option>
+        </select>
+        </div>
+        <div class="toolbar-group">
+          <span class="toolbar-label">Уровень</span>
+          <select id="log-level" class="select-md">
+          <option value="">Все уровни</option>
+          <option value="INFO">INFO</option>
+          <option value="WARNING">WARNING</option>
+          <option value="ERROR">ERROR</option>
+        </select>
+        </div>
+        <div class="toolbar-group toolbar-group--grow">
+          <span class="toolbar-label">Поиск</span>
+          <input type="search" id="log-q" class="input-grow" placeholder="Текст в журнале…">
+        </div>
+      </div>
+      <div id="ops-log-wrap" class="ops-log-table-wrap"></div>
+      <pre class="log-wrap" id="log-content"></pre>
+    </section>
+  </main>
+
+  <!-- Модальное окно: отзыв/вопрос и ответ -->
+  <div id="modal-item-detail" class="modal-backdrop" role="dialog" aria-modal="true">
+    <div class="modal modal-scroll">
+      <h2 id="modal-item-detail-title">Отзыв</h2>
+      <div id="modal-item-status" class="form-hint modal-item-status"></div>
+      <div class="form-group">
+        <label>Магазин</label>
+        <div id="modal-item-store" class="form-hint">—</div>
+      </div>
+      <div class="form-group">
+        <label>Товар</label>
+        <div id="modal-item-product" class="form-hint">—</div>
+      </div>
+      <div class="form-group">
+        <label id="modal-item-text-label">Текст отзыва</label>
+        <div id="modal-item-text" class="text-block">—</div>
+      </div>
+      <div class="form-group">
+        <label for="modal-item-answer-input">Ответ</label>
+        <textarea id="modal-item-answer-input" class="textarea-answer" rows="6" placeholder="Сгенерируйте или введите ответ вручную"></textarea>
+        <div id="modal-item-send-error" class="form-error" hidden></div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="btn-modal-item-close">Закрыть</button>
+        <button type="button" class="btn btn-primary" id="btn-modal-item-save">Сохранить ответ</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Подтверждение отправки на маркетплейс -->
+  <div id="modal-send-confirm" class="modal-backdrop" role="dialog" aria-modal="true">
+    <div class="modal">
+      <h2>Отправить ответы?</h2>
+      <p class="form-hint">Ответы будут опубликованы на маркетплейсе. Отменить публикацию через приложение нельзя.</p>
+      <div id="modal-send-confirm-body" class="text-block"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="btn-send-confirm-cancel">Отмена</button>
+        <button type="button" class="btn btn-primary" id="btn-send-confirm-ok">Отправить</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <div class="fx-cow-screen" id="fx-cow-screen" role="alertdialog" aria-modal="true" aria-labelledby="fx-cow-screen-title">
+    <div class="fx-cow-screen__inner">
+      <div class="fx-cow-screen__copy">
+        <p class="fx-cow-screen__code" aria-hidden="true">···</p>
+        <h2 class="fx-cow-screen__title" id="fx-cow-screen-title">Нет соединения</h2>
+        <p class="fx-cow-screen__text" id="fx-cow-screen-text">Не удалось связаться с сервером.</p>
+        <div class="fx-cow-screen__actions">
+          <button type="button" class="btn btn-primary fx-cow-screen__retry" id="fx-cow-retry">Повторить</button>
+          <button type="button" class="btn btn-secondary fx-cow-screen__close" id="fx-cow-close">Закрыть</button>
+        </div>
+      </div>
+      <div class="fx-cow-screen__art" aria-hidden="true">
+        <svg class="fx-cow-screen__svg" viewBox="0 0 220 190" xmlns="http://www.w3.org/2000/svg">
+          <ellipse class="fx-cow-shadow" cx="110" cy="176" rx="62" ry="9" fill="rgba(0,0,0,0.22)"/>
+          <g class="fx-cow-wifi">
+            <path d="M90 22 Q110 4 130 22" fill="none" stroke="rgba(255,255,255,0.45)" stroke-width="3.5" stroke-linecap="round"/>
+            <path d="M82 32 Q110 12 138 32" fill="none" stroke="rgba(255,255,255,0.55)" stroke-width="3.5" stroke-linecap="round"/>
+            <path d="M74 42 Q110 22 146 42" fill="none" stroke="rgba(255,255,255,0.7)" stroke-width="3.5" stroke-linecap="round"/>
+            <line x1="72" y1="18" x2="148" y2="46" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+          </g>
+          <path class="fx-cow-tail" d="M158 108 C178 98, 188 78, 182 58 C180 50, 172 48, 168 56 C164 66, 170 78, 162 92 Z" fill="#f8fafc" stroke="#1a1a1a" stroke-width="2"/>
+          <ellipse cx="108" cy="128" rx="54" ry="36" fill="#fff" stroke="#1a1a1a" stroke-width="2.5"/>
+          <ellipse cx="88" cy="118" rx="16" ry="13" fill="#1a1a1a"/>
+          <ellipse cx="128" cy="122" rx="12" ry="10" fill="#1a1a1a"/>
+          <rect x="78" y="148" width="16" height="26" rx="5" fill="#fff" stroke="#1a1a1a" stroke-width="2"/>
+          <rect x="98" y="148" width="16" height="26" rx="5" fill="#fff" stroke="#1a1a1a" stroke-width="2"/>
+          <rect x="118" y="148" width="16" height="26" rx="5" fill="#fff" stroke="#1a1a1a" stroke-width="2"/>
+          <rect x="138" y="148" width="16" height="26" rx="5" fill="#fff" stroke="#1a1a1a" stroke-width="2"/>
+          <ellipse class="fx-cow-ear fx-cow-ear--l" cx="62" cy="72" rx="12" ry="16" fill="#fff" stroke="#1a1a1a" stroke-width="2"/>
+          <ellipse class="fx-cow-ear fx-cow-ear--r" cx="156" cy="72" rx="12" ry="16" fill="#fff" stroke="#1a1a1a" stroke-width="2"/>
+          <ellipse cx="62" cy="74" rx="6" ry="9" fill="#fecdd3"/>
+          <ellipse cx="156" cy="74" rx="6" ry="9" fill="#fecdd3"/>
+          <ellipse cx="110" cy="88" rx="46" ry="40" fill="#fff" stroke="#1a1a1a" stroke-width="2.5"/>
+          <ellipse cx="84" cy="82" rx="15" ry="17" fill="#1a1a1a"/>
+          <ellipse cx="136" cy="82" rx="15" ry="17" fill="#1a1a1a"/>
+          <g class="fx-cow-eyes">
+            <ellipse cx="84" cy="84" rx="9" ry="10" fill="#fff"/>
+            <ellipse cx="136" cy="84" rx="9" ry="10" fill="#fff"/>
+            <circle class="fx-cow-pupil" cx="86" cy="86" r="4.5" fill="#1a1a1a"/>
+            <circle class="fx-cow-pupil" cx="138" cy="86" r="4.5" fill="#1a1a1a"/>
+            <circle cx="88" cy="83" r="1.8" fill="#fff"/>
+            <circle cx="140" cy="83" r="1.8" fill="#fff"/>
+          </g>
+          <path d="M72 52 L66 30 L80 48 Z" fill="#fef3c7" stroke="#1a1a1a" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M148 52 L154 30 L140 48 Z" fill="#fef3c7" stroke="#1a1a1a" stroke-width="2" stroke-linejoin="round"/>
+          <ellipse cx="110" cy="104" rx="24" ry="17" fill="#fda4af"/>
+          <ellipse cx="100" cy="106" rx="5" ry="6" fill="#9f1239"/>
+          <ellipse cx="120" cy="106" rx="5" ry="6" fill="#9f1239"/>
+          <path d="M110 112 Q102 118 96 116" stroke="#9f1239" stroke-width="2" fill="none" stroke-linecap="round"/>
+          <path d="M110 112 Q118 118 124 116" stroke="#9f1239" stroke-width="2" fill="none" stroke-linecap="round"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модальное окно редактирования магазина -->
+  <div id="modal-store" class="modal-backdrop">
+    <div class="modal">
+      <h2>Редактировать магазин</h2>
+      <form id="form-store-edit">
+        <input type="hidden" name="store_id">
+        <div class="form-group">
+          <label>Название</label>
+          <input type="text" name="name" required>
+        </div>
+        <div class="form-group">
+          <label>API-ключ</label>
+          <input type="password" name="api_key" placeholder="оставьте пустым, чтобы не менять">
+        </div>
+        <div class="form-group" id="wrap-edit-business-id" style="display: none;">
+          <label id="label-edit-business-id">Business ID</label>
+          <input type="number" name="business_id">
+        </div>
+        <div class="form-group" id="wrap-edit-client-id" style="display: none;">
+          <label id="label-edit-client-id">Client ID</label>
+          <input type="text" name="client_id">
+        </div>
+        <div class="form-group">
+          <div class="toggle-row"><span class="toggle-label">Активен</span><label class="switch"><input type="checkbox" class="toggle-input" name="active" checked><span class="switch-track"></span></label></div>
+        </div>
+        <div class="modal-actions">
+          <button type="submit" class="btn btn-primary">Сохранить</button>
+          <button type="button" class="btn btn-secondary" id="btn-modal-cancel">Отмена</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/static/fx-widgets.js?v=4"></script>
+  <script src="/static/app.js?v=132"></script>
+  <script src="/static/card_links_master.js?v=9"></script>
+</body>
+</html>
