@@ -97,6 +97,29 @@ async def list_all_action_products(client: OzonClient, action_id: int, *, max_pa
     return products
 
 
+def exit_action_price_for_row(row: dict) -> Optional[float]:
+    """
+    Цена для выхода через /v1/actions/products/update.
+
+    Ozon (elastic/max boosting): action_price >= лимит акции (max_action_price).
+    Классика: action_price = обычная price (обычно выше max_action_price).
+    Берём max(price, max_action_price), чтобы покрыть оба случая.
+    """
+    if not isinstance(row, dict):
+        return None
+    price = _parse_positive_float(row.get("price"))
+    max_ap = _parse_positive_float(row.get("max_action_price"))
+    action_price = _parse_positive_float(row.get("action_price"))
+    candidates = [x for x in (price, max_ap, action_price) if x is not None]
+    if not candidates:
+        return None
+    exit_ap = max(candidates)
+    # если известен лимит — гарантированно не ниже него (иначе бустинг не отпускает)
+    if max_ap is not None:
+        exit_ap = max(exit_ap, max_ap)
+    return round(exit_ap, 2)
+
+
 async def _exit_products_via_update(
     client: OzonClient,
     action_id: int,
@@ -104,19 +127,26 @@ async def _exit_products_via_update(
     product_ids: List[int],
 ) -> Dict[str, Any]:
     """
-    Fallback выхода из акции: /v1/actions/products/update с action_price = обычная price.
-    Нужен, когда deactivate для части механик больше не снимает товар.
+    Выход из акции через /v1/actions/products/update.
+    Для бустинга deactivate часто no-op — нужен action_price >= max_action_price.
     """
     payload: List[dict] = []
+    skipped: List[int] = []
     for pid in product_ids:
         row = products_by_id.get(int(pid)) or {}
-        price = _parse_positive_float(row.get("price"))
-        if price is None:
+        exit_ap = exit_action_price_for_row(row)
+        if exit_ap is None:
+            skipped.append(int(pid))
             continue
-        payload.append({"product_id": int(pid), "action_price": round(price, 2)})
+        payload.append({"product_id": int(pid), "action_price": exit_ap})
     if not payload:
-        return {"product_ids": [], "rejected": product_ids}
-    return await client.activate_action_products(action_id, payload)
+        return {"product_ids": [], "rejected": skipped or list(product_ids)}
+    result = await client.activate_action_products(action_id, payload)
+    if skipped:
+        rejected = list(result.get("rejected") or [])
+        rejected.extend(skipped)
+        result = {**result, "rejected": rejected}
+    return result
 
 
 async def remove_products_from_actions(
@@ -163,53 +193,58 @@ async def remove_products_from_actions(
         for i in range(0, len(pids), batch_size):
             chunk = pids[i : i + batch_size]
             removed_ids: List[int] = []
-            rejected_ids: List[int] = []
-            deactivate_failed = False
+            rejected_ids: List[int] = list(chunk)
+
+            # Сначала update с ценой выхода: для эластичного бустинга deactivate no-op.
             try:
-                result = await client.deactivate_action_products(aid, chunk)
-                for x in (result.get("product_ids") or []):
+                fb = await _exit_products_via_update(client, aid, products_by_id, chunk)
+                for x in (fb.get("product_ids") or []):
                     try:
-                        removed_ids.append(int(x))
+                        pid = int(x)
                     except (TypeError, ValueError):
-                        pass
-                for item in (result.get("rejected") or []):
+                        continue
+                    if pid not in removed_ids:
+                        removed_ids.append(pid)
+                    exited_total += 1
+                rejected_ids = []
+                for item in (fb.get("rejected") or []):
                     rid = item.get("product_id") if isinstance(item, dict) else item
                     try:
                         rejected_ids.append(int(rid))
                     except (TypeError, ValueError):
                         pass
             except Exception as e:
-                log.warning("ozon_actions deactivate action=%s: %s — fallback update", aid, e)
-                stats["errors"].append({"action_id": aid, "error": str(e)[:300], "fallback": "update"})
-                deactivate_failed = True
+                log.warning("ozon_actions exit-update action=%s: %s", aid, e)
+                stats["errors"].append({"action_id": aid, "error": str(e)[:300], "phase": "exit_update"})
                 rejected_ids = list(chunk)
 
-            fallback_ids = rejected_ids if (deactivate_failed or rejected_ids) else (
-                list(chunk) if not removed_ids else []
-            )
-            if fallback_ids:
+            # Затем deactivate (классические акции) — по остатку / всему chunk.
+            still = rejected_ids or [pid for pid in chunk if pid not in removed_ids]
+            if still:
                 try:
-                    fb = await _exit_products_via_update(client, aid, products_by_id, fallback_ids)
-                    fb_ok = 0
-                    for x in (fb.get("product_ids") or []):
+                    result = await client.deactivate_action_products(aid, still)
+                    for x in (result.get("product_ids") or []):
                         try:
                             pid = int(x)
                         except (TypeError, ValueError):
                             continue
                         if pid not in removed_ids:
                             removed_ids.append(pid)
-                        fb_ok += 1
-                    exited_total += fb_ok
                     rejected_ids = []
-                    for item in (fb.get("rejected") or []):
+                    for item in (result.get("rejected") or []):
                         rid = item.get("product_id") if isinstance(item, dict) else item
                         try:
                             rejected_ids.append(int(rid))
                         except (TypeError, ValueError):
                             pass
-                except Exception as e2:
-                    log.warning("ozon_actions exit-update action=%s: %s", aid, e2)
-                    stats["errors"].append({"action_id": aid, "error": str(e2)[:300]})
+                    # если deactivate молча вернул пусто — не считаем успехом остаток
+                    if not (result.get("product_ids") or []) and not (result.get("rejected") or []):
+                        rejected_ids = [pid for pid in still if pid not in removed_ids]
+                except Exception as e:
+                    log.warning("ozon_actions deactivate action=%s: %s", aid, e)
+                    stats["errors"].append({"action_id": aid, "error": str(e)[:300], "phase": "deactivate"})
+                    rejected_ids = [pid for pid in still if pid not in removed_ids]
+
             removed_total += len(removed_ids)
             rejected_total += len(rejected_ids)
         stats["actions_processed"] += 1
@@ -262,6 +297,7 @@ SKIP_REASON_LABELS: Dict[str, str] = {
     "action_price_above_price": "цена в акции выше вашей (отриц. скидка)",
     "action_price_above_max": "цена в акции выше допустимой Ozon",
     "max_action_price_above_price": "max_action_price > price",
+    "price_below_max_action_price": "price ниже max_action_price (цена уже глубже лимита акции)",
     "discount_above_threshold": "скидка глубже порога",
     "invalid_product_id": "нет product_id",
     "already_participating": "уже в акции",
@@ -310,7 +346,7 @@ def participating_discount_percent(product: dict) -> Tuple[Optional[float], Opti
 def participant_remove_reason(row: dict, threshold_pct: float) -> Optional[str]:
     """
     Причина снятия участника из акции или None, если условия соблюдены.
-    Невалидные позиции (отриц. скидка, не проходят минимум Ozon) — удалять, не пропускать.
+    Невалидные позиции (отриц. скидка, перескидка ниже лимита Ozon) — удалять.
     """
     price = _parse_positive_float(row.get("price"))
     if price is None:
@@ -321,6 +357,9 @@ def participant_remove_reason(row: dict, threshold_pct: float) -> Optional[str]:
     if action_price > price + 0.009:
         return "action_price_above_price"
     max_ap = _parse_positive_float(row.get("max_action_price"))
+    # price << max_ap: витрина уже ниже потолка акции (бустинг/перескидка) — снимаем
+    if max_ap is not None and price + 0.009 < max_ap:
+        return "price_below_max_action_price"
     if max_ap is not None and action_price > max_ap + 0.009:
         return "action_price_above_max"
     pct = round((price - action_price) / price * 100.0, 4)
@@ -337,6 +376,8 @@ def participant_target_price(row: dict, threshold_pct: float) -> Tuple[Optional[
     max_ap = _parse_positive_float(row.get("max_action_price"))
     if max_ap is None:
         return None, "no_max_action_price"
+    if price + 0.009 < max_ap:
+        return None, "price_below_max_action_price"
     target = target_action_price(price, threshold_pct, max_ap)
     if target is None:
         return None, "discount_above_threshold"
@@ -675,34 +716,37 @@ async def sync_actions_by_discount_threshold(
             for i in range(0, len(remove_ids), batch_size):
                 chunk = remove_ids[i : i + batch_size]
                 removed_ids: List[int] = []
-                rejected_ids: List[int] = []
+                rejected_ids: List[int] = list(chunk)
                 try:
-                    result = await client.deactivate_action_products(aid, chunk)
-                    for x in (result.get("product_ids") or []):
+                    fb = await _exit_products_via_update(
+                        client, aid, participants_by_id, chunk,
+                    )
+                    for x in (fb.get("product_ids") or []):
                         try:
-                            removed_ids.append(int(x))
+                            pid = int(x)
                         except (TypeError, ValueError):
-                            pass
-                    for item in (result.get("rejected") or []):
+                            continue
+                        if pid not in removed_ids:
+                            removed_ids.append(pid)
+                    rejected_ids = []
+                    for item in (fb.get("rejected") or []):
                         rid = item.get("product_id") if isinstance(item, dict) else item
                         try:
                             rejected_ids.append(int(rid))
                         except (TypeError, ValueError):
                             pass
                 except Exception as e:
-                    log.warning("ozon sync deactivate action=%s: %s — fallback update", aid, e)
+                    log.warning("ozon sync exit-update action=%s: %s", aid, e)
                     stats["errors"].append({
-                        "action_id": aid, "phase": "deactivate", "error": str(e)[:300], "fallback": "update",
+                        "action_id": aid, "phase": "exit_update", "error": str(e)[:300],
                     })
                     rejected_ids = list(chunk)
 
-                fallback_ids = rejected_ids or ([] if removed_ids else list(chunk))
-                if fallback_ids:
+                still = rejected_ids or [pid for pid in chunk if pid not in removed_ids]
+                if still:
                     try:
-                        fb = await _exit_products_via_update(
-                            client, aid, participants_by_id, fallback_ids,
-                        )
-                        for x in (fb.get("product_ids") or []):
+                        result = await client.deactivate_action_products(aid, still)
+                        for x in (result.get("product_ids") or []):
                             try:
                                 pid = int(x)
                             except (TypeError, ValueError):
@@ -710,17 +754,20 @@ async def sync_actions_by_discount_threshold(
                             if pid not in removed_ids:
                                 removed_ids.append(pid)
                         rejected_ids = []
-                        for item in (fb.get("rejected") or []):
+                        for item in (result.get("rejected") or []):
                             rid = item.get("product_id") if isinstance(item, dict) else item
                             try:
                                 rejected_ids.append(int(rid))
                             except (TypeError, ValueError):
                                 pass
+                        if not (result.get("product_ids") or []) and not (result.get("rejected") or []):
+                            rejected_ids = [pid for pid in still if pid not in removed_ids]
                     except Exception as e2:
-                        log.warning("ozon sync exit-update action=%s: %s", aid, e2)
+                        log.warning("ozon sync deactivate action=%s: %s", aid, e2)
                         stats["errors"].append({
-                            "action_id": aid, "phase": "exit_update", "error": str(e2)[:300],
+                            "action_id": aid, "phase": "deactivate", "error": str(e2)[:300],
                         })
+                        rejected_ids = [pid for pid in still if pid not in removed_ids]
 
                 all_removed_ids.extend(removed_ids)
                 removed_n += len(removed_ids)
