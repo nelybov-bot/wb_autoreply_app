@@ -80,7 +80,7 @@ def pick_actions_for_removal(
 
 
 async def list_all_action_products(client: OzonClient, action_id: int, *, max_pages: int = 50) -> List[dict]:
-    """Все участвующие товары акции (пагинация /v1/actions/products)."""
+    """Все участвующие товары акции (пагинация /v2/actions/products)."""
     products: List[dict] = []
     last_id: Any = None
     for _ in range(max(1, max_pages)):
@@ -97,6 +97,28 @@ async def list_all_action_products(client: OzonClient, action_id: int, *, max_pa
     return products
 
 
+async def _exit_products_via_update(
+    client: OzonClient,
+    action_id: int,
+    products_by_id: Dict[int, dict],
+    product_ids: List[int],
+) -> Dict[str, Any]:
+    """
+    Fallback выхода из акции: /v1/actions/products/update с action_price = обычная price.
+    Нужен, когда deactivate для части механик больше не снимает товар.
+    """
+    payload: List[dict] = []
+    for pid in product_ids:
+        row = products_by_id.get(int(pid)) or {}
+        price = _parse_positive_float(row.get("price"))
+        if price is None:
+            continue
+        payload.append({"product_id": int(pid), "action_price": round(price, 2)})
+    if not payload:
+        return {"product_ids": [], "rejected": product_ids}
+    return await client.activate_action_products(action_id, payload)
+
+
 async def remove_products_from_actions(
     client: OzonClient,
     action_ids: List[int],
@@ -109,6 +131,7 @@ async def remove_products_from_actions(
         "actions_skipped_empty": 0,
         "products_removed": 0,
         "products_rejected": 0,
+        "products_exited_via_update": 0,
         "action_ids": [],
         "errors": [],
     }
@@ -123,41 +146,78 @@ async def remove_products_from_actions(
             log.warning("ozon_actions list products action=%s: %s", aid, e)
             stats["errors"].append({"action_id": aid, "error": str(e)[:300]})
             continue
+        products_by_id: Dict[int, dict] = {}
         pids: List[int] = []
         for p in products:
-            pid = p.get("id")
-            if pid is None:
-                pid = p.get("product_id")
-            if pid is None:
+            pid = _product_id_from_row(p)
+            if not pid:
                 continue
-            try:
-                pids.append(int(pid))
-            except (TypeError, ValueError):
-                continue
+            products_by_id[pid] = p
+            pids.append(pid)
         if not pids:
             stats["actions_skipped_empty"] += 1
             continue
         removed_total = 0
         rejected_total = 0
+        exited_total = 0
         for i in range(0, len(pids), batch_size):
             chunk = pids[i : i + batch_size]
+            removed_ids: List[int] = []
+            rejected_ids: List[int] = []
+            deactivate_failed = False
             try:
                 result = await client.deactivate_action_products(aid, chunk)
+                for x in (result.get("product_ids") or []):
+                    try:
+                        removed_ids.append(int(x))
+                    except (TypeError, ValueError):
+                        pass
+                for item in (result.get("rejected") or []):
+                    rid = item.get("product_id") if isinstance(item, dict) else item
+                    try:
+                        rejected_ids.append(int(rid))
+                    except (TypeError, ValueError):
+                        pass
             except Exception as e:
-                log.warning("ozon_actions deactivate action=%s: %s", aid, e)
-                stats["errors"].append({"action_id": aid, "error": str(e)[:300]})
-                rejected_total += len(chunk)
-                continue
-            removed = result.get("product_ids") or []
-            rejected = result.get("rejected") or []
-            removed_total += len(removed) if isinstance(removed, list) else 0
-            rejected_total += len(rejected) if isinstance(rejected, list) else 0
+                log.warning("ozon_actions deactivate action=%s: %s — fallback update", aid, e)
+                stats["errors"].append({"action_id": aid, "error": str(e)[:300], "fallback": "update"})
+                deactivate_failed = True
+                rejected_ids = list(chunk)
+
+            fallback_ids = rejected_ids if (deactivate_failed or rejected_ids) else (
+                list(chunk) if not removed_ids else []
+            )
+            if fallback_ids:
+                try:
+                    fb = await _exit_products_via_update(client, aid, products_by_id, fallback_ids)
+                    fb_ok = 0
+                    for x in (fb.get("product_ids") or []):
+                        try:
+                            pid = int(x)
+                        except (TypeError, ValueError):
+                            continue
+                        if pid not in removed_ids:
+                            removed_ids.append(pid)
+                        fb_ok += 1
+                    exited_total += fb_ok
+                    rejected_ids = []
+                    for item in (fb.get("rejected") or []):
+                        rid = item.get("product_id") if isinstance(item, dict) else item
+                        try:
+                            rejected_ids.append(int(rid))
+                        except (TypeError, ValueError):
+                            pass
+                except Exception as e2:
+                    log.warning("ozon_actions exit-update action=%s: %s", aid, e2)
+                    stats["errors"].append({"action_id": aid, "error": str(e2)[:300]})
+            removed_total += len(removed_ids)
+            rejected_total += len(rejected_ids)
         stats["actions_processed"] += 1
         stats["action_ids"].append(aid)
         stats["products_removed"] += removed_total
         stats["products_rejected"] += rejected_total
+        stats["products_exited_via_update"] += exited_total
     return stats
-
 
 async def auto_remove_from_ozon_auto_actions(
     client: OzonClient,
@@ -277,7 +337,10 @@ def participant_target_price(row: dict, threshold_pct: float) -> Tuple[Optional[
     max_ap = _parse_positive_float(row.get("max_action_price"))
     if max_ap is None:
         return None, "no_max_action_price"
-    return target_action_price(price, threshold_pct, max_ap), None
+    target = target_action_price(price, threshold_pct, max_ap)
+    if target is None:
+        return None, "discount_above_threshold"
+    return target, None
 
 
 def candidate_min_discount_percent(product: dict) -> Tuple[Optional[float], Optional[str]]:
@@ -293,10 +356,50 @@ def candidate_min_discount_percent(product: dict) -> Tuple[Optional[float], Opti
     return round((price - max_ap) / price * 100.0, 4), None
 
 
-def target_action_price(price: float, threshold_pct: float, max_action_price: float) -> float:
-    """Цена участия: минимальная скидка для входа (max_action_price), не глубже порога."""
-    by_threshold = price * (1.0 - threshold_pct / 100.0)
-    return round(max(by_threshold, max_action_price), 2)
+def target_action_price(
+    price: float,
+    threshold_pct: float,
+    max_action_price: float,
+) -> Optional[float]:
+    """
+    Цена участия с минимальной скидкой.
+
+    Ozon: action_price <= max_action_price.
+    Порог: скидка не глубже threshold → action_price >= price*(1-thr/100).
+    Если Ozon требует глубже порога — None (не входить / не держать).
+    Иначе ставим ровно max_action_price (наименьшая допустимая скидка).
+    """
+    if price <= 0 or max_action_price <= 0:
+        return None
+    if max_action_price > price + 0.009:
+        return None
+    by_threshold = price * (1.0 - float(threshold_pct) / 100.0)
+    # max_ap ниже порога цены = нужна скидка глубже, чем разрешил пользователь
+    if max_action_price + 0.009 < by_threshold:
+        return None
+    # safety: никогда не ниже by_threshold и никогда не выше max_ap / price
+    return round(min(price, max(by_threshold, max_action_price)), 2)
+
+
+def clamp_action_price_for_send(
+    *,
+    price: float,
+    action_price: float,
+    max_action_price: float,
+    threshold_pct: float,
+) -> Optional[float]:
+    """Финальный предохранитель перед update: не глубже порога и не выше max_action_price."""
+    target = target_action_price(price, threshold_pct, max_action_price)
+    if target is None:
+        return None
+    try:
+        ap = float(action_price)
+    except (TypeError, ValueError):
+        return target
+    if ap <= 0:
+        return target
+    # ниже target = слишком глубокая скидка; выше max_ap = вне правил Ozon
+    return round(min(max_action_price, max(ap, target)), 2)
 
 
 def _parse_iso_dt(raw: str) -> Optional[datetime]:
@@ -534,12 +637,21 @@ async def sync_actions_by_discount_threshold(
             stats["participants_kept"] += 1
             if enable_add:
                 current_ap = _parse_positive_float(row.get("action_price"))
+                max_ap = _parse_positive_float(row.get("max_action_price"))
+                safe_ap = None
+                if target_ap is not None and price is not None and max_ap is not None:
+                    safe_ap = clamp_action_price_for_send(
+                        price=price,
+                        action_price=target_ap,
+                        max_action_price=max_ap,
+                        threshold_pct=threshold,
+                    )
                 if (
                     current_ap is not None
-                    and target_ap is not None
-                    and current_ap < target_ap - 0.009
+                    and safe_ap is not None
+                    and current_ap < safe_ap - 0.009
                 ):
-                    item: Dict[str, Any] = {"product_id": pid, "action_price": target_ap}
+                    item: Dict[str, Any] = {"product_id": pid, "action_price": safe_ap}
                     if row.get("stock") is not None:
                         try:
                             item["stock"] = int(row["stock"])
@@ -549,29 +661,70 @@ async def sync_actions_by_discount_threshold(
                 elif target_ap is None and t_reason:
                     _inc_skip(stats, action_id=aid, product_id=pid, reason=t_reason)
 
+        participants_by_id = {
+            pid: row
+            for row in participants
+            for pid in [_product_id_from_row(row)]
+            if pid
+        }
+
         if enable_remove and remove_ids:
             removed_n = 0
             rejected_n = 0
             all_removed_ids: List[int] = []
             for i in range(0, len(remove_ids), batch_size):
                 chunk = remove_ids[i : i + batch_size]
+                removed_ids: List[int] = []
+                rejected_ids: List[int] = []
                 try:
                     result = await client.deactivate_action_products(aid, chunk)
-                except Exception as e:
-                    log.warning("ozon sync deactivate action=%s: %s", aid, e)
-                    stats["errors"].append({"action_id": aid, "phase": "deactivate", "error": str(e)[:300]})
-                    rejected_n += len(chunk)
-                    continue
-                removed = result.get("product_ids") or []
-                rejected = result.get("rejected") or []
-                if isinstance(removed, list):
-                    for x in removed:
+                    for x in (result.get("product_ids") or []):
                         try:
-                            all_removed_ids.append(int(x))
+                            removed_ids.append(int(x))
                         except (TypeError, ValueError):
                             pass
-                removed_n += len(removed) if isinstance(removed, list) else 0
-                rejected_n += len(rejected) if isinstance(rejected, list) else 0
+                    for item in (result.get("rejected") or []):
+                        rid = item.get("product_id") if isinstance(item, dict) else item
+                        try:
+                            rejected_ids.append(int(rid))
+                        except (TypeError, ValueError):
+                            pass
+                except Exception as e:
+                    log.warning("ozon sync deactivate action=%s: %s — fallback update", aid, e)
+                    stats["errors"].append({
+                        "action_id": aid, "phase": "deactivate", "error": str(e)[:300], "fallback": "update",
+                    })
+                    rejected_ids = list(chunk)
+
+                fallback_ids = rejected_ids or ([] if removed_ids else list(chunk))
+                if fallback_ids:
+                    try:
+                        fb = await _exit_products_via_update(
+                            client, aid, participants_by_id, fallback_ids,
+                        )
+                        for x in (fb.get("product_ids") or []):
+                            try:
+                                pid = int(x)
+                            except (TypeError, ValueError):
+                                continue
+                            if pid not in removed_ids:
+                                removed_ids.append(pid)
+                        rejected_ids = []
+                        for item in (fb.get("rejected") or []):
+                            rid = item.get("product_id") if isinstance(item, dict) else item
+                            try:
+                                rejected_ids.append(int(rid))
+                            except (TypeError, ValueError):
+                                pass
+                    except Exception as e2:
+                        log.warning("ozon sync exit-update action=%s: %s", aid, e2)
+                        stats["errors"].append({
+                            "action_id": aid, "phase": "exit_update", "error": str(e2)[:300],
+                        })
+
+                all_removed_ids.extend(removed_ids)
+                removed_n += len(removed_ids)
+                rejected_n += len(rejected_ids)
             stats["participants_removed"] += removed_n
             stats["products_rejected"] += rejected_n
 
@@ -602,7 +755,6 @@ async def sync_actions_by_discount_threshold(
                 repriced_n += len(updated) if isinstance(updated, list) else 0
                 stats["products_rejected"] += len(rejected) if isinstance(rejected, list) else 0
             stats["participants_repriced"] += repriced_n
-
         if not enable_add:
             stats["actions_processed"] += 1
             continue
@@ -638,7 +790,17 @@ async def sync_actions_by_discount_threshold(
                 _inc_skip(stats, action_id=aid, product_id=pid, reason="no_price")
                 continue
             act_price = target_action_price(price, threshold, max_ap)
-            item: Dict[str, Any] = {"product_id": pid, "action_price": act_price}
+            if act_price is None:
+                continue
+            safe_ap = clamp_action_price_for_send(
+                price=price,
+                action_price=act_price,
+                max_action_price=max_ap,
+                threshold_pct=threshold,
+            )
+            if safe_ap is None:
+                continue
+            item: Dict[str, Any] = {"product_id": pid, "action_price": safe_ap}
             if row.get("stock") is not None:
                 try:
                     item["stock"] = int(row["stock"])

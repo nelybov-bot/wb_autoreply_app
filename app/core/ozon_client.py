@@ -407,6 +407,46 @@ class OzonClient:
                 raise HttpStatusError(502, json.dumps(data))
         return data if isinstance(data, dict) else {}
 
+    @staticmethod
+    def _normalize_actions_list_result(data: Any) -> dict:
+        if isinstance(data, dict):
+            res = data.get("result")
+            return res if isinstance(res, dict) else {}
+        return {}
+
+    @staticmethod
+    def _normalize_actions_mutate_result(data: Any) -> dict:
+        """Единый вид ответа activate/update/deactivate: product_ids + rejected."""
+        empty = {"product_ids": [], "rejected": []}
+        if not isinstance(data, dict):
+            return empty
+        res = data.get("result")
+        if not isinstance(res, dict):
+            return empty
+        product_ids = res.get("product_ids")
+        rejected = res.get("rejected")
+        if isinstance(product_ids, list) or isinstance(rejected, list):
+            return {
+                "product_ids": product_ids if isinstance(product_ids, list) else [],
+                "rejected": rejected if isinstance(rejected, list) else [],
+            }
+        # v2 иногда отдаёт results[{product_id, is_updated, errors}]
+        rows = res.get("results")
+        if isinstance(rows, list):
+            ok: List[Any] = []
+            bad: List[Any] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                pid = row.get("product_id")
+                if row.get("is_updated") is True or row.get("success") is True:
+                    if pid is not None:
+                        ok.append(pid)
+                else:
+                    bad.append(row if pid is None else {"product_id": pid, "errors": row.get("errors")})
+            return {"product_ids": ok, "rejected": bad}
+        return empty
+
     async def list_actions(self) -> List[dict]:
         """GET /v1/actions — список акций Ozon."""
         data = await self._request("GET", "/v1/actions")
@@ -422,18 +462,15 @@ class OzonClient:
         limit: int = 100,
         last_id: Any = None,
     ) -> dict:
-        """POST /v1/actions/products — товары, участвующие в акции."""
+        """POST /v2/actions/products — товары, участвующие в акции."""
         body: Dict[str, Any] = {
             "action_id": int(action_id),
             "limit": min(max(int(limit), 1), 100),
         }
         if last_id is not None and str(last_id).strip():
             body["last_id"] = last_id
-        data = await self._request("POST", "/v1/actions/products", json_body=body)
-        if isinstance(data, dict):
-            res = data.get("result")
-            return res if isinstance(res, dict) else {}
-        return {}
+        data = await self._request("POST", "/v2/actions/products", json_body=body)
+        return self._normalize_actions_list_result(data)
 
     async def list_action_candidates(
         self,
@@ -442,33 +479,27 @@ class OzonClient:
         limit: int = 100,
         last_id: Any = None,
     ) -> dict:
-        """POST /v1/actions/candidates — товары, доступные для акции."""
+        """POST /v2/actions/candidates — товары, доступные для акции."""
         body: Dict[str, Any] = {
             "action_id": int(action_id),
             "limit": min(max(int(limit), 1), 100),
         }
         if last_id is not None and str(last_id).strip():
             body["last_id"] = last_id
-        data = await self._request("POST", "/v1/actions/candidates", json_body=body)
-        if isinstance(data, dict):
-            res = data.get("result")
-            return res if isinstance(res, dict) else {}
-        return {}
+        data = await self._request("POST", "/v2/actions/candidates", json_body=body)
+        return self._normalize_actions_list_result(data)
 
     async def deactivate_action_products(self, action_id: int, product_ids: List[int]) -> dict:
-        """POST /v1/actions/products/deactivate — убрать товары из акции."""
+        """POST /v2/actions/products/deactivate — убрать товары из акции."""
         ids = [int(x) for x in (product_ids or []) if x is not None]
         if not ids:
             return {"product_ids": [], "rejected": []}
         body = {"action_id": int(action_id), "product_ids": ids}
-        data = await self._request("POST", "/v1/actions/products/deactivate", json_body=body)
-        if isinstance(data, dict):
-            res = data.get("result")
-            return res if isinstance(res, dict) else {}
-        return {}
+        data = await self._request("POST", "/v2/actions/products/deactivate", json_body=body)
+        return self._normalize_actions_mutate_result(data)
 
     async def activate_action_products(self, action_id: int, products: List[dict]) -> dict:
-        """POST /v1/actions/products/activate — добавить товары в акцию."""
+        """POST /v1/actions/products/update — добавить/обновить товары в акции (замена activate)."""
         norm: List[dict] = []
         for p in products[:1000]:
             if not isinstance(p, dict):
@@ -493,11 +524,8 @@ class OzonClient:
         if not norm:
             return {"product_ids": [], "rejected": []}
         body = {"action_id": int(action_id), "products": norm}
-        data = await self._request("POST", "/v1/actions/products/activate", json_body=body)
-        if isinstance(data, dict):
-            res = data.get("result")
-            return res if isinstance(res, dict) else {}
-        return {}
+        data = await self._request("POST", "/v1/actions/products/update", json_body=body)
+        return self._normalize_actions_mutate_result(data)
 
     async def list_auto_add_products(
         self,
@@ -506,30 +534,24 @@ class OzonClient:
         limit: int = 100,
         last_id: Any = None,
     ) -> dict:
-        """POST /v1/actions/auto-add/products/list — товары в очереди автодобавления."""
+        """POST /v2/actions/auto-add/products/list — товары в очереди автодобавления."""
         body: Dict[str, Any] = {
             "action_id": int(action_id),
             "limit": min(max(int(limit), 1), 100),
         }
         if last_id is not None and str(last_id).strip():
             body["last_id"] = last_id
-        data = await self._request("POST", "/v1/actions/auto-add/products/list", json_body=body)
-        if isinstance(data, dict):
-            res = data.get("result")
-            return res if isinstance(res, dict) else {}
-        return {}
+        data = await self._request("POST", "/v2/actions/auto-add/products/list", json_body=body)
+        return self._normalize_actions_list_result(data)
 
     async def delete_auto_add_products(self, action_id: int, product_ids: List[int]) -> dict:
-        """POST /v1/actions/auto-add/products/delete — убрать из автодобавления."""
+        """POST /v2/actions/auto-add/products/delete — убрать из автодобавления."""
         ids = [int(x) for x in (product_ids or []) if x is not None]
         if not ids:
             return {"product_ids": [], "rejected": []}
         body = {"action_id": int(action_id), "product_ids": ids[:1000]}
-        data = await self._request("POST", "/v1/actions/auto-add/products/delete", json_body=body)
-        if isinstance(data, dict):
-            res = data.get("result")
-            return res if isinstance(res, dict) else {}
-        return {}
+        data = await self._request("POST", "/v2/actions/auto-add/products/delete", json_body=body)
+        return self._normalize_actions_mutate_result(data)
 
     async def rating_summary(self) -> dict:
         """POST /v1/rating/summary — текущие рейтинги продавца."""
