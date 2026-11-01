@@ -65,6 +65,7 @@ SETTING_KEYS = (
     "avito_messages_notify_enabled",
     "avito_balance_notify_enabled",
     "avito_balance_threshold",
+    "avito_balance_daily_time",
     "avito_ai_reply_enabled",
     "avito_ai_reply_prompt",
     "theme",

@@ -52,12 +52,15 @@ SETTING_LAST_CHECK = "avito_notify_last_check"
 SETTING_REPLY_MAP = "avito_tg_reply_map_json"
 SETTING_BALANCE_ENABLED = "avito_balance_notify_enabled"
 SETTING_BALANCE_THRESHOLD = "avito_balance_threshold"
+SETTING_BALANCE_DAILY_TIME = "avito_balance_daily_time"
 SETTING_BALANCE_STATE = "avito_balance_state_json"
 
 DEFAULT_BALANCE_THRESHOLD = 1000.0
+DEFAULT_BALANCE_DAILY_TIME = "14:00"  # МСК HH:MM
 # Ежедневный дайджест CPA-баланса (МСК), ключ в state: _daily.sent_date = YYYY-MM-DD
-DAILY_BALANCE_HOUR_MSK = 14
 _DAILY_STATE_KEY = "_daily"
+# Как часто дергаем CPA API (не чаще раза в час). Уведомления при этом не спамим.
+BALANCE_POLL_SECONDS = 3600
 
 # Новые заказы, требующие внимания продавца.
 ORDER_WATCH_STATUSES = ("on_confirmation", "ready_to_ship")
@@ -110,6 +113,26 @@ def balance_threshold_rub(db: Database) -> float:
     except (TypeError, ValueError):
         return DEFAULT_BALANCE_THRESHOLD
     return max(0.0, val)
+
+
+def parse_daily_time_msk(raw: str) -> tuple[int, int]:
+    """HH:MM → (hour, minute). Битый ввод → 14:00."""
+    s = (raw or "").strip().replace(".", ":").replace(",", ":")
+    if not s:
+        s = DEFAULT_BALANCE_DAILY_TIME
+    parts = s.split(":")
+    try:
+        hh = int(parts[0])
+        mm = int(parts[1]) if len(parts) > 1 else 0
+    except (TypeError, ValueError):
+        return 14, 0
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        return 14, 0
+    return hh, mm
+
+
+def balance_daily_time_msk(db: Database) -> tuple[int, int]:
+    return parse_daily_time_msk(db.get_setting(SETTING_BALANCE_DAILY_TIME) or DEFAULT_BALANCE_DAILY_TIME)
 
 
 def _load_balance_state(db: Database) -> dict[str, Any]:
@@ -345,6 +368,32 @@ def format_order_message(store_name: str, order: dict) -> str:
     return "\n".join(lines)
 
 
+def format_unified_card(
+    *,
+    store_name: str,
+    item_title: str,
+    buyer_name: str,
+    buyer_text: str,
+) -> str:
+    """Карточка входящего Avito-сообщения в Telegram (без ИИ)."""
+    store = escape_tg_html(store_name or "Avito")
+    item = escape_tg_html((item_title or "").strip() or "Без названия")
+    buyer_s = escape_tg_html(buyer_name or "Покупатель")
+    buyer = escape_tg_html((buyer_text or "").strip()[:280] or "…")
+    return "\n".join(
+        [
+            f"<b>Avito</b>  ·  {store}",
+            "",
+            f"<b>{item}</b>",
+            buyer_s,
+            "",
+            f"<blockquote>{buyer}</blockquote>",
+            "",
+            "<i>reply текстом или фото → уйдёт в Avito</i>",
+        ]
+    )
+
+
 def format_chat_message(
     store_name: str,
     chat: dict,
@@ -352,8 +401,6 @@ def format_chat_message(
     *,
     our_user_id: Optional[int] = None,
 ) -> str:
-    from .avito_ai_reply import format_unified_card
-
     author = msg.get("author_id")
     if author is None:
         author = msg.get("authorId")
@@ -410,6 +457,19 @@ def _fmt_rub(total: float) -> str:
     return f"{float(total):,.0f}".replace(",", " ") + " ₽"
 
 
+def _rub_kopecks_parts(total_rub: float) -> tuple[int, int]:
+    kopeks_total = int(round(float(total_rub) * 100))
+    if kopeks_total < 0:
+        kopeks_total = 0
+    return kopeks_total // 100, kopeks_total % 100
+
+
+def format_rub_kopecks_ru(total_rub: float) -> str:
+    """«4898 рублей 30 копеек»."""
+    rub, kop = _rub_kopecks_parts(total_rub)
+    return f"{rub} рублей {kop} копеек"
+
+
 def format_balance_low_message(store_name: str, *, total: float) -> str:
     store = escape_tg_html(store_name or "Avito")
     amount = escape_tg_html(_fmt_rub(total))
@@ -429,7 +489,21 @@ def format_balance_daily_message(rows: list[tuple[str, float]], *, when: Optiona
     else:
         for name, total in rows:
             store = escape_tg_html(name or "Avito")
-            lines.append(f"{store}: {escape_tg_html(_fmt_rub(total))}")
+            lines.append(f"{store}: {escape_tg_html(format_rub_kopecks_ru(total))}")
+    return "\n".join(lines)
+
+
+def format_balance_test_message(rows: list[tuple[str, float]]) -> str:
+    """Тестовое уведомление с рублями и копейками."""
+    if not rows:
+        return "Тестовое сообщение: Баланс недоступен"
+    if len(rows) == 1:
+        _name, total = rows[0]
+        return f"Тестовое сообщение: Баланс {format_rub_kopecks_ru(total)}"
+    lines = ["Тестовое сообщение:"]
+    for name, total in rows:
+        store = name or "Avito"
+        lines.append(f"{store}: Баланс {format_rub_kopecks_ru(total)}")
     return "\n".join(lines)
 
 
@@ -437,10 +511,15 @@ def _msk_today() -> str:
     return dt.datetime.now(MSK).strftime("%Y-%m-%d")
 
 
-def _daily_digest_due(state: dict[str, Any]) -> bool:
-    """True, если после DAILY_BALANCE_HOUR_MSK МСК ещё не слали дайджест за сегодня."""
+def _daily_digest_due(
+    state: dict[str, Any],
+    *,
+    hour: int = 14,
+    minute: int = 0,
+) -> bool:
+    """True, если после HH:MM МСК ещё не слали дайджест за сегодня."""
     now = dt.datetime.now(MSK)
-    if int(now.hour) < int(DAILY_BALANCE_HOUR_MSK):
+    if (int(now.hour), int(now.minute)) < (int(hour), int(minute)):
         return False
     raw = state.get(_DAILY_STATE_KEY)
     sent = ""
@@ -454,6 +533,21 @@ def _mark_daily_sent(state: dict[str, Any]) -> None:
         "sent_date": _msk_today(),
         "sent_at": int(time.time()),
     }
+
+
+def _balance_poll_due(state: dict[str, Any], store_id: int, *, now_ts: Optional[float] = None) -> bool:
+    """True, если магазин не проверяли ≥ BALANCE_POLL_SECONDS (или ещё никогда)."""
+    now = int(now_ts if now_ts is not None else time.time())
+    row = state.get(str(int(store_id)))
+    if not isinstance(row, dict):
+        return True
+    try:
+        last = int(row.get("last_check") or 0)
+    except (TypeError, ValueError):
+        last = 0
+    if last <= 0:
+        return True
+    return (now - last) >= int(BALANCE_POLL_SECONDS)
 
 
 def _reply_map_key(tg_chat_id: Any, tg_message_id: Any) -> str:
@@ -887,27 +981,6 @@ async def poll_store_messages(
                         avito_chat_id=cid,
                         item_title=chat_item_title(chat_meta),
                     )
-                    try:
-                        from .avito_ai_reply import maybe_send_ai_draft
-
-                        await maybe_send_ai_draft(
-                            db,
-                            bot_token=bot_token,
-                            tg_chat_id=chat_id,
-                            store=store,
-                            chat=chat_meta,
-                            msg=m,
-                            avito_chat_id=cid,
-                            alert_tg_message_id=tg_mid,
-                            our_user_id=our_uid,
-                        )
-                    except Exception:
-                        log.warning(
-                            "avito ai draft failed store=%s chat=%s",
-                            store.id,
-                            cid,
-                            exc_info=True,
-                        )
                 else:
                     log.warning("avito msg tg fail store=%s chat=%s: %s", store.id, cid, err)
                 await asyncio.sleep(0.25)
@@ -1013,6 +1086,7 @@ async def run_avito_notify_cycle(
     do_messages = messages_notify_enabled(db)
     do_balance = balance_notify_enabled(db)
     threshold = balance_threshold_rub(db)
+    daily_hh, daily_mm = balance_daily_time_msk(db)
 
     results_orders: list[dict] = []
     results_messages: list[dict] = []
@@ -1021,9 +1095,14 @@ async def run_avito_notify_cycle(
     messages_sent = 0
     balance_alerts = 0
     balance_daily_sent = False
+    balance_checked = 0
+    balance_skipped = 0
     daily_rows: list[tuple[str, float]] = []
-    # Ежедневный дайджест — только по расписанию (после 14:00 МСК, 1 раз/сутки).
-    want_daily = bool(do_balance and _daily_digest_due(bal_state))
+    # Ежедневный дайджест — после HH:MM МСК из настроек, 1 раз/сутки.
+    want_daily = bool(
+        do_balance and _daily_digest_due(bal_state, hour=daily_hh, minute=daily_mm)
+    )
+    now_ts = time.time()
 
     for store in stores:
         bucket = _store_bucket(seen, int(store.id))
@@ -1052,22 +1131,40 @@ async def run_avito_notify_cycle(
             results_messages.append(r)
             messages_sent += int(r.get("new") or 0)
         if do_balance:
-            # Баланс: на первом seed тоже можно алертить (force/manual),
-            # иначе после включения сразу узнаем о низком остатке.
-            r = await poll_store_balance(
-                db,
-                store,
-                bot_token=bot_token,
-                chat_id=chat_id,
-                state=bal_state,
-                threshold=threshold,
-                notify=True,
+            # CPA: опрос ≤1 раз/час (или сразу, если пора daily / ручной force).
+            # Уведомления: только пересечение порога вниз + daily — без почасового спама.
+            due = bool(
+                force_notify
+                or want_daily
+                or _balance_poll_due(bal_state, int(store.id), now_ts=now_ts)
             )
-            results_balance.append(r)
-            if r.get("alerted"):
-                balance_alerts += 1
-            if want_daily and r.get("ok") and r.get("total") is not None:
-                daily_rows.append((store.name or f"#{store.id}", float(r["total"])))
+            if not due:
+                balance_skipped += 1
+                results_balance.append(
+                    {
+                        "store_id": int(store.id),
+                        "ok": True,
+                        "skipped": True,
+                        "reason": "balance_poll_not_due",
+                        "alerted": False,
+                    }
+                )
+            else:
+                r = await poll_store_balance(
+                    db,
+                    store,
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    state=bal_state,
+                    threshold=threshold,
+                    notify=True,
+                )
+                results_balance.append(r)
+                balance_checked += 1
+                if r.get("alerted"):
+                    balance_alerts += 1
+                if want_daily and r.get("ok") and r.get("total") is not None:
+                    daily_rows.append((store.name or f"#{store.id}", float(r["total"])))
         bucket["seeded"] = True
 
     if want_daily and daily_rows:
@@ -1091,11 +1188,83 @@ async def run_avito_notify_cycle(
         "messages_sent": messages_sent,
         "balance_alerts": balance_alerts,
         "balance_daily_sent": balance_daily_sent,
+        "balance_checked": balance_checked,
+        "balance_skipped": balance_skipped,
         "balance_threshold": threshold,
+        "balance_poll_seconds": BALANCE_POLL_SECONDS,
+        "balance_daily_time": f"{daily_hh:02d}:{daily_mm:02d}",
         "orders": results_orders,
         "messages": results_messages,
         "balance": results_balance,
         "orders_enabled": do_orders,
         "messages_enabled": do_messages,
         "balance_enabled": do_balance,
+    }
+
+
+async def send_avito_balance_test(
+    db: Database,
+    *,
+    bot_token: str,
+    chat_id: str,
+) -> dict[str, Any]:
+    """Сразу прочитать CPA и отправить тестовое сообщение в TG."""
+    stores = _avito_stores(db)
+    if not stores:
+        return {"ok": False, "error": "нет активных магазинов Avito", "sent": False}
+    rows: list[tuple[str, float]] = []
+    details: list[dict[str, Any]] = []
+    for store in stores:
+        client = _client_for_store(store)
+        try:
+            await _ensure_user_id(db, store, client)
+            cpa_raw = await client.get_cpa_balance()
+            total, kopeks = parse_cpa_balance(cpa_raw)
+            rows.append((store.name or f"#{store.id}", float(total)))
+            details.append(
+                {
+                    "store_id": int(store.id),
+                    "name": store.name,
+                    "ok": True,
+                    "total": float(total),
+                    "kopeks": float(kopeks),
+                    "text": format_rub_kopecks_ru(total),
+                }
+            )
+        except HttpStatusError as e:
+            details.append(
+                {
+                    "store_id": int(store.id),
+                    "name": store.name,
+                    "ok": False,
+                    "error": f"HTTP {e.status}: {str(e.body)[:160]}",
+                }
+            )
+        except Exception as e:
+            log.exception("avito balance test store=%s", store.id)
+            details.append(
+                {
+                    "store_id": int(store.id),
+                    "name": store.name,
+                    "ok": False,
+                    "error": str(e)[:180],
+                }
+            )
+    if not rows:
+        return {
+            "ok": False,
+            "error": "не удалось получить баланс ни по одному магазину",
+            "sent": False,
+            "stores": details,
+        }
+    text = format_balance_test_message(rows)
+    ok, err, mid = await _send(db, bot_token, chat_id, escape_tg_html(text))
+    if not ok:
+        return {"ok": False, "error": err or "telegram send failed", "sent": False, "stores": details, "text": text}
+    return {
+        "ok": True,
+        "sent": True,
+        "tg_message_id": mid,
+        "text": text,
+        "stores": details,
     }

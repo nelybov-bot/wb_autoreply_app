@@ -90,11 +90,6 @@
       <i class="ti ti-player-play" aria-hidden="true"></i>
       <span class="si-label">Автозапуск</span>
     </div>
-    <div class="si" data-tab="agent" title="AI-ассистент" role="button" tabindex="0">
-      <i class="ti ti-sparkles" aria-hidden="true"></i>
-      <span class="si-label">AI-ассистент</span>
-    </div>
-
     <div class="si-spacer"></div>
 
     <div class="si" data-tab="ozon-alerts" title="Уведомления и ошибки" role="button" tabindex="0">
@@ -452,7 +447,6 @@
         </div>
         <div class="toolbar-group toolbar-group--actions">
           <button type="button" class="btn btn-primary" id="btn-ozon-chats-refresh">Обновить чаты</button>
-          <button type="button" class="btn btn-secondary" id="btn-ozon-chats-mass" title="До 50 чатов за раз: ИИ + сразу отправка в Ozon">Массовый автоответ</button>
         </div>
       </div>
       <div id="ozon-chats-status-bar" class="chat-status-bar" role="status" aria-live="polite" hidden></div>
@@ -481,7 +475,6 @@
               </div>
               <div class="chat-toolbar">
                 <button type="button" class="btn btn-secondary" id="btn-ozon-chats-load-thread">Обновить переписку</button>
-                <button type="button" class="btn btn-secondary" id="btn-ozon-chats-generate">Сгенерировать</button>
                 <button type="button" class="btn btn-primary" id="btn-ozon-chats-send">Отправить в Ozon</button>
               </div>
             </div>
@@ -1394,11 +1387,13 @@
                   <span class="mp-pill mp-ozon">OZON</span>
                   <span class="auto-task-group-title">Ozon</span>
                 </div>
-                <div class="toggle-row"><span class="toggle-label">Отзывы <em class="toggle-hint">отдельная подписка API</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-reviews-ozon"><span class="switch-track"></span></label></div>
-                <div class="toggle-row"><span class="toggle-label">Вопросы</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-questions-ozon" checked><span class="switch-track"></span></label></div>
-                <div class="toggle-row"><span class="toggle-label">Чаты с покупателями</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-ozon-chats"><span class="switch-track"></span></label></div>
-                <div class="toggle-row"><span class="toggle-label">Уведомления Ozon</span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-ozon-alerts"><span class="switch-track"></span></label></div>
+                <div class="form-hint">ИИ для Ozon (отзывы / вопросы / чаты / алерты) отключён. Остаются акции и ручные операции без генерации.</div>
                 <div class="toggle-row"><span class="toggle-label">Синхронизация акций Ozon <em class="toggle-hint">по порогу скидки или legacy</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="auto-run-ozon-actions-remove"><span class="switch-track"></span></label></div>
+                <!-- hidden stubs so JS save не падает -->
+                <input type="checkbox" class="toggle-input" id="auto-run-reviews-ozon" hidden>
+                <input type="checkbox" class="toggle-input" id="auto-run-questions-ozon" hidden>
+                <input type="checkbox" class="toggle-input" id="auto-run-ozon-chats" hidden>
+                <input type="checkbox" class="toggle-input" id="auto-run-ozon-alerts" hidden>
                 <div class="auto-task-stores">
                   <div class="auto-task-stores-label">Магазины Ozon (отзывы, чаты, уведомления)</div>
                   <div class="form-hint">Пусто — из общего списка ниже</div>
@@ -1556,23 +1551,12 @@
           <div class="form-group">
             <label>Порог баланса Avito CPA (₽)</label>
             <input type="number" id="setting-avito_balance_threshold" min="0" step="100" placeholder="1000">
-            <div class="form-hint">Раз в сутки (~14:00 МСК) — отчёт с текущим CPA-балансом. Если баланс упадёт ниже порога (по умолчанию 1000 ₽) — отдельный алерт. Повтор алерта — только после роста выше порога и нового падения.</div>
-          </div>
-
-          <h3 class="settings-subhead">AI-ассистент в Telegram</h3>
-            <p class="form-hint">Пишите боту в указанном чате — те же команды, что во вкладке AI. <b>В группе</b> обращайтесь через @бот или ответ на его сообщение.</p>
-          <div class="form-group">
-            <label>Telegram user_id ассистента</label>
-            <input type="text" id="setting-telegram_agent_user_id" placeholder="например 123456789">
-            <div class="form-hint">Только этот пользователь может управлять ассистентом. Несколько ID через запятую. Узнать свой ID: команда /id боту. Если пусто — любой в разрешённом чате.</div>
+            <div class="form-hint">Баланс CPA проверяется <b>раз в час</b> (без почасовых пушей). Если упал ниже порога (по умолчанию 1000 ₽) — один алерт; повтор — только после роста выше порога и нового падения.</div>
           </div>
           <div class="form-group">
-            <label>Чат для команд ассистенту</label>
-            <input type="text" id="setting-telegram_agent_chat_id" placeholder="необязательно — иначе основной ID чата">
-            <div class="form-hint">Только этот chat_id может управлять. Несколько ID через запятую. Бот должен быть добавлен в чат.</div>
-          </div>
-          <div class="settings-toggle-list">
-            <div class="toggle-row"><span class="toggle-label">Управление через Telegram <em class="toggle-hint">long polling</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-telegram_agent_enabled"><span class="switch-track"></span></label></div>
+            <label>Суточный отчёт баланса Avito (МСК)</label>
+            <input type="time" id="setting-avito_balance_daily_time" value="14:00" step="60">
+            <div class="form-hint">Раз в сутки после указанного времени — сообщение с балансом CPA по магазинам (рубли и копейки). Кнопка ниже шлёт тестовое сразу.</div>
           </div>
 
           <h3 class="settings-subhead">Что отправлять</h3>
@@ -1589,12 +1573,6 @@
             <div class="toggle-row"><span class="toggle-label">Avito: новые заказы</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_orders_notify_enabled" checked><span class="switch-track"></span></label></div>
             <div class="toggle-row"><span class="toggle-label">Avito: входящие сообщения</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_messages_notify_enabled" checked><span class="switch-track"></span></label></div>
             <div class="toggle-row"><span class="toggle-label">Avito: низкий баланс CPA</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_balance_notify_enabled" checked><span class="switch-track"></span></label></div>
-            <div class="toggle-row"><span class="toggle-label">Avito: ИИ-черновики ответов <em class="toggle-hint">кнопки Отправить / Изменить / Отклонить</em></span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-avito_ai_reply_enabled"><span class="switch-track"></span></label></div>
-          </div>
-          <div class="form-group">
-            <label>Промпт ИИ для ответов Avito</label>
-            <textarea id="setting-avito_ai_reply_prompt" rows="10" placeholder="Пусто = встроенный промпт (доставка, характеристики, цена, скидка 10% от 2 шт…)"></textarea>
-            <div class="form-hint">Черновик уходит в беседку Avito с кнопками. В Avito покупателю — только после «Отправить» (задержка до ~1 мин). «Изменить» — только reply на карточку. Наличие (SKIP) — без черновика.</div>
           </div>
           <div class="form-group">
             <label>Период отчёта</label>
@@ -1642,6 +1620,7 @@
             <button type="button" class="btn btn-secondary" id="btn-telegram-report-now">Отправить отчёт сейчас</button>
             <button type="button" class="btn btn-secondary" id="btn-telegram-wb-banned-now">Заблокированные WB сейчас</button>
             <button type="button" class="btn btn-secondary" id="btn-telegram-avito-now">Avito сейчас</button>
+            <button type="button" class="btn btn-secondary" id="btn-telegram-avito-balance-test">Тест баланса Avito</button>
           </div>
         </div>
 
@@ -1699,7 +1678,8 @@
           <h2>Важные уведомления Ozon</h2>
           <p class="form-hint settings-lead">Сканирует чаты «Поддержка и новости» Ozon (штрафы, ИС, блокировки). ИИ анализирует сообщения с выбранной даты. Отправка в Telegram — в разделе <button type="button" class="link-btn" data-settings-section="telegram">Telegram</button>.</p>
           <div class="settings-toggle-list">
-            <div class="toggle-row toggle-row-prominent"><span class="toggle-label">Включить проверку уведомлений</span><label class="switch"><input type="checkbox" class="toggle-input" id="setting-ozon_alerts_enabled"><span class="switch-track"></span></label></div>
+            <div class="form-hint">ИИ-проверка уведомлений Ozon отключена.</div>
+            <input type="checkbox" class="toggle-input" id="setting-ozon_alerts_enabled" hidden>
           </div>
           <div class="form-group">
             <label>Проверять сообщения с даты</label>
@@ -1820,48 +1800,6 @@
         </div>
       </div>
       <div id="card-errors-wrap" class="ops-log-table-wrap"></div>
-    </section>
-
-    <!-- AI-ассистент -->
-    <section id="panel-agent" class="panel">
-      <div class="panel-toprow">
-        <div>
-          <div class="panel-eyebrow">MarketAI</div>
-          <div class="panel-heading">AI-ассистент</div>
-        </div>
-        <div class="panel-actions">
-          <button type="button" class="btn btn-secondary btn-sm" id="btn-agent-clear">Новый диалог</button>
-        </div>
-      </div>
-      <div class="agent-chat">
-        <div class="agent-suggestions" id="agent-suggestions">
-          <button type="button" class="agent-chip" data-agent-prompt="Покажи список магазинов">Магазины</button>
-          <button type="button" class="agent-chip" data-agent-prompt="Какая статистика очереди?">Статистика</button>
-          <button type="button" class="agent-chip" data-agent-prompt="Покажи новые отзывы без ответа">Новые отзывы</button>
-          <button type="button" class="agent-chip" data-agent-prompt="Статус автозапуска">Автозапуск</button>
-          <button type="button" class="agent-chip" data-agent-prompt="Ответь на все новые отзывы">Цикл: отзывы</button>
-          <button type="button" class="agent-chip" data-agent-prompt="Проверь чаты покупателей по всем магазинам">Чаты</button>
-          <button type="button" class="agent-chip" data-agent-prompt="Ответь в чатах WB и Ozon">Ответить в чатах</button>
-          <button type="button" class="agent-chip" data-agent-prompt="Проверь автоакции Ozon по всем магазинам">Акции Ozon</button>
-          <button type="button" class="agent-chip" data-agent-prompt="Показатели качества Ozon по магазинам">Качество Ozon</button>
-        </div>
-        <div class="agent-messages" id="agent-messages" aria-live="polite">
-          <div class="agent-welcome">
-            <p>Напишите, что нужно сделать. Для опасных действий (загрузка, генерация, отправка) ассистент запросит подтверждение.</p>
-          </div>
-        </div>
-        <div class="agent-pending" id="agent-pending" hidden>
-          <p class="agent-pending-text" id="agent-pending-text"></p>
-          <div class="agent-pending-actions">
-            <button type="button" class="btn btn-primary btn-sm" id="btn-agent-confirm">Подтвердить</button>
-            <button type="button" class="btn btn-secondary btn-sm" id="btn-agent-cancel">Отмена</button>
-          </div>
-        </div>
-        <form class="agent-compose" id="agent-form">
-          <textarea id="agent-input" class="agent-input" rows="2" placeholder="Например: загрузи новые отзывы для всех магазинов"></textarea>
-          <button type="submit" class="btn btn-primary" id="btn-agent-send">Отправить</button>
-        </form>
-      </div>
     </section>
 
     <!-- Лог -->
@@ -2065,7 +2003,7 @@
   </div>
 
   <script src="/static/fx-widgets.js?v=4"></script>
-  <script src="/static/app.js?v=135"></script>
+  <script src="/static/app.js?v=138"></script>
   <script src="/static/card_links_master.js?v=9"></script>
 </body>
 </html>

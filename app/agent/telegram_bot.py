@@ -31,10 +31,6 @@ from app.core.avito_notify import (
     send_avito_image_from_telegram,
     send_avito_reply_from_telegram,
 )
-from app.core.avito_ai_reply import (
-    handle_draft_callback as handle_avito_draft_callback,
-    try_handle_edit_followup as try_handle_avito_edit_followup,
-)
 from app.db import Database, UserRow
 
 log = logging.getLogger("agent.telegram")
@@ -203,7 +199,9 @@ def configure_telegram_agent(
 
 
 def telegram_agent_enabled(db: Database) -> bool:
-    return (db.get_setting(SETTING_AGENT_ENABLED) or "").strip() == "1"
+    """AI-ассистент в Telegram отключён; polling остаётся для Avito reply."""
+    _ = db
+    return False
 
 
 def allowed_agent_chat_ids(db: Database) -> set[str]:
@@ -509,71 +507,15 @@ async def _handle_message(db: Database, message: dict) -> None:
     if not token:
         return
 
-    # Текст после кнопки «Изменить» черновика Avito.
-    try:
-        if await try_handle_avito_edit_followup(db, bot_token=token, message=message):
-            return
-    except Exception:
-        log.exception("avito edit followup failed")
-
-    # Reply на алерт Avito — до агента (работает даже без AI-агента).
+    # Reply на алерт Avito — без ИИ-черновиков.
     try:
         if await _try_handle_avito_reply(db, message):
             return
     except Exception:
         log.exception("avito telegram reply handler failed")
 
-    text = (message.get("text") or "").strip()
-    low = text.lower()
-
-    # /id — всегда доступен (даже до проверки чата), в группе только при обращении к боту
-    if low == "/id" or low.startswith("/id@"):
-        if _is_group_chat(chat):
-            addressed, _ = await _message_addresses_bot(message, token)
-            if not addressed:
-                return
-        uid = user_id if user_id is not None else "—"
-        await _reply_agent(
-            token=token,
-            chat_id=chat_id,
-            text="",
-            html=f"🆔 Ваш Telegram <b>user_id</b>: <code>{escape_tg(str(uid))}</code>",
-            db=db,
-        )
-        return
-
-    if not _request_allowed(db, chat_id, user_id):
-        return
-
-    addressed, agent_text = await _message_addresses_bot(message, token)
-    if not addressed:
-        return
-
-    text = agent_text
-    low = text.lower()
-
-    if not text:
-        await _reply_agent(
-            token=token,
-            chat_id=chat_id,
-            text="Отправьте текстовое сообщение или команду /help",
-            db=db,
-        )
-        return
-
-    if low in ("/start", "/help") or low.startswith("/help@"):
-        await send_telegram_message(token, chat_id, _HELP_TEXT, parse_mode="HTML", db=db)
-        return
-    if low == "/new" or low.startswith("/new@"):
-        admin = _first_admin(db)
-        if admin:
-            session = _session_for_telegram(db, chat_id=chat_id, user_id=user_id)
-            if session:
-                clear_session(session.session_id, user_id=admin.id)
-        await _reply_agent(token=token, chat_id=chat_id, text="✨ Новый диалог. Чем помочь?", db=db)
-        return
-
-    await _process_agent_input(db=db, chat_id=chat_id, user_id=user_id, text=text)
+    # AI-агент отключён — дальше ничего не обрабатываем.
+    return
 
 
 async def _handle_callback(db: Database, callback: dict) -> None:
@@ -589,42 +531,10 @@ async def _handle_callback(db: Database, callback: dict) -> None:
     data = str(callback.get("data") or "")
     cb_id = str(callback.get("id") or "")
 
-    # Кнопки черновика Avito — до проверки AI-агента.
-    if data.startswith("avito:"):
-        if not _avito_reply_chat_allowed(db, chat_id):
-            await telegram_answer_callback_query(token, cb_id, text="Чат не разрешён", show_alert=True)
-            return
-        try:
-            await handle_avito_draft_callback(db, bot_token=token, callback=callback)
-        except Exception:
-            log.exception("avito draft callback failed")
-            await telegram_answer_callback_query(token, cb_id, text="Ошибка", show_alert=True)
+    # Avito AI-черновики и AI-агент отключены.
+    if data.startswith("avito:") or data.startswith("agent:"):
+        await telegram_answer_callback_query(token, cb_id, text="ИИ отключён", show_alert=True)
         return
-
-    if not _request_allowed(db, chat_id, user_id):
-        await telegram_answer_callback_query(
-            token,
-            cb_id,
-            text="Нет доступа",
-            show_alert=True,
-        )
-        return
-
-    if data == "agent:confirm":
-        await telegram_answer_callback_query(token, cb_id, text="Выполняю…")
-        msg_id = message.get("message_id")
-        if msg_id is not None:
-            await telegram_edit_message_reply_markup(token, chat_id, int(msg_id), reply_markup={"inline_keyboard": []})
-        await _process_agent_input(db=db, chat_id=chat_id, user_id=user_id, text="да", force_confirm=True)
-        return
-    if data == "agent:cancel":
-        await telegram_answer_callback_query(token, cb_id, text="Отменено")
-        msg_id = message.get("message_id")
-        if msg_id is not None:
-            await telegram_edit_message_reply_markup(token, chat_id, int(msg_id), reply_markup={"inline_keyboard": []})
-        await _process_agent_input(db=db, chat_id=chat_id, user_id=user_id, text="отмена")
-        return
-
     await telegram_answer_callback_query(token, cb_id)
 
 

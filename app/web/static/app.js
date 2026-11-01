@@ -10325,6 +10325,7 @@
         'wb_banned_cards_telegram_chat_id',
         'avito_notify_telegram_chat_id',
         'avito_balance_threshold',
+        'avito_balance_daily_time',
         'telegram_agent_chat_id',
         'telegram_agent_user_id',
         'buyer_chat_reply_from_date',
@@ -10334,6 +10335,8 @@
       });
       const balTh = document.getElementById('setting-avito_balance_threshold');
       if (balTh && !String(balTh.value || '').trim()) balTh.value = '1000';
+      const balDaily = document.getElementById('setting-avito_balance_daily_time');
+      if (balDaily && !String(balDaily.value || '').trim()) balDaily.value = '14:00';
       secretSettingKeys.forEach(k => {
         const el = document.getElementById('setting-' + k);
         if (!el) return;
@@ -10761,6 +10764,7 @@
       avito_ai_reply_enabled: document.getElementById('setting-avito_ai_reply_enabled')?.checked ? '1' : '0',
       avito_ai_reply_prompt: document.getElementById('setting-avito_ai_reply_prompt')?.value || '',
       avito_balance_threshold: String(document.getElementById('setting-avito_balance_threshold')?.value || '1000').trim() || '1000',
+      avito_balance_daily_time: String(document.getElementById('setting-avito_balance_daily_time')?.value || '14:00').trim() || '14:00',
       avito_notify_telegram_chat_id: document.getElementById('setting-avito_notify_telegram_chat_id')?.value || '',
       telegram_agent_enabled: document.getElementById('setting-telegram_agent_enabled')?.checked ? '1' : '0',
       telegram_agent_chat_id: document.getElementById('setting-telegram_agent_chat_id')?.value || '',
@@ -10884,6 +10888,21 @@
         toast(err.message, 'error');
       } finally {
         btnAvitoNow.disabled = false;
+      }
+    });
+  }
+
+  const btnAvitoBalanceTest = document.getElementById('btn-telegram-avito-balance-test');
+  if (btnAvitoBalanceTest) {
+    btnAvitoBalanceTest.addEventListener('click', async () => {
+      btnAvitoBalanceTest.disabled = true;
+      try {
+        const res = await api('/telegram/avito-balance-test', { method: 'POST' });
+        toast(res.text || 'Тест баланса Avito отправлен');
+      } catch (err) {
+        toast(err.message, 'error');
+      } finally {
+        btnAvitoBalanceTest.disabled = false;
       }
     });
   }

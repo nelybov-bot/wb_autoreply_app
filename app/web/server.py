@@ -160,15 +160,20 @@ from app.core.wb_banned_cards import (
     snapshot_as_report_summary,
 )
 from app.core.avito_notify import (
+    DEFAULT_BALANCE_DAILY_TIME as AVITO_BALANCE_DAILY_TIME_DEFAULT,
     POLL_SECONDS as AVITO_POLL_SECONDS,
+    SETTING_BALANCE_DAILY_TIME as AVITO_BALANCE_DAILY_TIME,
     SETTING_BALANCE_ENABLED as AVITO_BALANCE_NOTIFY_ENABLED,
     SETTING_BALANCE_THRESHOLD as AVITO_BALANCE_THRESHOLD,
     SETTING_CHAT_ID as AVITO_NOTIFY_CHAT_ID,
     SETTING_ENABLED as AVITO_NOTIFY_ENABLED,
     SETTING_MESSAGES as AVITO_MESSAGES_NOTIFY_ENABLED,
     SETTING_ORDERS as AVITO_ORDERS_NOTIFY_ENABLED,
+    balance_daily_time_msk as avito_balance_daily_time_msk,
     notify_enabled as avito_notify_enabled,
+    parse_daily_time_msk as parse_avito_balance_daily_time,
     run_avito_notify_cycle,
+    send_avito_balance_test,
 )
 from app.core.ozon_alerts import (
     DEFAULT_TELEGRAM_TEMPLATE as DEFAULT_OZON_ALERT_TELEGRAM_TEMPLATE,
@@ -891,7 +896,7 @@ def _get_auto_schedule(db: Database) -> dict:
         "run_reviews_ozon": False,
         "run_questions_wb": True,
         "run_questions_yam": True,
-        "run_questions_ozon": True,
+        "run_questions_ozon": False,
         "run_wb_chats": False,
         "run_ozon_chats": False,
         "run_ozon_alerts": False,
@@ -899,7 +904,7 @@ def _get_auto_schedule(db: Database) -> dict:
         "run_ozon_actions_remove": False,
     }
     if not raw:
-        return cfg
+        return _disable_ozon_ai_auto_flags(cfg)
     try:
         obj = json.loads(raw)
         cfg["enabled"] = bool(obj.get("enabled"))
@@ -920,6 +925,15 @@ def _get_auto_schedule(db: Database) -> dict:
         cfg["run_ozon_actions_remove"] = bool(obj.get("run_ozon_actions_remove", False))
     except Exception:
         pass
+    return _disable_ozon_ai_auto_flags(cfg)
+
+
+def _disable_ozon_ai_auto_flags(cfg: dict) -> dict:
+    """Ozon + OpenAI отключены: отзывы/вопросы/чаты/алерты. Акции оставляем."""
+    cfg["run_reviews_ozon"] = False
+    cfg["run_questions_ozon"] = False
+    cfg["run_ozon_chats"] = False
+    cfg["run_ozon_alerts"] = False
     return cfg
 
 def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
@@ -949,6 +963,7 @@ def _set_auto_schedule(db: Database, body: AutoScheduleBody) -> dict:
         "run_wb_alerts": bool(body.run_wb_alerts),
         "run_ozon_actions_remove": bool(body.run_ozon_actions_remove),
     }
+    cfg = _disable_ozon_ai_auto_flags(cfg)
     if not (
         _any_auto_reviews(cfg)
         or _any_auto_questions(cfg)
@@ -1405,9 +1420,10 @@ async def _run_auto_slot(slot: str, *, force: bool = False) -> None:
         "last_error": "",
     })
     try:
+        cfg = _disable_ozon_ai_auto_flags(cfg)
         run_wb_chats = bool(cfg.get("run_wb_chats", False))
-        run_ozon_chats = bool(cfg.get("run_ozon_chats", False))
-        run_ozon_alerts = bool(cfg.get("run_ozon_alerts", False))
+        run_ozon_chats = False  # Ozon AI off
+        run_ozon_alerts = False  # Ozon AI off
         run_wb_alerts = bool(cfg.get("run_wb_alerts", False))
         run_ozon_actions_remove = bool(cfg.get("run_ozon_actions_remove", False))
         key = (db.get_setting("openai_key") or "").strip()
@@ -2657,6 +2673,7 @@ def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(requir
         AVITO_MESSAGES_NOTIFY_ENABLED,
         AVITO_BALANCE_NOTIFY_ENABLED,
         AVITO_BALANCE_THRESHOLD,
+        AVITO_BALANCE_DAILY_TIME,
         "avito_ai_reply_enabled",
         "avito_ai_reply_prompt",
         "telegram_agent_enabled",
@@ -2667,6 +2684,9 @@ def api_get_settings(db: Database = Depends(get_db), _: UserRow = Depends(requir
         SETTING_AUTO_CHAT_MAX_AGE_DAYS,
     ]
     raw = {k: db.get_setting(k) or "" for k in keys}
+    # AI-ассистент / Avito AI принудительно выключены в API.
+    raw["telegram_agent_enabled"] = "0"
+    raw["avito_ai_reply_enabled"] = "0"
     return mask_settings_for_api(raw)
 
 
@@ -2676,6 +2696,8 @@ def api_set_settings(body: dict[str, str], db: Database = Depends(get_db), _: Us
     for k, v in body.items():
         if k.endswith("_set"):
             continue
+        if k in ("telegram_agent_enabled", "avito_ai_reply_enabled"):
+            v = "0"
         if k in SECRET_SETTING_KEYS:
             old = db.get_setting(k) or ""
             v = resolve_secret_setting(v, old)
@@ -2687,7 +2709,12 @@ def api_set_settings(body: dict[str, str], db: Database = Depends(get_db), _: Us
             v = ""
         if k == SETTING_CARD_CHECK_TEMPLATE and is_legacy_card_telegram_template(v or ""):
             v = ""
+        if k == AVITO_BALANCE_DAILY_TIME:
+            hh, mm = parse_avito_balance_daily_time(v or AVITO_BALANCE_DAILY_TIME_DEFAULT)
+            v = f"{hh:02d}:{mm:02d}"
         db.set_setting(k, v or "")
+    db.set_setting("telegram_agent_enabled", "0")
+    db.set_setting("avito_ai_reply_enabled", "0")
     return {"ok": True}
 
 
@@ -2758,6 +2785,24 @@ async def api_telegram_avito_notify_now(
     return await _run_avito_notify(manual=True)
 
 
+@app.post("/api/telegram/avito-balance-test")
+async def api_telegram_avito_balance_test(
+    db: Database = Depends(get_db),
+    _: UserRow = Depends(require_permission("view_settings")),
+):
+    """Сразу прочитать CPA-баланс и отправить тестовое сообщение в чат Avito."""
+    token = normalize_telegram_bot_token(db.get_setting("telegram_bot_token") or "")
+    chat_id = resolve_telegram_chat_id(db, "avito")
+    if not token or not chat_id:
+        raise HTTPException(400, "Нужны токен Telegram-бота и chat_id (Avito или основной)")
+    result = await send_avito_balance_test(db, bot_token=token, chat_id=chat_id)
+    if not result.get("ok"):
+        raise HTTPException(502, result.get("error") or "Не удалось отправить тест баланса Avito")
+    hh, mm = avito_balance_daily_time_msk(db)
+    result["balance_daily_time"] = f"{hh:02d}:{mm:02d}"
+    return result
+
+
 @app.get("/api/auto-schedule")
 def api_get_auto_schedule(db: Database = Depends(get_db), _: UserRow = Depends(require_permission("view_settings"))):
     return _get_auto_schedule(db)
@@ -2808,55 +2853,24 @@ async def api_auto_schedule_stop(db: Database = Depends(get_db), _: UserRow = De
     return {"ok": True, "stopped": cancelled, "enabled": False}
 
 
-# ---------- API: AI agent ----------
+# ---------- API: AI agent (отключён) ----------
 @app.post("/api/agent/chat")
 async def api_agent_chat(
     body: AgentChatBody,
     user: UserRow = Depends(require_user),
     db: Database = Depends(get_db),
 ):
-    session = get_or_create_session(user_id=user.id, username=user.username, session_id=body.session_id)
-    msg = (body.message or "").strip()
-    if body.confirm is True:
-        msg = "да"
-    elif body.confirm is False:
-        msg = "отмена"
-    if not msg and body.confirm is None:
-        raise HTTPException(400, "Пустое сообщение")
-
-    ctx = _build_agent_context(db, user)
-    openai_key = (db.get_setting("openai_key") or "").strip()
-    out = await handle_agent_message(
-        session=session,
-        user_message=msg,
-        ctx=ctx,
-        openai_key=openai_key,
-        force_confirm=body.confirm is True,
-    )
-    sv = session_public_view(session)
-    return {
-        "reply": out.get("reply", ""),
-        "session_id": session.session_id,
-        "messages": sv["messages"],
-        "pending": sv.get("pending"),
-        "needs_confirm": bool(out.get("needs_confirm")),
-        "tool_used": out.get("tool_used"),
-    }
+    raise HTTPException(410, "AI-ассистент отключён")
 
 
 @app.get("/api/agent/session/{session_id}")
 def api_agent_get_session(session_id: str, user: UserRow = Depends(require_user)):
-    session = get_session_if_owner(session_id, user_id=user.id)
-    if not session:
-        raise HTTPException(404, "Сессия не найдена")
-    return session_public_view(session)
+    raise HTTPException(410, "AI-ассистент отключён")
 
 
 @app.delete("/api/agent/session/{session_id}")
 def api_agent_delete_session(session_id: str, user: UserRow = Depends(require_user)):
-    if not clear_session(session_id, user_id=user.id):
-        raise HTTPException(404, "Сессия не найдена")
-    return {"ok": True}
+    raise HTTPException(410, "AI-ассистент отключён")
 
 
 # ---------- API: prompts ----------
@@ -3188,6 +3202,15 @@ async def api_generate(body: GenerateBody, db: Database = Depends(get_db), _: Us
     key = db.get_setting("openai_key") or ""
     if not key.strip():
         raise HTTPException(400, "Не задан OpenAI ключ в настройках")
+    # Ozon + ИИ отключены: не генерим ответы для товаров Ozon.
+    stores_by_id = {s.id: s for s in db.list_stores()}
+    for iid in body.item_ids or []:
+        row = db.get_item_by_id(int(iid))
+        if not row:
+            continue
+        st = stores_by_id.get(int(row.store_id))
+        if st and (st.marketplace or "").strip().lower() == "ozon":
+            raise HTTPException(410, "ИИ для Ozon отключён")
     try:
         task_id = await web_tasks.run_generate(db, body.item_ids, key)
     except StoreBusyError as e:
@@ -3919,6 +3942,7 @@ async def api_ozon_buyer_chat_generate(
     db: Database = Depends(get_db),
     user: UserRow = Depends(require_user),
 ):
+    raise HTTPException(410, "ИИ для Ozon отключён")
     s = _require_ozon_store_for_chats(db, store_id)
     key = (db.get_setting("openai_key") or "").strip()
     if not key:
@@ -4032,6 +4056,8 @@ async def api_ozon_buyer_chat_mass_generate_send(
     db: Database = Depends(get_db),
     user: UserRow = Depends(require_user),
 ):
+    raise HTTPException(410, "ИИ для Ozon отключён")
+
     s = _require_ozon_store_for_chats(db, store_id)
     key = (db.get_setting("openai_key") or "").strip()
     if not key:
@@ -5897,8 +5923,9 @@ async def _startup_scheduler():
     if _avito_notify_task is None or _avito_notify_task.done():
         _avito_notify_task = asyncio.create_task(_avito_notify_loop())
         log.info("Avito notify scheduler started")
+    # Long polling нужен для reply Avito (текст/фото); AI-агент в боте выключен.
     start_telegram_agent_task()
-    log.info("Telegram agent polling started")
+    log.info("Telegram polling started (Avito replies; AI agent off)")
     try:
         from app.core.fsa_registry import check_fsa_access, fsa_proxy_configured, fsa_render_needs_proxy
 

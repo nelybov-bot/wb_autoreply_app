@@ -326,7 +326,9 @@ def _empty_ozon_product_stats() -> dict:
 
 
 def ozon_alerts_enabled(db: Database) -> bool:
-    return (db.get_setting(SETTING_ENABLED) or "0").strip() == "1"
+    """Ozon AI-алерты отключены продуктово."""
+    _ = db
+    return False
 
 
 def ozon_alerts_telegram_enabled(db: Database) -> bool:
