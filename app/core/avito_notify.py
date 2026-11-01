@@ -7,12 +7,16 @@ Avito → Telegram: новые заказы и входящие сообщени
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import json
 import logging
 import time
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from app.db import Database, Store
+
+MSK = ZoneInfo("Europe/Moscow")
 
 from .avito_client import (
     AvitoClient,
@@ -26,7 +30,7 @@ from .avito_client import (
     order_display_id,
     order_item_titles,
     order_total_rub,
-    parse_ads_balance,
+    parse_cpa_balance,
 )
 from .net import HttpStatusError
 from .telegram_notify import (
@@ -51,6 +55,9 @@ SETTING_BALANCE_THRESHOLD = "avito_balance_threshold"
 SETTING_BALANCE_STATE = "avito_balance_state_json"
 
 DEFAULT_BALANCE_THRESHOLD = 1000.0
+# Ежедневный дайджест CPA-баланса (МСК), ключ в state: _daily.sent_date = YYYY-MM-DD
+DAILY_BALANCE_HOUR_MSK = 14
+_DAILY_STATE_KEY = "_daily"
 
 # Новые заказы, требующие внимания продавца.
 ORDER_WATCH_STATUSES = ("on_confirmation", "ready_to_ship")
@@ -399,13 +406,54 @@ def format_chat_photo_caption(
     )
 
 
+def _fmt_rub(total: float) -> str:
+    return f"{float(total):,.0f}".replace(",", " ") + " ₽"
+
+
 def format_balance_low_message(store_name: str, *, total: float) -> str:
     store = escape_tg_html(store_name or "Avito")
-    amount = f"{total:,.0f}".replace(",", " ") + " ₽"
+    amount = escape_tg_html(_fmt_rub(total))
     return (
         "⚠️ <b>Критический баланс — нужно пополнение</b>\n"
-        f"{store}: {escape_tg_html(amount)}"
+        f"{store}: {amount}"
     )
+
+
+def format_balance_daily_message(rows: list[tuple[str, float]], *, when: Optional[dt.datetime] = None) -> str:
+    """Ежедневный отчёт по CPA-балансам магазинов."""
+    now = when or dt.datetime.now(MSK)
+    stamp = now.strftime("%d.%m.%Y")
+    lines = [f"💰 <b>Баланс Avito (CPA)</b> · {escape_tg_html(stamp)}"]
+    if not rows:
+        lines.append("нет данных")
+    else:
+        for name, total in rows:
+            store = escape_tg_html(name or "Avito")
+            lines.append(f"{store}: {escape_tg_html(_fmt_rub(total))}")
+    return "\n".join(lines)
+
+
+def _msk_today() -> str:
+    return dt.datetime.now(MSK).strftime("%Y-%m-%d")
+
+
+def _daily_digest_due(state: dict[str, Any]) -> bool:
+    """True, если после DAILY_BALANCE_HOUR_MSK МСК ещё не слали дайджест за сегодня."""
+    now = dt.datetime.now(MSK)
+    if int(now.hour) < int(DAILY_BALANCE_HOUR_MSK):
+        return False
+    raw = state.get(_DAILY_STATE_KEY)
+    sent = ""
+    if isinstance(raw, dict):
+        sent = str(raw.get("sent_date") or "").strip()
+    return sent != _msk_today()
+
+
+def _mark_daily_sent(state: dict[str, Any]) -> None:
+    state[_DAILY_STATE_KEY] = {
+        "sent_date": _msk_today(),
+        "sent_at": int(time.time()),
+    }
 
 
 def _reply_map_key(tg_chat_id: Any, tg_message_id: Any) -> str:
@@ -887,7 +935,7 @@ async def poll_store_balance(
     threshold: float,
     notify: bool,
 ) -> dict[str, Any]:
-    """Рекламный баланс Avito: одно уведомление при пересечении порога вниз."""
+    """CPA-кошелёк Avito (копейки→₽): одно уведомление при пересечении порога вниз."""
     key = str(int(store.id))
     row = state.get(key)
     if not isinstance(row, dict):
@@ -897,19 +945,20 @@ async def poll_store_balance(
     client = _client_for_store(store)
     try:
         await _ensure_user_id(db, store, client)
-        ads_raw = await client.get_ads_balance(user_id=store.business_id)
+        # Ads API на этом токене даёт 400 Invalid x-projectid; деньги в CPA.
+        cpa_raw = await client.get_cpa_balance()
     except HttpStatusError as e:
         return {
             "store_id": int(store.id),
             "ok": False,
-            "error": f"ads balance HTTP {e.status}: {str(e.body)[:160]}",
+            "error": f"cpa balance HTTP {e.status}: {str(e.body)[:160]}",
             "alerted": False,
         }
     except Exception as e:
-        log.exception("avito ads balance store=%s", store.id)
+        log.exception("avito cpa balance store=%s", store.id)
         return {"store_id": int(store.id), "ok": False, "error": str(e)[:180], "alerted": False}
 
-    _real, _bonus, total = parse_ads_balance(ads_raw)
+    total, _kopeks = parse_cpa_balance(cpa_raw)
     was_below = bool(row.get("below"))
     is_below = total < float(threshold)
     alerted = False
@@ -971,6 +1020,10 @@ async def run_avito_notify_cycle(
     orders_sent = 0
     messages_sent = 0
     balance_alerts = 0
+    balance_daily_sent = False
+    daily_rows: list[tuple[str, float]] = []
+    # Ежедневный дайджест — только по расписанию (после 14:00 МСК, 1 раз/сутки).
+    want_daily = bool(do_balance and _daily_digest_due(bal_state))
 
     for store in stores:
         bucket = _store_bucket(seen, int(store.id))
@@ -1013,7 +1066,18 @@ async def run_avito_notify_cycle(
             results_balance.append(r)
             if r.get("alerted"):
                 balance_alerts += 1
+            if want_daily and r.get("ok") and r.get("total") is not None:
+                daily_rows.append((store.name or f"#{store.id}", float(r["total"])))
         bucket["seeded"] = True
+
+    if want_daily and daily_rows:
+        text = format_balance_daily_message(daily_rows)
+        ok, err, _ = await _send(db, bot_token, chat_id, text)
+        if ok:
+            balance_daily_sent = True
+            _mark_daily_sent(bal_state)
+        else:
+            log.warning("avito balance daily digest tg fail: %s", err)
 
     _save_seen(db, seen)
     if do_balance:
@@ -1026,6 +1090,7 @@ async def run_avito_notify_cycle(
         "orders_sent": orders_sent,
         "messages_sent": messages_sent,
         "balance_alerts": balance_alerts,
+        "balance_daily_sent": balance_daily_sent,
         "balance_threshold": threshold,
         "orders": results_orders,
         "messages": results_messages,

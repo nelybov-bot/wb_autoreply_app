@@ -253,9 +253,18 @@ SESSION_COOKIE = "wb_session"
 SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 PBKDF2_ITERATIONS = 210_000
 
+
+def _auth_disabled() -> bool:
+    """Локальный режим без логина. Включается только явно (run_web.py → DISABLE_AUTH=1)."""
+    v = (os.getenv("DISABLE_AUTH") or os.getenv("AUTH_DISABLED") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def _session_secret() -> str:
     s = (os.getenv("SESSION_SECRET") or "").strip()
     if not s:
+        if _auth_disabled():
+            return "local-dev-session-secret"
         raise HTTPException(503, "SESSION_SECRET не задан на сервере (переменная окружения).")
     return s
 
@@ -321,7 +330,10 @@ def _bootstrap_admin_if_needed(db: Database) -> None:
         return
     init_pass = (os.getenv("ADMIN_INIT_PASSWORD") or "").strip()
     if not init_pass:
-        raise HTTPException(503, "Нет пользователей и не задан ADMIN_INIT_PASSWORD (переменная окружения).")
+        if _auth_disabled():
+            init_pass = "admin"
+        else:
+            raise HTTPException(503, "Нет пользователей и не задан ADMIN_INIT_PASSWORD (переменная окружения).")
     db.create_user("admin", _hash_password(init_pass), role="admin")
     log.info("Создан пользователь admin (первый запуск). Смените пароль в настройках.")
 
@@ -339,12 +351,25 @@ def _get_current_user(request: Request, db: Database) -> Optional[UserRow]:
     return db.get_user_by_username(username)
 
 
+def _local_dev_user(db: Database) -> UserRow:
+    """Без cookie — первый admin (только при DISABLE_AUTH)."""
+    admin = _first_admin_user(db)
+    if admin:
+        return admin
+    users = db.list_users()
+    if users:
+        return users[0]
+    raise HTTPException(503, "Нет пользователей для локального режима без пароля")
+
+
 def require_user(request: Request, db: Database = Depends(get_db)) -> UserRow:
     _bootstrap_admin_if_needed(db)
     u = _get_current_user(request, db)
-    if not u:
-        raise HTTPException(401, "Неавторизовано")
-    return u
+    if u:
+        return u
+    if _auth_disabled():
+        return _local_dev_user(db)
+    raise HTTPException(401, "Неавторизовано")
 
 
 def require_admin(user: UserRow = Depends(require_user)) -> UserRow:
@@ -370,6 +395,13 @@ async def _api_auth_middleware(request: Request, call_next):
     if path.startswith("/api/") and request.method.upper() != "OPTIONS":
         # public auth endpoints
         if path.startswith("/api/auth/"):
+            return await call_next(request)
+        # локалка без пароля
+        if _auth_disabled():
+            try:
+                _bootstrap_admin_if_needed(get_db())
+            except HTTPException as e:
+                return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
             return await call_next(request)
         # everything else requires session
         try:
@@ -5946,7 +5978,7 @@ if STATIC_DIR.exists():
     def login_page(request: Request):
         db = get_db()
         _bootstrap_admin_if_needed(db)
-        if _get_current_user(request, db):
+        if _auth_disabled() or _get_current_user(request, db):
             return RedirectResponse(url="/app")
         return FileResponse(STATIC_DIR / "login.html")
 
@@ -5956,13 +5988,15 @@ if STATIC_DIR.exists():
 
     @app.get("/")
     def landing_page():
+        if _auth_disabled():
+            return RedirectResponse(url="/app")
         return RedirectResponse(url="/login")
 
     @app.get("/app")
     def index(request: Request):
         db = get_db()
         _bootstrap_admin_if_needed(db)
-        if not _get_current_user(request, db):
+        if not _auth_disabled() and not _get_current_user(request, db):
             return RedirectResponse(url="/login")
         return FileResponse(
             STATIC_DIR / "index.html",
