@@ -550,6 +550,29 @@ def _balance_poll_due(state: dict[str, Any], store_id: int, *, now_ts: Optional[
     return (now - last) >= int(BALANCE_POLL_SECONDS)
 
 
+def _store_last_total(state: dict[str, Any], store_id: int) -> Optional[float]:
+    """Кэш последнего успешного CPA-баланса (₽) из state."""
+    row = state.get(str(int(store_id)))
+    if not isinstance(row, dict):
+        return None
+    if "last_total" not in row:
+        return None
+    try:
+        return float(row.get("last_total"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _remember_store_total(state: dict[str, Any], store_id: int, total: float) -> None:
+    key = str(int(store_id))
+    row = state.get(key)
+    if not isinstance(row, dict):
+        row = {"below": False}
+        state[key] = row
+    row["last_total"] = float(total)
+    row["last_check"] = int(time.time())
+
+
 def _reply_map_key(tg_chat_id: Any, tg_message_id: Any) -> str:
     return f"{normalize_telegram_chat_id(tg_chat_id)}:{int(tg_message_id)}"
 
@@ -1131,12 +1154,14 @@ async def run_avito_notify_cycle(
             results_messages.append(r)
             messages_sent += int(r.get("new") or 0)
         if do_balance:
-            # CPA: опрос ≤1 раз/час (или сразу, если пора daily / ручной force).
-            # Уведомления: только пересечение порога вниз + daily — без почасового спама.
+            # CPA: опрос ≤1 раз/час (или сразу, если daily без кэша / ручной force).
+            # want_daily сам по себе НЕ форсит CPA каждый цикл — иначе при TOPIC_CLOSED
+            # получаем 429 и ломаем кнопку теста (лимит CPA ~1/мин).
+            cached_total = _store_last_total(bal_state, int(store.id))
             due = bool(
                 force_notify
-                or want_daily
                 or _balance_poll_due(bal_state, int(store.id), now_ts=now_ts)
+                or (want_daily and cached_total is None)
             )
             if not due:
                 balance_skipped += 1
@@ -1146,9 +1171,12 @@ async def run_avito_notify_cycle(
                         "ok": True,
                         "skipped": True,
                         "reason": "balance_poll_not_due",
+                        "total": cached_total,
                         "alerted": False,
                     }
                 )
+                if want_daily and cached_total is not None:
+                    daily_rows.append((store.name or f"#{store.id}", float(cached_total)))
             else:
                 r = await poll_store_balance(
                     db,
@@ -1165,6 +1193,9 @@ async def run_avito_notify_cycle(
                     balance_alerts += 1
                 if want_daily and r.get("ok") and r.get("total") is not None:
                     daily_rows.append((store.name or f"#{store.id}", float(r["total"])))
+                elif want_daily and cached_total is not None:
+                    # CPA упал (часто 429) — всё равно собрать daily из кэша.
+                    daily_rows.append((store.name or f"#{store.id}", float(cached_total)))
         bucket["seeded"] = True
 
     if want_daily and daily_rows:
@@ -1208,63 +1239,138 @@ async def send_avito_balance_test(
     bot_token: str,
     chat_id: str,
 ) -> dict[str, Any]:
-    """Сразу прочитать CPA и отправить тестовое сообщение в TG."""
+    """Сразу прочитать CPA и отправить тестовое сообщение в TG.
+
+    При 429/ошибке CPA — берём last_total из кэша (если есть), чтобы тест
+    не ломался из‑за лимита Avito ~1 запрос/мин.
+    """
     stores = _avito_stores(db)
     if not stores:
         return {"ok": False, "error": "нет активных магазинов Avito", "sent": False}
+    bal_state = _load_balance_state(db)
     rows: list[tuple[str, float]] = []
     details: list[dict[str, Any]] = []
+    state_dirty = False
+
+    async def _fetch_cpa(client: AvitoClient) -> dict:
+        try:
+            return await client.get_cpa_balance()
+        except HttpStatusError as e:
+            # Лимит CPA ~1/мин — одна короткая повторная попытка.
+            if int(e.status) == 429:
+                await asyncio.sleep(2.5)
+                return await client.get_cpa_balance()
+            raise
+
     for store in stores:
+        name = store.name or f"#{store.id}"
         client = _client_for_store(store)
+        cached = _store_last_total(bal_state, int(store.id))
         try:
             await _ensure_user_id(db, store, client)
-            cpa_raw = await client.get_cpa_balance()
+            cpa_raw = await _fetch_cpa(client)
             total, kopeks = parse_cpa_balance(cpa_raw)
-            rows.append((store.name or f"#{store.id}", float(total)))
+            rows.append((name, float(total)))
+            _remember_store_total(bal_state, int(store.id), float(total))
+            state_dirty = True
             details.append(
                 {
                     "store_id": int(store.id),
                     "name": store.name,
                     "ok": True,
+                    "source": "live",
                     "total": float(total),
                     "kopeks": float(kopeks),
                     "text": format_rub_kopecks_ru(total),
                 }
             )
         except HttpStatusError as e:
-            details.append(
-                {
-                    "store_id": int(store.id),
-                    "name": store.name,
-                    "ok": False,
-                    "error": f"HTTP {e.status}: {str(e.body)[:160]}",
-                }
-            )
+            err = f"HTTP {e.status}: {str(e.body)[:160]}"
+            if cached is not None:
+                rows.append((name, float(cached)))
+                details.append(
+                    {
+                        "store_id": int(store.id),
+                        "name": store.name,
+                        "ok": True,
+                        "source": "cache",
+                        "total": float(cached),
+                        "text": format_rub_kopecks_ru(cached),
+                        "warning": err,
+                    }
+                )
+            else:
+                details.append(
+                    {
+                        "store_id": int(store.id),
+                        "name": store.name,
+                        "ok": False,
+                        "error": err,
+                    }
+                )
         except Exception as e:
             log.exception("avito balance test store=%s", store.id)
-            details.append(
-                {
-                    "store_id": int(store.id),
-                    "name": store.name,
-                    "ok": False,
-                    "error": str(e)[:180],
-                }
-            )
+            err = str(e)[:180]
+            if cached is not None:
+                rows.append((name, float(cached)))
+                details.append(
+                    {
+                        "store_id": int(store.id),
+                        "name": store.name,
+                        "ok": True,
+                        "source": "cache",
+                        "total": float(cached),
+                        "text": format_rub_kopecks_ru(cached),
+                        "warning": err,
+                    }
+                )
+            else:
+                details.append(
+                    {
+                        "store_id": int(store.id),
+                        "name": store.name,
+                        "ok": False,
+                        "error": err,
+                    }
+                )
+
+    if state_dirty:
+        _save_balance_state(db, bal_state)
+
     if not rows:
+        parts = [
+            f"{d.get('name') or d.get('store_id')}: {d.get('error')}"
+            for d in details
+            if d.get("error")
+        ]
+        joined = "; ".join(parts) if parts else "нет данных"
         return {
             "ok": False,
-            "error": "не удалось получить баланс ни по одному магазину",
+            "error": f"не удалось получить баланс ни по одному магазину — {joined}",
             "sent": False,
             "stores": details,
         }
     text = format_balance_test_message(rows)
     ok, err, mid = await _send(db, bot_token, chat_id, escape_tg_html(text))
     if not ok:
-        return {"ok": False, "error": err or "telegram send failed", "sent": False, "stores": details, "text": text}
+        hint = err or "telegram send failed"
+        if "TOPIC_CLOSED" in str(hint):
+            hint = (
+                f"{hint}. Чат/топик закрыт — откройте топик или смените "
+                "«Чат для Avito» в настройках"
+            )
+        return {
+            "ok": False,
+            "error": hint,
+            "sent": False,
+            "stores": details,
+            "text": text,
+        }
     return {
         "ok": True,
         "sent": True,
         "tg_message_id": mid,
         "text": text,
         "stores": details,
+        "cached_used": any(d.get("source") == "cache" for d in details),
     }

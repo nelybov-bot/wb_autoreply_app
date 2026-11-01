@@ -2796,10 +2796,18 @@ async def api_telegram_avito_balance_test(
     if not token or not chat_id:
         raise HTTPException(400, "Нужны токен Telegram-бота и chat_id (Avito или основной)")
     result = await send_avito_balance_test(db, bot_token=token, chat_id=chat_id)
-    if not result.get("ok"):
-        raise HTTPException(502, result.get("error") or "Не удалось отправить тест баланса Avito")
     hh, mm = avito_balance_daily_time_msk(db)
     result["balance_daily_time"] = f"{hh:02d}:{mm:02d}"
+    if not result.get("ok"):
+        raise HTTPException(
+            502,
+            {
+                "message": result.get("error") or "Не удалось отправить тест баланса Avito",
+                "stores": result.get("stores") or [],
+                "text": result.get("text") or "",
+                "balance_daily_time": result.get("balance_daily_time"),
+            },
+        )
     return result
 
 

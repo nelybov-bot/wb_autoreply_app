@@ -10898,9 +10898,10 @@
       btnAvitoBalanceTest.disabled = true;
       try {
         const res = await api('/telegram/avito-balance-test', { method: 'POST' });
-        toast(res.text || 'Тест баланса Avito отправлен');
+        const suffix = res.cached_used ? ' (из кэша, CPA лимит)' : '';
+        toast((res.text || 'Тест баланса Avito отправлен') + suffix);
       } catch (err) {
-        toast(err.message, 'error');
+        toast(err.message || 'Ошибка теста баланса Avito', 'error');
       } finally {
         btnAvitoBalanceTest.disabled = false;
       }
